@@ -112,6 +112,25 @@ With Polign, use a collection that supports exact vector listings. A cold-served
 collection without a complete listing index returns an error for memory
 operations, including semantic recall when it resolves candidate histories.
 
+## Broad exact queries
+
+A query with only a subject, only a predicate, or neither keeps widening exact
+candidate discovery until it fills the requested belief limit or exhausts the
+matching events. Withdrawn pairs and beliefs excluded by kind, confidence, time,
+or numeric range do not hide later matching pairs. Each discovered pair still
+requires its complete history.
+
+Discovery is bounded at `MaxCandidateEvents` (10,000 candidate events). If that
+budget cannot fill the requested limit or prove the candidate set exhausted,
+Recall returns `ErrIncompleteCandidates` with no partial answer. Narrowing to a
+specific subject and predicate bypasses broad discovery. Semantic retrieval
+remains approximate; its candidate budget is not an exhaustive listing.
+
+`VectorDB.List` must extend the same ordered prefix when its limit grows and the
+data is unchanged. Changing totals, reordered or overwritten prefixes, duplicate
+IDs, and short pages fail explicitly. This detects inconsistent discovery reads;
+it does not provide a database-wide snapshot across separate history reads.
+
 ## The registry
 
 ```json

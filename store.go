@@ -29,6 +29,7 @@ type VectorDB interface {
 	Put(collection, id string, values []float32, metadata map[string]any) error
 	// List returns up to limit exact matches and the total number of matches.
 	// Implementations must page internally when their backend caps a page.
+	// Increasing limit must extend the same ordered prefix while data is unchanged.
 	List(collection string, filter map[string]any, limit int) ([]StoredVector, int, error)
 	Search(collection string, values []float32, k int, filter map[string]any) ([]Hit, error)
 }
@@ -259,6 +260,9 @@ func (s *Store) Recall(q Query) ([]Belief, error) {
 	if asOf.IsZero() {
 		asOf = s.now().UTC()
 	}
+	if q.Text == "" && (q.Subject == "" || q.Predicate == "") {
+		return s.recallExact(q, limit, asOf)
+	}
 
 	pairs, err := s.candidatePairs(q, limit)
 	if err != nil {
@@ -267,15 +271,11 @@ func (s *Store) Recall(q Query) ([]Belief, error) {
 
 	out := make([]Belief, 0, limit)
 	for _, p := range pairs {
-		events, err := s.History(p.subject, p.predicate)
+		beliefs, err := s.pairBeliefs(p, asOf)
 		if err != nil {
 			return nil, err
 		}
-		card := Single
-		if spec, ok := s.registry[p.predicate]; ok {
-			card = spec.Cardinal()
-		}
-		for _, b := range Fold(events, card, asOf) {
+		for _, b := range beliefs {
 			if !matchesBelief(b, q) {
 				continue
 			}
@@ -286,6 +286,18 @@ func (s *Store) Recall(q Query) ([]Belief, error) {
 		}
 	}
 	return out, nil
+}
+
+func (s *Store) pairBeliefs(p pair, asOf time.Time) ([]Belief, error) {
+	events, err := s.History(p.subject, p.predicate)
+	if err != nil {
+		return nil, err
+	}
+	card := Single
+	if spec, ok := s.registry[p.predicate]; ok {
+		card = spec.Cardinal()
+	}
+	return Fold(events, card, asOf), nil
 }
 
 // History returns every event recorded for one subject and predicate, oldest
@@ -307,24 +319,15 @@ func (s *Store) History(subject, predicate string) ([]Event, error) {
 // pair identifies one belief slot.
 type pair struct{ subject, predicate string }
 
-// candidatePairs finds the subject-and-predicate pairs a query might answer
-// from. A semantic query searches; an exact one lists. Either way the answer
-// is folded afterwards, so a candidate that is no longer believed drops out.
+// candidatePairs selects an explicitly requested pair or semantic candidates.
+// Broad exact queries use recallExact to keep discovering past withdrawn or
+// filtered pairs. Semantic candidates are approximate and folded afterwards.
 func (s *Store) candidatePairs(q Query, limit int) ([]pair, error) {
 	if q.Subject != "" && q.Predicate != "" {
 		return []pair{{normalizeSubject(q.Subject), strings.TrimSpace(q.Predicate)}}, nil
 	}
 
-	filter := map[string]any{}
-	if q.Subject != "" {
-		filter["subject"] = normalizeSubject(q.Subject)
-	}
-	if q.Predicate != "" {
-		filter["predicate"] = strings.TrimSpace(q.Predicate)
-	}
-	if q.Kind != "" {
-		filter["kind"] = q.Kind
-	}
+	filter := candidateFilter(q)
 
 	// Candidates are read wider than the limit: several events can belong to
 	// one pair, and a pair can fold to nothing, so a page of events yields
@@ -334,15 +337,7 @@ func (s *Store) candidatePairs(q Query, limit int) ([]pair, error) {
 		width = 20
 	}
 
-	var (
-		events []Event
-		err    error
-	)
-	if q.Text != "" {
-		events, err = s.searchEvents(q.Text, filter, width)
-	} else {
-		events, err = s.eventsMatching(filter, width)
-	}
+	events, err := s.searchEvents(q.Text, filter, width)
 	if err != nil {
 		return nil, err
 	}
@@ -437,8 +432,8 @@ func (s *Store) completeEvents(filter map[string]any, limit int) ([]Event, error
 	return out, nil
 }
 
-// eventsMatching lists exact candidates. Approximate search is not an exact
-// listing fallback: a missing retraction would turn an old event into a belief.
+// eventsMatching reads a bounded exact subset for an explicitly limited export.
+// It cannot establish a complete history or exhaustive candidate discovery.
 func (s *Store) eventsMatching(filter map[string]any, limit int) ([]Event, error) {
 	vectors, _, err := s.db.List(s.collection, filter, limit)
 	if err != nil {
