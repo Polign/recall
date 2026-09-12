@@ -43,7 +43,10 @@ at once.
 
 **History is queryable.** Forgetting is a retraction event, not a deletion, so
 asking what the agent believed last Tuesday still works after Wednesday's
-correction.
+correction. With a value supplied, a retraction withdraws only that value,
+including for single-valued predicates: vim → emacs → retract vim still leaves
+emacs believed. With no value it clears the pair. Retracting the current value
+never revives one that was superseded.
 
 ## Using it
 

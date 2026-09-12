@@ -127,15 +127,21 @@ func Fold(events []Event, card Cardinality, asOf time.Time) []Belief {
 	}
 }
 
-// foldSingle keeps the last event standing: an assertion is the belief, a
-// retraction leaves none.
+// foldSingle tracks the currently held value. A targeted retraction clears
+// only that value; withdrawing a superseded value leaves the newer assertion
+// intact. Clearing the current value never revives a superseded assertion.
 func foldSingle(ordered []Event) []Belief {
-	for i := len(ordered) - 1; i >= 0; i-- {
-		e := ordered[i]
-		if e.Retraction {
-			return nil
+	var current Event
+	held := false
+	for _, e := range ordered {
+		if !e.Retraction {
+			current, held = e, true
+		} else if held && (e.Value == nil || ValueKey(e.Value) == ValueKey(current.Value)) {
+			held = false
 		}
-		return []Belief{beliefOf(e)}
+	}
+	if held {
+		return []Belief{beliefOf(current)}
 	}
 	return nil
 }
