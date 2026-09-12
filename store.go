@@ -104,7 +104,7 @@ func (s *Store) Remember(kind, subject, predicate string, value any, confidence 
 	if confidence == 0 {
 		confidence = 1.0
 	}
-	if confidence < 0 || confidence > 1 {
+	if !finite(confidence) || confidence < 0 || confidence > 1 {
 		return zero, fmt.Errorf("confidence must be in [0, 1], got %g", confidence)
 	}
 	if source == "" {
@@ -248,6 +248,9 @@ type Query struct {
 
 // Recall returns the beliefs that hold at the query's instant.
 func (s *Store) Recall(q Query) ([]Belief, error) {
+	if err := validateQuery(q); err != nil {
+		return nil, err
+	}
 	limit := q.Limit
 	if limit <= 0 {
 		limit = defaultLimit
@@ -399,7 +402,11 @@ func (s *Store) searchEvents(query string, filter map[string]any, limit int) ([]
 	}
 	out := make([]Event, 0, len(hits))
 	for _, h := range hits {
-		out = append(out, EventFromMetadata(h.ID, h.Metadata))
+		e, err := s.decodeEvent(h.ID, h.Metadata)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
 	}
 	return out, nil
 }
@@ -421,7 +428,11 @@ func (s *Store) completeEvents(filter map[string]any, limit int) ([]Event, error
 			return nil, fmt.Errorf("%w: duplicate event %q in listing", ErrIncompleteHistory, v.ID)
 		}
 		seen[v.ID] = true
-		out = append(out, EventFromMetadata(v.ID, v.Metadata))
+		e, err := s.decodeEvent(v.ID, v.Metadata)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrIncompleteHistory, err)
+		}
+		out = append(out, e)
 	}
 	return out, nil
 }
@@ -435,7 +446,11 @@ func (s *Store) eventsMatching(filter map[string]any, limit int) ([]Event, error
 	}
 	out := make([]Event, 0, len(vectors))
 	for _, v := range vectors {
-		out = append(out, EventFromMetadata(v.ID, v.Metadata))
+		e, err := s.decodeEvent(v.ID, v.Metadata)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
 	}
 	return out, nil
 }

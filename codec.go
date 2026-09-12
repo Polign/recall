@@ -2,6 +2,7 @@ package recall
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -92,9 +93,9 @@ func (e Event) Metadata() map[string]any {
 	return md
 }
 
-// EventFromMetadata reads an event back. A record whose metadata is missing or
-// malformed comes back with a zero ObservedAt, which the fold discards rather
-// than letting it sort ahead of real events.
+// EventFromMetadata decodes without validation, retaining its legacy behavior.
+// Invalid fields become their zero values. Use DecodeEvent before deriving
+// beliefs from stored metadata; Store uses that strict decoder internally.
 func EventFromMetadata(id string, m map[string]any) Event {
 	str := func(k string) string { v, _ := m[k].(string); return v }
 	conf, _ := m["confidence"].(float64)
@@ -110,4 +111,63 @@ func EventFromMetadata(id string, m map[string]any) Event {
 		Retraction: retraction,
 		ObservedAt: parseTime(str("observed_at")),
 	}
+}
+
+// ErrInvalidEvent means a stored record cannot safely participate in a fold.
+var ErrInvalidEvent = errors.New("recall: invalid stored event")
+
+// DecodeEvent validates typed event metadata before returning it. Store reads
+// use this strict decoder so a malformed correction or retraction cannot be
+// silently skipped. EventFromMetadata remains available as a permissive decoder.
+// Missing retraction denotes a legacy assertion; observed_ms is optional because
+// observed_at is the authoritative timestamp.
+func DecodeEvent(id string, m map[string]any) (Event, error) {
+	e := EventFromMetadata(id, m)
+	invalid := func(field string) (Event, error) {
+		return Event{}, fmt.Errorf("%w: event %q has invalid %s", ErrInvalidEvent, id, field)
+	}
+	if strings.TrimSpace(id) == "" {
+		return invalid("id")
+	}
+	if strings.TrimSpace(e.Subject) == "" {
+		return invalid("subject")
+	}
+	if !predicateName.MatchString(e.Predicate) {
+		return invalid("predicate")
+	}
+	if e.ObservedAt.IsZero() {
+		return invalid("observed_at")
+	}
+	if !validKinds[e.Kind] {
+		return invalid("kind")
+	}
+	if !validSources[e.Source] {
+		return invalid("source")
+	}
+	if _, ok := m["confidence"].(float64); !ok || !finite(e.Confidence) || e.Confidence < 0 || e.Confidence > 1 {
+		return invalid("confidence")
+	}
+	if raw, present := m["retraction"]; present {
+		if _, ok := raw.(bool); !ok {
+			return invalid("retraction")
+		}
+	}
+	switch v := e.Value.(type) {
+	case nil:
+		if !e.Retraction {
+			return invalid("value")
+		}
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return invalid("value")
+		}
+	case float64:
+		if !finite(v) {
+			return invalid("value")
+		}
+	case bool:
+	default:
+		return invalid("value")
+	}
+	return e, nil
 }

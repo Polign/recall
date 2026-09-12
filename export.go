@@ -29,6 +29,9 @@ const MaxExport = 10000
 // including the ones it no longer gives: superseded statements and retracted
 // ones are here too, because nothing is deleted.
 func (s *Store) ExportEvents(q Export) ([]Event, error) {
+	if q.Limit > MaxExport {
+		return nil, fmt.Errorf("recall: export limit %d exceeds maximum %d", q.Limit, MaxExport)
+	}
 	filter := map[string]any{}
 	if q.Subject != "" {
 		filter["subject"] = normalizeSubject(q.Subject)

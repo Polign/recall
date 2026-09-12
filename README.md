@@ -74,6 +74,23 @@ events, err := store.History("user", "prefers_editor")
 `Remember` writes at most one record, and only after folding what is already
 there. Restating a belief that already holds writes nothing at all.
 
+## Input and stored-event validation
+
+Queries return at most `MaxRecall` (1,000) beliefs and exports read at most
+`MaxExport` (10,000) events, including explicitly limited exports. Larger limits
+return errors before any backend call. Zero or negative limits retain their
+default behavior. Numeric values, confidence, and query ranges must be finite;
+confidence must be in [0, 1], and a range minimum cannot exceed its maximum.
+
+Store reads validate event IDs, timestamps, typed fields, and the value type of
+known predicates. Corrupt histories return `ErrIncompleteHistory` wrapping
+`ErrInvalidEvent`, so a malformed correction or retraction cannot revive an old
+belief or authorize a write. Candidate reads and limited exports also reject
+invalid events. Legacy assertions without a `retraction` field, RFC3339 timestamps,
+and records without `observed_ms` remain readable. `DecodeEvent` exposes this
+strict decoder; `EventFromMetadata` retains its permissive behavior for existing
+callers.
+
 ## Complete histories
 
 The `VectorDB.List` implementation must return exact matches and their total
