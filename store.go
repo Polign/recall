@@ -1,8 +1,8 @@
 package recall
 
 import (
+	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 )
@@ -27,15 +27,19 @@ type Hit struct {
 // against, and lets tests exercise the semantics without one.
 type VectorDB interface {
 	Put(collection, id string, values []float32, metadata map[string]any) error
+	// List returns up to limit exact matches and the total number of matches.
+	// Implementations must page internally when their backend caps a page.
 	List(collection string, filter map[string]any, limit int) ([]StoredVector, int, error)
 	Search(collection string, values []float32, k int, filter map[string]any) ([]Hit, error)
 }
 
-// maxEventsPerPair bounds how much of one subject-and-predicate log a single
-// fold reads. A pair accumulates one event per correction, so real logs are
-// short; the bound exists so that a pathological writer cannot turn one recall
-// into an unbounded scan.
-const maxEventsPerPair = 500
+// MaxHistoryEvents bounds a complete subject-and-predicate history. Histories
+// beyond this bound fail explicitly; a partial fold could revive a retraction.
+const MaxHistoryEvents = 10000
+
+// ErrIncompleteHistory means the backend could not supply a complete exact log.
+// No belief or write may be derived from such a log.
+var ErrIncompleteHistory = errors.New("recall: complete exact history unavailable")
 
 // defaultLimit is how many beliefs a recall returns when the caller
 // does not say.
@@ -126,6 +130,10 @@ func (s *Store) Remember(kind, subject, predicate string, value any, confidence 
 		}
 	}
 
+	if len(events) >= MaxHistoryEvents {
+		return zero, fmt.Errorf("%w: maximum %d events reached", ErrIncompleteHistory, MaxHistoryEvents)
+	}
+
 	ev := Event{
 		ID:         eventID(subject, predicate, value, false, now),
 		Kind:       kind,
@@ -195,6 +203,10 @@ func (s *Store) Forget(subject, predicate, value string) (int, error) {
 		// Nothing believed matches, so a retraction would record a withdrawal
 		// that never happened.
 		return 0, nil
+	}
+
+	if len(events) >= MaxHistoryEvents {
+		return 0, fmt.Errorf("%w: maximum %d events reached", ErrIncompleteHistory, MaxHistoryEvents)
 	}
 
 	ev := Event{
@@ -281,16 +293,11 @@ func (s *Store) History(subject, predicate string) ([]Event, error) {
 		"subject":   normalizeSubject(subject),
 		"predicate": strings.TrimSpace(predicate),
 	}
-	events, err := s.eventsMatching(filter, maxEventsPerPair)
+	events, err := s.completeEvents(filter, MaxHistoryEvents)
 	if err != nil {
 		return nil, err
 	}
-	sort.SliceStable(events, func(i, j int) bool {
-		if !events[i].ObservedAt.Equal(events[j].ObservedAt) {
-			return events[i].ObservedAt.Before(events[j].ObservedAt)
-		}
-		return events[i].ID < events[j].ID
-	})
+	SortEvents(events)
 	return events, nil
 }
 
@@ -397,30 +404,40 @@ func (s *Store) searchEvents(query string, filter map[string]any, limit int) ([]
 	return out, nil
 }
 
-// coldListUnsupported is the server's way of saying this collection is served
-// from object storage and has no complete in-memory listing index.
-const coldListUnsupported = "listing is not supported for a cold-served resource"
+// completeEvents refuses to fold a truncated log. One extra row detects an
+// overflow even when a backend reports only the size of the returned page.
+func (s *Store) completeEvents(filter map[string]any, limit int) ([]Event, error) {
+	vectors, total, err := s.db.List(s.collection, filter, limit+1)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrIncompleteHistory, err)
+	}
+	if total != len(vectors) || len(vectors) > limit {
+		return nil, fmt.Errorf("%w: read %d of %d events (maximum %d)", ErrIncompleteHistory, len(vectors), total, limit)
+	}
+	seen := make(map[string]bool, len(vectors))
+	out := make([]Event, 0, len(vectors))
+	for _, v := range vectors {
+		if seen[v.ID] {
+			return nil, fmt.Errorf("%w: duplicate event %q in listing", ErrIncompleteHistory, v.ID)
+		}
+		seen[v.ID] = true
+		out = append(out, EventFromMetadata(v.ID, v.Metadata))
+	}
+	return out, nil
+}
 
-// eventsMatching lists events by exact filter, falling back to filtered vector
-// search on a cold-served collection.
-//
-// A server cold-started from an object store deliberately has no listing
-// index, so List is refused. Filtered search scans the same segments and
-// merges the write-ahead tail, which makes it the exact-filter fallback on a
-// failover node reading from S3, GCS, or Azure.
+// eventsMatching lists exact candidates. Approximate search is not an exact
+// listing fallback: a missing retraction would turn an old event into a belief.
 func (s *Store) eventsMatching(filter map[string]any, limit int) ([]Event, error) {
 	vectors, _, err := s.db.List(s.collection, filter, limit)
-	if err == nil {
-		out := make([]Event, 0, len(vectors))
-		for _, v := range vectors {
-			out = append(out, EventFromMetadata(v.ID, v.Metadata))
-		}
-		return out, nil
-	}
-	if !strings.Contains(err.Error(), coldListUnsupported) {
+	if err != nil {
 		return nil, err
 	}
-	return s.searchEvents("typed durable memory record", filter, limit)
+	out := make([]Event, 0, len(vectors))
+	for _, v := range vectors {
+		out = append(out, EventFromMetadata(v.ID, v.Metadata))
+	}
+	return out, nil
 }
 
 // normalizeSubject folds a subject to its stored form, so that "User" and

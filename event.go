@@ -17,6 +17,7 @@ package recall
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -153,6 +154,7 @@ func foldMulti(ordered []Event) []Belief {
 		k := ValueKey(e.Value)
 		if e.Retraction {
 			delete(held, k)
+			order = slices.DeleteFunc(order, func(v string) bool { return v == k })
 			continue
 		}
 		if _, seen := held[k]; !seen {
