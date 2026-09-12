@@ -47,23 +47,30 @@ var ErrIncompleteHistory = errors.New("recall: complete exact history unavailabl
 const defaultLimit = 20
 
 // Store turns writes into durable, typed events and reads into beliefs. It
-// holds no state: every answer is folded from the log at read time, so two
-// processes sharing a collection cannot disagree about what is believed.
+// derives each answer from the log returned by its backend at read time.
+// Consistency across concurrent operations depends on that backend.
 type Store struct {
 	db         VectorDB
 	collection string
 	registry   Registry
-	embed      func(string) []float32
+	embed      func(string) ([]float32, error)
 	now        func() time.Time
 }
 
 // NewStore returns a store over one collection.
 func NewStore(db VectorDB, collection string, registry Registry, embed func(string) []float32) *Store {
-	return &Store{db: db, collection: collection, registry: registry, embed: embed, now: time.Now}
+	return &Store{db: db, collection: collection, registry: registry.Clone(), now: time.Now,
+		embed: func(text string) ([]float32, error) {
+			if embed == nil {
+				return nil, ErrEmbedderRequired
+			}
+			return embed(text), nil
+		},
+	}
 }
 
-// Registry returns the predicates this store accepts.
-func (s *Store) Registry() Registry { return s.registry }
+// Registry returns a copy of the predicates this store accepts.
+func (s *Store) Registry() Registry { return s.registry.Clone() }
 
 // RememberResult is what a write reports back: the belief that now holds,
 // whether it already held, and anything it displaced.
@@ -80,6 +87,13 @@ type RememberResult struct {
 // rewritten, so there is no window in which a crash can leave two live beliefs
 // for a single-valued predicate.
 func (s *Store) Remember(kind, subject, predicate string, value any, confidence float64, source string) (RememberResult, error) {
+	if confidence == 0 {
+		confidence = 1
+	}
+	return s.remember(kind, subject, predicate, value, confidence, source)
+}
+
+func (s *Store) remember(kind, subject, predicate string, value any, confidence float64, source string) (RememberResult, error) {
 	var zero RememberResult
 
 	if !validKinds[kind] {
@@ -101,9 +115,6 @@ func (s *Store) Remember(kind, subject, predicate string, value any, confidence 
 	value, err := normalizeValue(predicate, spec, value)
 	if err != nil {
 		return zero, err
-	}
-	if confidence == 0 {
-		confidence = 1.0
 	}
 	if !finite(confidence) || confidence < 0 || confidence > 1 {
 		return zero, fmt.Errorf("confidence must be in [0, 1], got %g", confidence)
@@ -165,6 +176,19 @@ func (s *Store) Remember(kind, subject, predicate string, value any, confidence 
 // not answer that. With value set only that value is withdrawn; without it
 // every value for the pair is.
 func (s *Store) Forget(subject, predicate, value string) (int, error) {
+	predicate = strings.TrimSpace(predicate)
+	var typed any
+	if value = strings.TrimSpace(value); value != "" {
+		t, err := s.registry.parseValue(predicate, value)
+		if err != nil {
+			return 0, err
+		}
+		typed = t
+	}
+	return s.forgetValue(subject, predicate, typed)
+}
+
+func (s *Store) forgetValue(subject, predicate string, typed any) (int, error) {
 	subject = normalizeSubject(subject)
 	predicate = strings.TrimSpace(predicate)
 	if subject == "" || predicate == "" {
@@ -174,14 +198,12 @@ func (s *Store) Forget(subject, predicate, value string) (int, error) {
 	if !ok {
 		return 0, fmt.Errorf("predicate %q is not in the registry", predicate)
 	}
-
-	var typed any
-	if value = strings.TrimSpace(value); value != "" {
-		t, err := s.registry.parseValue(predicate, value)
+	if typed != nil {
+		value, err := normalizeValue(predicate, spec, typed)
 		if err != nil {
 			return 0, err
 		}
-		typed = t
+		typed = value
 	}
 
 	events, err := s.History(subject, predicate)
@@ -386,12 +408,20 @@ func matchesBelief(b Belief, q Query) bool {
 
 // append writes one event with a freshly embedded vector.
 func (s *Store) append(e Event) error {
-	return s.db.Put(s.collection, e.ID, s.embed(e.Text()), e.Metadata())
+	values, err := s.embed(e.Text())
+	if err != nil {
+		return err
+	}
+	return s.db.Put(s.collection, e.ID, values, e.Metadata())
 }
 
 // searchEvents runs a semantic search over the event log.
 func (s *Store) searchEvents(query string, filter map[string]any, limit int) ([]Event, error) {
-	hits, err := s.db.Search(s.collection, s.embed(query), limit, filter)
+	values, err := s.embed(query)
+	if err != nil {
+		return nil, err
+	}
+	hits, err := s.db.Search(s.collection, values, limit, filter)
 	if err != nil {
 		return nil, err
 	}
