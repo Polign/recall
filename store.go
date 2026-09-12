@@ -72,7 +72,7 @@ func NewStore(db VectorDB, collection string, registry Registry, embed func(stri
 // Registry returns a copy of the predicates this store accepts.
 func (s *Store) Registry() Registry { return s.registry.Clone() }
 
-// RememberResult is what a write reports back: the belief that now holds,
+// RememberResult is what a write reports back: the assertion stored or found,
 // whether it already held, and anything it displaced.
 type RememberResult struct {
 	Stored     Belief   `json:"stored"`

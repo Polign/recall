@@ -210,6 +210,18 @@ data is unchanged. Changing totals, reordered or overwritten prefixes, duplicate
 IDs, and short pages fail explicitly. This detects inconsistent discovery reads;
 it does not provide a database-wide snapshot across separate history reads.
 
+## Audit bundles
+
+`client.ExportAudit(ctx, request)` captures complete histories with their
+registry, fold version, and fixed as-of time. `bundle.Replay()` verifies the
+checksum and reproduces exact beliefs offline. The `recall-audit` command
+verifies JSON bundles from stdin.
+
+`DigestV2` detects changes to exact typed values, including string case, while
+`Digest` and `VerifyDigest` preserve legacy checksum compatibility. See the
+[audit format and concurrency contract](docs/audit.md) for usage, canonical
+encoding, and the limits of replay and retries.
+
 ## The registry
 
 ```json

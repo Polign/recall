@@ -6,9 +6,9 @@
 // design flipped a record's status to "superseded" in a second write after
 // storing its replacement, which left two live beliefs for a single-valued
 // predicate whenever a process died between the two. Here the log is the
-// truth and Fold is the only reader of it, so no interleaving of writes can
-// produce a state Fold reads wrongly. "What does the agent believe" and "what
-// did it believe on Tuesday" become the same call with a different ceiling.
+// truth and Fold deterministically interprets the events visible to a reader.
+// This does not serialize concurrent writers or establish a read snapshot.
+// Current and historical beliefs use the same fold with a different ceiling.
 //
 // Retraction is likewise an event, not a deletion. Forgetting a fact on
 // Wednesday must not change what the agent believed on Tuesday, and a log
@@ -28,8 +28,9 @@ import (
 // Events are immutable once written: a correction is a later event, never an
 // edit of an earlier one.
 type Event struct {
-	// ID is the event's stable identity, derived from its content and
-	// instant so that replaying the same write is a no-op.
+	// ID is derived from subject, predicate, value identity, retraction, and
+	// observation time. It is not a request idempotency key; confidence,
+	// source, kind, and string capitalization do not participate in the ID.
 	ID string `json:"id"`
 	// Kind is "fact" or "preference".
 	Kind string `json:"kind"`
@@ -50,8 +51,9 @@ type Event struct {
 	// asserting one. With Value set it withdraws that one value; with Value
 	// nil it withdraws every value for the pair.
 	Retraction bool `json:"retraction,omitempty"`
-	// ObservedAt is when the statement was made. It orders the log, so it is
-	// the one field Fold cannot do without.
+	// ObservedAt is the writer's observation time, not database acceptance
+	// order. Fold orders by this instant and then ID; skewed writer clocks
+	// can place a later accepted write earlier in the log.
 	ObservedAt time.Time `json:"observed_at"`
 }
 
