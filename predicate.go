@@ -112,6 +112,9 @@ func normalizeValue(predicate string, spec Predicate, v any) (any, error) {
 		if !ok {
 			return nil, fmt.Errorf("%s expects a number value, got %s", predicate, describeValue(v))
 		}
+		if !finite(f) {
+			return nil, fmt.Errorf("%s expects a finite number value", predicate)
+		}
 		return f, nil
 	default: // boolean
 		b, ok := v.(bool)
@@ -132,7 +135,7 @@ func (r Registry) parseValue(predicate, value string) (any, error) {
 	switch spec.ValueType {
 	case "number":
 		f, err := strconv.ParseFloat(value, 64)
-		if err != nil {
+		if err != nil || !finite(f) {
 			return nil, fmt.Errorf("%s expects a number value, got %q", predicate, value)
 		}
 		return f, nil
