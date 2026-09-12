@@ -6,7 +6,7 @@ instant.
 
 Recall is the memory layer for [Polign](https://polign.com), but it depends on
 no particular database: it needs a `VectorDB` you provide, so it runs against
-polign_db, a test fake, or anything else with the same four operations.
+polign_db, a test fake, or anything else with the same three operations.
 
 ```sh
 go get github.com/Polign/recall
@@ -73,6 +73,24 @@ events, err := store.History("user", "prefers_editor")
 
 `Remember` writes at most one record, and only after folding what is already
 there. Restating a belief that already holds writes nothing at all.
+
+## Complete histories
+
+The `VectorDB.List` implementation must return exact matches and their total
+count, paging internally if its backend caps page size. Recall checks that it
+has the complete subject-and-predicate log before deriving a belief or writing
+a correction or retraction. A partial listing returns `ErrIncompleteHistory`.
+Approximate vector search cannot replace this listing: a missed correction or
+retraction would change the answer.
+
+Histories are bounded at `MaxHistoryEvents` (10,000 events per subject and
+predicate). New events are refused at that bound; existing complete histories
+remain readable. A default export likewise fails if it cannot return the
+complete log within `MaxExport`. An explicit export limit requests a subset.
+
+With Polign, use a collection that supports exact vector listings. A cold-served
+collection without a complete listing index returns an error for memory
+operations, including semantic recall when it resolves candidate histories.
 
 ## The registry
 

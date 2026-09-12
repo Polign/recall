@@ -1,6 +1,7 @@
 package recall
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -66,7 +67,7 @@ func (f *fakeDB) List(_ string, filter map[string]any, limit int) ([]StoredVecto
 		return nil, 0, f.listErr
 	}
 	got := f.matching(filter, limit)
-	return got, len(got), nil
+	return got, len(f.matching(filter, 0)), nil
 }
 
 func (f *fakeDB) Search(_ string, _ []float32, k int, filter map[string]any) ([]Hit, error) {
@@ -296,13 +297,12 @@ func TestSemanticRecallNeverReturnsASupersededBelief(t *testing.T) {
 	}
 }
 
-func TestColdCollectionFallsBackToSearch(t *testing.T) {
+func TestColdCollectionRefusesApproximateHistory(t *testing.T) {
 	s, db, _ := newStore(t)
 	mustRemember(t, s, "prefers_editor", "neovim")
-	db.listErr = fmt.Errorf("polign: %s", coldListUnsupported)
-
-	if got := recallValues(t, s, Query{Subject: "user", Predicate: "prefers_editor"}); len(got) != 1 || got[0] != "neovim" {
-		t.Fatalf("cold read got %v, want neovim", got)
+	db.listErr = fmt.Errorf("listing is not supported for a cold-served resource")
+	if _, err := s.Recall(Query{Subject: "user", Predicate: "prefers_editor"}); !errors.Is(err, ErrIncompleteHistory) {
+		t.Fatalf("cold read error = %v, want incomplete history", err)
 	}
 }
 
@@ -318,11 +318,11 @@ func TestListErrorsOtherThanColdPropagate(t *testing.T) {
 func TestValidationRejectsBadWrites(t *testing.T) {
 	s, _, _ := newStore(t)
 	cases := []struct {
-		name                            string
-		kind, subject, predicate        string
-		value                           any
-		confidence                      float64
-		source, want                    string
+		name                     string
+		kind, subject, predicate string
+		value                    any
+		confidence               float64
+		source, want             string
 	}{
 		{"unknown predicate", "fact", "user", "invented_thing", "x", 1, "user_stated", "not in the registry"},
 		{"bad kind", "opinion", "user", "prefers_editor", "vim", 1, "user_stated", "kind must be"},

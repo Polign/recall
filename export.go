@@ -40,7 +40,13 @@ func (s *Store) ExportEvents(q Export) ([]Event, error) {
 	if limit <= 0 {
 		limit = MaxExport
 	}
-	events, err := s.eventsMatching(filter, limit)
+	var events []Event
+	var err error
+	if q.Limit <= 0 {
+		events, err = s.completeEvents(filter, limit)
+	} else {
+		events, err = s.eventsMatching(filter, limit)
+	}
 	if err != nil {
 		return nil, err
 	}
