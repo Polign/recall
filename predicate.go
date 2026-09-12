@@ -46,20 +46,37 @@ func LoadRegistry(raw []byte) (Registry, error) {
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return nil, fmt.Errorf("predicate registry: %w", err)
 	}
+	if err := r.Validate(); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+// Clone returns an independent copy of this registry.
+func (r Registry) Clone() Registry {
+	out := make(Registry, len(r))
+	for name, p := range r {
+		out[name] = p
+	}
+	return out
+}
+
+// Validate checks the names, cardinalities, and value types of a registry.
+func (r Registry) Validate() error {
 	for name, p := range r {
 		if !predicateName.MatchString(name) {
-			return nil, fmt.Errorf("predicate registry: %q is not snake_case", name)
+			return fmt.Errorf("predicate registry: %q is not snake_case", name)
 		}
 		if p.Cardinality != "single" && p.Cardinality != "multi" {
-			return nil, fmt.Errorf("predicate registry: %q has cardinality %q, want single or multi", name, p.Cardinality)
+			return fmt.Errorf("predicate registry: %q has cardinality %q, want single or multi", name, p.Cardinality)
 		}
 		switch p.ValueType {
 		case "", "string", "number", "boolean":
 		default:
-			return nil, fmt.Errorf("predicate registry: %q has value_type %q, want string, number, or boolean", name, p.ValueType)
+			return fmt.Errorf("predicate registry: %q has value_type %q, want string, number, or boolean", name, p.ValueType)
 		}
 	}
-	return r, nil
+	return nil
 }
 
 // Names returns the registered predicates sorted, for error messages and the

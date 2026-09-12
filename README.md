@@ -77,6 +77,44 @@ events, err := store.History("user", "prefers_editor")
 `Remember` writes at most one record, and only after folding what is already
 there. Restating a belief that already holds writes nothing at all.
 
+## Context-aware client
+
+`NewClient(Config)` adds context-aware operations while `NewStore` and its
+existing method signatures remain available. A `Backend` implements Put, List,
+and Search with a `context.Context`; an `Embedder` returns both vectors and an
+error. `EmbedFunc` adapts a function. Errors preserve `errors.Is`/`errors.As`, and
+failed or cancelled embeddings cannot fall through to a write or vector search.
+
+```go
+client, err := recall.NewClient(recall.Config{
+    Backend: backend,
+    Collection: "memories",
+    Registry: registry,
+    Embedder: recall.EmbedFunc(embedWithContext),
+})
+if err != nil { return err }
+
+result, err := client.Remember(ctx, recall.RememberRequest{
+    Subject: "user", Predicate: "prefers_editor", Value: "vim",
+})
+beliefs, err := client.Recall(ctx, recall.Query{Subject: "user"})
+withdrawn, err := client.Forget(ctx, recall.ForgetRequest{
+    Subject: "user", Predicate: "prefers_editor", Value: "vim",
+})
+```
+
+Typed values are strings, `float64` numbers, or booleans. `ForgetRequest` requires
+exactly one value or `All: true`; false and zero are real values, and an omitted
+value does not clear the pair. Remember defaults to kind `fact`, source
+`user_stated`, and confidence 1. Set its optional confidence pointer to record
+an explicit zero. Exact reads, history, and exports work without an embedder.
+
+Client configuration is validated and its registry is copied. Both Client and
+legacy Store return a registry copy, so callers cannot mutate their configuration
+through `Registry()`. Backends and embedders must support concurrent calls and
+honor context cancellation. Each operation has independent request state; this
+does not add cross-writer serialization or a database-wide read snapshot.
+
 ## Input and stored-event validation
 
 Queries return at most `MaxRecall` (1,000) beliefs and exports read at most
