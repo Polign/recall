@@ -5,8 +5,8 @@ and a fold that turns it into what the agent believes, now or at any past
 instant.
 
 Recall is the memory layer for [Polign](https://polign.com), but it depends on
-no particular database: it needs a `VectorDB` you provide, so it runs against
-polign_db, a test fake, or anything else with the same three operations.
+no particular database: provide a `Backend` (or legacy `VectorDB`) with three
+operations, or use the included Polign HTTP adapter.
 
 ```sh
 go get github.com/Polign/recall
@@ -115,6 +115,47 @@ through `Registry()`. Backends and embedders must support concurrent calls and
 honor context cancellation. Each operation has independent request state; this
 does not add cross-writer serialization or a database-wide read snapshot.
 
+## Polign HTTP adapter
+
+The `github.com/Polign/recall/polign` package implements `Backend` using the
+standard library. It preserves typed metadata and retrieves exact listings
+across the server's 1,000-row page limit.
+
+```go
+backend, err := polign.New(polign.Config{
+    BaseURL: "http://localhost:8080",
+    APIKey: os.Getenv("POLIGN_API_KEY"),
+})
+if err != nil { return err }
+client, err := recall.NewClient(recall.Config{
+    Backend: backend,
+    Collection: "memories",
+    Registry: registry,
+    Embedder: recall.EmbedFunc(embedWithContext),
+})
+if err != nil { return err }
+```
+
+The API key is sent as a bearer token on every request; namespaced credentials
+use the server's namespace isolation. Context cancellation reaches each HTTP
+request, including later listing pages. Failed or inconsistent pages return an
+error with no partial history. Pagination detects changing totals and repeated
+or reordered IDs, but does not establish a snapshot across concurrent writes.
+
+The default HTTP client has a 30-second timeout and does not follow redirects.
+Set `HTTPClient` to supply your own timeout and redirect policy. Responses are
+bounded at 64 MiB per request; increase `MaxResponseBytes` for large vectors.
+HTTP failures expose `*polign.StatusError` through `errors.As`. Writes are not
+automatically retried.
+
+The [session example](examples/sessions) runs remember, correction, as-of reads,
+and forgetting in separate processes, with instructions for a server restart.
+It uses fixture vectors for exact reads and needs no embedding service. Cold
+persistence and restart require a server containing
+[polign_db #99](https://github.com/Polign/polign_db/pull/99), now on server main;
+the published v0.6.3 server predates that support. This API and adapter are
+available from the source checkout pending their feature release.
+
 ## Input and stored-event validation
 
 Queries return at most `MaxRecall` (1,000) beliefs and exports read at most
@@ -194,8 +235,9 @@ numerically in a filter instead of lexically.
 
 ## Embeddings
 
-Recall does not embed anything. You pass an `embed func(string) []float32`, and
-whatever produced the stored vectors has to produce the query vectors too.
+Recall does not embed anything itself. Pass an `Embedder` to `NewClient`, or an
+`embed func(string) []float32` to legacy `NewStore`. Whatever produced the stored
+vectors has to produce the query vectors too.
 
 ## License
 
