@@ -1,0 +1,53 @@
+{
+  "version": "recall-audit-v1",
+  "event_version": "recall-event-v1",
+  "fold_version": "recall-fold-v1",
+  "scope": {
+    "subject": "",
+    "predicate": ""
+  },
+  "as_of": "2026-09-01T15:00:00.000000000Z",
+  "registry": {
+    "prefers_editor": {
+      "cardinality": "single",
+      "value_type": "string",
+      "description": "editor"
+    }
+  },
+  "events": [
+    {
+      "id": "a",
+      "kind": "preference",
+      "subject": "user",
+      "predicate": "prefers_editor",
+      "value": "Vim",
+      "confidence": 1,
+      "source": "user_stated",
+      "retraction": false,
+      "observed_at": "2026-09-01T12:00:00.000000000Z"
+    },
+    {
+      "id": "b",
+      "kind": "preference",
+      "subject": "user",
+      "predicate": "prefers_editor",
+      "value": "Neovim",
+      "confidence": 1,
+      "source": "user_stated",
+      "retraction": false,
+      "observed_at": "2026-09-01T13:00:00.000000000Z"
+    },
+    {
+      "id": "c",
+      "kind": "preference",
+      "subject": "user",
+      "predicate": "prefers_editor",
+      "value": "Vim",
+      "confidence": 1,
+      "source": "user_stated",
+      "retraction": true,
+      "observed_at": "2026-09-01T14:00:00.000000000Z"
+    }
+  ],
+  "digest": "sha256:audit-v1:cd43be48e0dffc282bea0f154b415becfc0a4d39c5cf911122e2715d6541596b"
+}

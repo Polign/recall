@@ -24,10 +24,9 @@ const MaxExport = 10000
 
 // ExportEvents returns the raw event log, oldest first.
 //
-// This is the audit primitive. A belief is a pure function of these events, so
-// a reviewer given this log can re-derive every answer the store ever gave,
-// including the ones it no longer gives: superseded statements and retracted
-// ones are here too, because nothing is deleted.
+// Reproducing beliefs also requires the applicable registry, fold rules, and
+// as-of time. ExportAudit includes those inputs and refuses partial exports.
+// A later export cannot reconstruct which events an earlier read could see.
 func (s *Store) ExportEvents(q Export) ([]Event, error) {
 	if q.Limit > MaxExport {
 		return nil, fmt.Errorf("recall: export limit %d exceeds maximum %d", q.Limit, MaxExport)
@@ -68,10 +67,12 @@ func SortEvents(events []Event) {
 	})
 }
 
-// Digest is a stable checksum over a log.
+// Digest is the legacy stable checksum over a log. It uses case-insensitive
+// value identity, so it does not detect changes only to string capitalization.
+// Use DigestV2 for exact typed values or ExportAudit for reproducible bundles.
 //
-// It lets a reviewer confirm that an export they were handed is the one the
-// store produced, and lets two parties compare logs without exchanging them.
+// A separately trusted digest lets two parties compare logs without exchanging
+// them. A checksum alone does not authenticate an exporter or prove completeness.
 // The input is each event's canonical fields in a fixed order, so the digest
 // depends on the content of the log and not on how it was serialised, paged,
 // or which node answered.
