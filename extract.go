@@ -39,7 +39,7 @@ func (c *Client) RememberText(ctx context.Context, text string, extractor Extrac
 		return out, fmt.Errorf("recall: free-text remember requires an extractor; use typed remember or supply model proposals")
 	}
 	if strings.TrimSpace(text) == "" || len(text) > 32768 {
-		return out, fmt.Errorf("recall: text must contain 1–32768 bytes")
+		return out, fmt.Errorf("recall: text must contain 1 to 32768 bytes")
 	}
 	proposals, err := extractor.Extract(ctx, text, c.Registry())
 	if err != nil {

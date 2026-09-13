@@ -112,11 +112,19 @@ func Fold(events []Event, card Cardinality, asOf time.Time) []Belief {
 		}
 		ordered = append(ordered, e)
 	}
-	// Ties are broken by id so that two events sharing an instant fold the
-	// same way on every node and every replay.
+	// Ties are broken so that two events sharing an instant fold the same way
+	// on every node and every replay.
 	sort.SliceStable(ordered, func(i, j int) bool {
 		if !ordered[i].ObservedAt.Equal(ordered[j].ObservedAt) {
 			return ordered[i].ObservedAt.Before(ordered[j].ObservedAt)
+		}
+		// A retraction cannot precede the assertion it withdraws. Ordering on
+		// id alone is a hash coin flip, and stored instants are not always
+		// fine-grained: parseTime accepts whole-second RFC3339 for imported and
+		// hand-written logs, which makes a tie ordinary rather than exotic.
+		// Losing that coin flip drops the retraction and revives the belief.
+		if ordered[i].Retraction != ordered[j].Retraction {
+			return ordered[j].Retraction
 		}
 		return ordered[i].ID < ordered[j].ID
 	})
@@ -170,6 +178,13 @@ func foldMulti(ordered []Event) []Belief {
 		}
 		// A repeated assertion refreshes confidence, source, and instant:
 		// hearing the same fact again is new evidence for it.
+		//
+		// Remember will not produce one: it folds first and returns early when
+		// the value is already held, so restating a belief writes nothing and
+		// cannot raise its confidence. This branch therefore serves imported
+		// logs, a re-assertion after a retraction, and any writer appending
+		// events directly. Raising confidence through Remember would be a
+		// change to that idempotence rule, not to this fold.
 		held[k] = beliefOf(e)
 	}
 	out := make([]Belief, 0, len(held))

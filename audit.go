@@ -129,7 +129,7 @@ func (b AuditBundle) Replay() ([]Belief, error) {
 	groups := map[pair][]Event{}
 	for _, e := range b.Events {
 		e.ObservedAt = e.ObservedAt.UTC()
-		p := pair{e.Subject, e.Predicate}
+		p := pair{normalizeSubject(e.Subject), strings.TrimSpace(e.Predicate)}
 		groups[p] = append(groups[p], e)
 	}
 	keys := make([]pair, 0, len(groups))

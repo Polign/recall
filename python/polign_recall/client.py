@@ -6,6 +6,7 @@ import os
 import queue
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping, Sequence
@@ -85,8 +86,15 @@ class Client:
         self._id = 0
         self._closed = False
         argv = list(command) if command is not None else ["polign", "mcp", "-memory-only"] + (["-write"] if write else [])
-        self._process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                         stderr=None, env={**os.environ, **(env or {})})
+        try:
+            self._process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                             stderr=None, env={**os.environ, **(env or {})})
+        except OSError as exc:
+            # The documented contract is that failures arrive as RecallError.
+            # A missing binary is the most common first run, and it must not
+            # escape as a bare OSError with no hint about what to install.
+            raise RecallError(f"could not start {argv[0]!r}: {exc}",
+                              code="transport_error") from exc
         self._reader = threading.Thread(target=self._read, daemon=True)
         self._reader.start()
         try:
@@ -113,11 +121,34 @@ class Client:
     def _send(self, message: dict[str, Any]) -> None:
         payload = (json.dumps(message, allow_nan=False) + "\n").encode()
         assert self._process.stdin is not None
-        try:
-            self._process.stdin.write(payload)
-            self._process.stdin.flush()
-        except (OSError, ValueError) as exc:
-            raise RecallError(str(exc), code="transport_error") from exc
+        # The write has to be bounded like the read. A server that stops
+        # draining its stdin blocks this call forever once the payload passes
+        # the pipe buffer, and the blocked call holds the lock close() needs, so
+        # no other thread can even shut the client down.
+        failure: list[BaseException] = []
+        done = threading.Event()
+
+        def write() -> None:
+            try:
+                self._process.stdin.write(payload)
+                self._process.stdin.flush()
+            except BaseException as exc:  # re-raised on the calling thread
+                failure.append(exc)
+            finally:
+                done.set()
+
+        threading.Thread(target=write, daemon=True).start()
+        if not done.wait(self.timeout):
+            # close() ends the child, which unblocks the writer. The lock is
+            # reentrant and held by this thread, so this cannot deadlock.
+            self.close()
+            raise RecallError("MCP write timed out; the server stopped reading its input",
+                              code="timeout")
+        if failure:
+            exc = failure[0]
+            if isinstance(exc, (OSError, ValueError)):
+                raise RecallError(str(exc), code="transport_error") from exc
+            raise exc
 
     def _rpc(self, method: str, params: dict[str, Any]) -> Any:
         with self._lock:
@@ -125,24 +156,33 @@ class Client:
                 raise RecallError("client is closed", code="closed")
             self._id += 1
             self._send({"jsonrpc": "2.0", "id": self._id, "method": method, "params": params})
-            try:
-                response = self._responses.get(timeout=self.timeout)
-            except queue.Empty as exc:
-                self.close()
-                raise RecallError("MCP call timed out; write outcome may be unknown", code="timeout") from exc
-            if isinstance(response, Exception):
-                self.close()
-                raise RecallError(str(response), code="transport_error") from response
-            if response.get("id") != self._id:
-                self.close()
-                raise RecallError("unexpected MCP response ID", code="protocol_error")
+            deadline = time.monotonic() + self.timeout
+            while True:
+                try:
+                    response = self._responses.get(timeout=max(0.0, deadline - time.monotonic()))
+                except queue.Empty as exc:
+                    self.close()
+                    raise RecallError("MCP call timed out; write outcome may be unknown", code="timeout") from exc
+                if isinstance(response, Exception):
+                    self.close()
+                    raise RecallError(str(response), code="transport_error") from response
+                # Anything carrying a method is a notification or a request the
+                # server started, not an answer to this call, and an older id is
+                # a reply to a call already abandoned. Neither is a protocol
+                # violation, and neither should destroy the session.
+                if "method" in response or response.get("id") != self._id:
+                    continue
+                break
             if "error" in response:
                 raise RecallError(response["error"]["message"], code="protocol_error")
             return response["result"]
 
     def _tool(self, name: str, arguments: dict[str, Any]) -> Any:
         result = self._rpc("tools/call", {"name": name, "arguments": arguments})
-        text = "\n".join(c["text"] for c in result["content"] if c["type"] == "text")
+        try:
+            text = "\n".join(c["text"] for c in result["content"] if c["type"] == "text")
+        except (KeyError, TypeError) as exc:
+            raise RecallError(f"malformed {name} result: {exc}", code="protocol_error") from exc
         if result.get("isError"):
             partial = None
             try:
@@ -150,7 +190,10 @@ class Client:
             except (ValueError, AttributeError):
                 pass
             raise RecallError(text, partial=partial)
-        return json.loads(text)
+        try:
+            return json.loads(text)
+        except ValueError as exc:
+            raise RecallError(f"malformed {name} result: {exc}", code="protocol_error") from exc
 
     def remember(self, subject: str | None = None, predicate: str | None = None,
                  value: Any = _MISSING, *, text: str | None = None,

@@ -14,6 +14,7 @@ type revisionBackend struct {
 	revision     int
 	lists        int
 	changeOnList bool
+	frozen       bool // a backend whose revision does not advance on a write
 }
 
 func (b *revisionBackend) Watermark(context.Context, string) (string, error) {
@@ -21,7 +22,7 @@ func (b *revisionBackend) Watermark(context.Context, string) (string, error) {
 }
 func (b *revisionBackend) Put(ctx context.Context, c, id string, v []float32, m map[string]any) error {
 	err := b.lockedBackend.Put(ctx, c, id, v, m)
-	if err == nil {
+	if err == nil && !b.frozen {
 		b.revision++
 	}
 	return err
@@ -125,10 +126,20 @@ func TestMaterializationFutureEventsLateArrivalsAndTornHistory(t *testing.T) {
 	if err != nil || got[0].Value != "emacs" {
 		t.Fatalf("overwrite: %v %v", got, err)
 	}
+	// A revision that never settles must not fail the read. It covers the whole
+	// collection, so it also moves for a write to an unrelated pair, and
+	// completeEvents is what actually establishes this history's completeness.
+	// The answer is still served, uncached.
 	b.revision++
 	b.changeOnList = true
-	if _, err := s.pairBeliefs(p, at(3*time.Hour)); !errors.Is(err, ErrIncompleteHistory) {
-		t.Fatalf("torn history accepted: %v", err)
+	// At this ceiling both events are visible, so the later one holds.
+	got, err = s.pairBeliefs(p, at(3*time.Hour))
+	if err != nil || len(got) != 1 || got[0].Value != "neovim" {
+		t.Fatalf("unsettled revision did not degrade to an uncached fold: %v %v", got, err)
+	}
+	reads := b.lists
+	if _, err := s.pairBeliefs(p, at(3*time.Hour)); err != nil || b.lists == reads {
+		t.Fatalf("an unsettled revision must not populate the cache: %v", err)
 	}
 }
 
@@ -155,4 +166,60 @@ func TestDefaultRegistryAndLexicalSpace(t *testing.T) {
 	if _, err := e.Embed(c, "x"); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
+}
+
+// Correctness must not rest on the backend advancing its revision. A lagging
+// replica, a caching proxy in front of the endpoint, or a counter that resets
+// all leave the revision equal across a write this client made itself, and a
+// client has to read its own writes regardless.
+func TestMaterializationInvalidatesOnItsOwnWrite(t *testing.T) {
+	ctx := t.Context()
+	b := &revisionBackend{lockedBackend: newLockedBackend(), frozen: true}
+	c, err := NewClient(Config{Backend: b, Collection: "memory", Registry: DefaultRegistry(), Embedder: LexicalEmbedder{}, Materialize: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := Query{Subject: "user", Predicate: "prefers_editor"}
+	if _, err := c.Remember(ctx, RememberRequest{Subject: "user", Predicate: "prefers_editor", Value: "vim"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.Recall(ctx, q); err != nil || got[0].Value != "vim" {
+		t.Fatalf("first read: %v %v", got, err)
+	}
+	if _, err := c.Remember(ctx, RememberRequest{Subject: "user", Predicate: "prefers_editor", Value: "neovim"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.Recall(ctx, q); err != nil || len(got) != 1 || got[0].Value != "neovim" {
+		t.Fatalf("client did not read its own correction back: %v %v", got, err)
+	}
+	if _, err := c.Forget(ctx, ForgetRequest{Subject: "user", Predicate: "prefers_editor", All: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.Recall(ctx, q); err != nil || len(got) != 0 {
+		t.Fatalf("retracted belief served from cache: %v %v", got, err)
+	}
+}
+
+// A revision that cannot be read at all is not a reason to fail a read the
+// uncached path would have served.
+func TestMaterializationDegradesWhenTheRevisionIsUnreadable(t *testing.T) {
+	ctx := t.Context()
+	b := &brokenWatermarkBackend{lockedBackend: newLockedBackend()}
+	c, err := NewClient(Config{Backend: b, Collection: "memory", Registry: DefaultRegistry(), Embedder: LexicalEmbedder{}, Materialize: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Remember(ctx, RememberRequest{Subject: "user", Predicate: "prefers_editor", Value: "vim"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.Recall(ctx, Query{Subject: "user", Predicate: "prefers_editor"})
+	if err != nil || len(got) != 1 || got[0].Value != "vim" {
+		t.Fatalf("unreadable revision failed the read: %v %v", got, err)
+	}
+}
+
+type brokenWatermarkBackend struct{ *lockedBackend }
+
+func (b *brokenWatermarkBackend) Watermark(context.Context, string) (string, error) {
+	return "", errors.New("watermark: connection reset")
 }

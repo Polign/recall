@@ -98,3 +98,24 @@ func TestForgetDoesNotEraseCorrectionWrittenAfterItsHistoryRead(t *testing.T) {
 		t.Fatalf("history = %v, %v", history, err)
 	}
 }
+
+// Stored instants are not always fine-grained: parseTime accepts whole-second
+// RFC3339 for imported and hand-written logs. Ordering a tie on the id alone is
+// a hash coin flip, and losing it drops the retraction and revives the belief.
+func TestRetractionOrdersAfterItsAssertionAtOneInstant(t *testing.T) {
+	when := at(time.Hour)
+	assertion := Event{ID: eventID("user", "prefers_editor", "vim", false, when), Kind: "fact",
+		Subject: "user", Predicate: "prefers_editor", Value: "vim", Confidence: 1,
+		Source: "user_stated", ObservedAt: when}
+	retraction := Event{ID: eventID("user", "prefers_editor", "vim", true, when), Kind: "fact",
+		Subject: "user", Predicate: "prefers_editor", Value: "vim", Confidence: 1,
+		Source: "user_stated", Retraction: true, ObservedAt: when}
+	if !(retraction.ID < assertion.ID) {
+		t.Skipf("ids %s/%s do not exercise the tie-break", assertion.ID, retraction.ID)
+	}
+	for _, order := range [][]Event{{assertion, retraction}, {retraction, assertion}} {
+		if got := Fold(order, Single, when); len(got) != 0 {
+			t.Fatalf("retraction lost its tie-break: %+v", got)
+		}
+	}
+}

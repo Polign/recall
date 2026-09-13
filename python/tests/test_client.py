@@ -101,3 +101,51 @@ class IntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# A server that logs over the protocol, and one that stops reading its input.
+CHATTY = r'''
+import json, sys
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    print(json.dumps({"jsonrpc":"2.0","method":"notifications/message","params":{"level":"info","data":"working"}}),flush=True)
+    print(json.dumps({"jsonrpc":"2.0","id":request["id"],"result":{"content":[{"type":"text","text":"[]"}]}}),flush=True)
+'''
+
+# Answers the handshake, then never reads its input again.
+DEAF = r'''
+import json, sys, time
+request = json.loads(sys.stdin.readline())
+print(json.dumps({"jsonrpc":"2.0","id":request["id"],"result":{"protocolVersion":"2025-06-18"}}),flush=True)
+time.sleep(60)
+'''
+
+
+class ResilienceTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+
+    def _command(self, source):
+        script = Path(self.directory.name) / "server.py"
+        script.write_text(source)
+        return [sys.executable, "-u", str(script)]
+
+    def test_server_notifications_do_not_end_the_session(self):
+        with Client(command=self._command(CHATTY)) as memory:
+            self.assertEqual(memory.predicates(), [])
+            self.assertEqual(memory.recall("user", "prefers_editor"), [])
+
+    def test_a_server_that_never_reads_times_out_instead_of_hanging(self):
+        memory = Client(command=self._command(DEAF), timeout=2)
+        self.addCleanup(memory.close)
+        with self.assertRaises(RecallError) as caught:
+            memory.remember("user", "note", "x" * (1 << 20))
+        self.assertEqual(caught.exception.code, "timeout")
+
+    def test_a_missing_binary_is_a_recall_error(self):
+        with self.assertRaises(RecallError) as caught:
+            Client(command=[str(Path(self.directory.name) / "definitely-absent")])
+        self.assertEqual(caught.exception.code, "transport_error")
