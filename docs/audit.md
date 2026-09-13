@@ -63,7 +63,7 @@ change today's reconstruction of yesterday's beliefs.
 ## Version and checksum contract
 
 The first bundle declares `recall-audit-v1`, `recall-event-v1`, and
-`recall-fold-v1`. These identify the envelope, the existing typed Event fields,
+`recall-fold-v2`. These identify the envelope, the existing typed Event fields,
 and the current fold semantics (including targeted single-value retractions).
 Future incompatible semantics require a new version and an explicit verifier
 implementation; unknown versions are refused. Existing stored metadata is not

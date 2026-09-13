@@ -22,7 +22,12 @@ const (
 	EventVersion = "recall-event-v1"
 	// FoldVersion identifies observation-time ordering and the current single
 	// and multi-value fold rules. Incompatible changes need a new replay path.
-	FoldVersion = "recall-fold-v1"
+	//
+	// v2 orders a retraction after the assertion it withdraws when the two
+	// share an instant. v1 ordered that tie on the event id, so the same log
+	// can fold differently under the two, and a v1 bundle must not be replayed
+	// here as though nothing had changed.
+	FoldVersion = "recall-fold-v2"
 )
 
 var (
@@ -151,8 +156,17 @@ func (b AuditBundle) Replay() ([]Belief, error) {
 
 func (b AuditBundle) validateHeader() error {
 	invalid := func(why string) error { return fmt.Errorf("%w: %s", ErrInvalidAudit, why) }
-	if b.Version != AuditVersion || b.EventVersion != EventVersion || b.FoldVersion != FoldVersion {
-		return invalid("unsupported bundle, event, or fold version")
+	// Name the mismatch. A bundle that cannot be replayed is evidence someone
+	// is trying to audit, so "unsupported" without saying which version moved
+	// leaves them nothing to act on.
+	for _, v := range []struct{ what, got, want string }{
+		{"bundle", b.Version, AuditVersion},
+		{"event", b.EventVersion, EventVersion},
+		{"fold", b.FoldVersion, FoldVersion},
+	} {
+		if v.got != v.want {
+			return invalid(fmt.Sprintf("%s version %q cannot be replayed by this build, which writes %q", v.what, v.got, v.want))
+		}
 	}
 	if b.AsOf.IsZero() || parseTime(formatTime(b.AsOf)).IsZero() {
 		return invalid("as_of must be an explicit RFC3339 instant")

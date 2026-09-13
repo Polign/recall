@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.4.0] - 2026-09-13
+
+Correctness release from a full review of 0.3.0. **The fold version is now
+`recall-fold-v2`**: a retraction sharing an instant with the assertion it
+withdraws now sorts after it, where v1 ordered that tie on the event id. The
+same log can fold differently under the two, so `Replay` refuses a v1 bundle
+rather than answering from it, and now names which version moved.
+
+### Fixed
+
+- Materialized beliefs no longer fail a read they cannot verify. The revision
+  covers the whole collection, so a write to an unrelated pair moved it and
+  aborted a correct read with an incomplete-history error. Every problem reading
+  the revision, including an unsettled one, an unreadable one and an empty one,
+  now degrades to the uncached fold, which is always correct.
+- A write invalidates its own pair, so a client reads its own writes back even
+  when the backend revision lags or repeats. Cached entries also expire after 30
+  seconds, bounding the staleness a revision that under-reports can cause.
+- The Polign adapter treats 501, and a 200 carrying no watermark, as "endpoint
+  not supported" rather than failing the read.
+- `Forget` withdraws a belief whose event is stamped later than the writer's own
+  clock. It previously folded at that clock, saw nothing held, reported success
+  and wrote nothing, so the belief reappeared as the clock caught up. `Remember`
+  deliberately keeps the writer's instant, because observation time decides what
+  is believed, but it no longer shares an instant with an existing event.
+- Broad recall no longer returns one belief twice when the log holds a subject
+  that is not normalized. Audit replay groups on the same normalized pair, so it
+  reproduces what the store answers.
+- `NewStore` records its registry validation and every operation returns it. An
+  invalid cardinality previously folded a multi-valued predicate as single and
+  surfaced much later as a malformed audit.
+- The cold-collection fallback is back in bounded exports, so a failover node
+  reading from S3, GCS or Azure degrades to filtered search instead of failing.
+  It is deliberately absent from complete-history reads, which exist to refuse a
+  truncated log.
+- Python client: a write to a server that has stopped reading is now bounded. It
+  could block forever while holding the lock `close()` needs, so no other thread
+  could recover the client. Server notifications no longer end the session, and
+  a missing binary raises `RecallError` as documented rather than `OSError`.
+
 ## [0.3.0] - 2026-09-12
 
 - Default registry with 15 predicates for preferences, identity, and project facts.
