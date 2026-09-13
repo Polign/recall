@@ -1,16 +1,96 @@
 # Recall
 
-Typed, durable agent memory. An append-only log of what an agent was told,
-and a fold that turns it into what the agent believes, now or at any past
-instant.
+**Give your agent memory it can correct and explain.**
 
-Recall is the memory layer for [Polign](https://polign.com), but it depends on
-no particular database: provide a `Backend` (or legacy `VectorDB`) with three
-operations, or use the included Polign HTTP adapter.
+“I use vim.” → “Actually, I use neovim.” → Recall remembers **neovim** and can
+show when it changed. Start a new session and the memory is still there.
+
+## Try it in Claude Code
+
+Install [Polign v0.6.4+](https://github.com/Polign/polign/releases) and start a
+durable local server. No embedding API key or model download is needed:
 
 ```sh
-go get github.com/Polign/recall
+polign-server -store fs:./recall-data
 ```
+
+Then in Claude Code:
+
+```text
+/plugin marketplace add Polign/polign
+/plugin install recall@polign
+```
+
+Restart Claude Code, ask it to remember your preferred editor, then correct it
+in a new session. Ask “What did you remember before the correction?”
+
+The plugin uses `polign mcp -memory-only -write`. It comes with 15 predicates
+for preferences, identity, and project facts. Your existing agent extracts
+facts; the registry validates them; Recall decides what is currently believed.
+[Plugin setup](https://github.com/Polign/polign/tree/main/plugins/recall).
+
+## Use it from Python
+
+From this checkout, with Python 3.10+ and `polign` on PATH:
+
+```sh
+pip install ./python
+```
+
+```python
+from polign_recall import Client
+
+with Client() as memory:
+    memory.remember("user", "prefers_editor", "vim")
+    memory.remember("user", "prefers_editor", "neovim")
+    print(memory.recall("user", "prefers_editor")[0].value)  # neovim
+    print(memory.history("user", "prefers_editor"))  # the complete history
+```
+
+[Python client](python) · [Cross-session example](examples/python/sessions.py)
+
+## Free text, without a second model
+
+The calling agent proposes facts from the text and sends one `remember` call:
+
+```json
+{
+  "text": "I prefer neovim now.",
+  "statements": [{
+    "subject": "user",
+    "predicate": "prefers_editor",
+    "value": "neovim",
+    "evidence": "I prefer neovim now."
+  }]
+}
+```
+
+Recall checks the predicate, typed value, subject, and verbatim evidence before
+writing. An invalid proposal rejects the whole batch before any write. Storage
+failures can leave a completed prefix, reported in the error. Extracted facts
+are marked `agent_inferred` with a default confidence of 0.8; this is a convention,
+not a calibrated model probability. The evidence quote is returned with the
+proposal; it is not stored in the durable event metadata. Validation cannot prove
+that an extracted statement is true. Typed `remember` also remains available.
+
+The default search uses local lexical word overlap, not semantic synonyms.
+Set `-embed-url` with a dedicated collection to use model embeddings instead.
+Never mix embedding spaces in one collection. Exact subject/predicate reads
+work without semantic search.
+
+## Go library
+
+Recall is the memory layer for [Polign](https://polign.com) and can use any
+backend implementing three operations. The library has no external dependencies.
+
+```sh
+go get github.com/Polign/recall@v0.3.0
+```
+
+Use `recall.DefaultRegistry()` and `recall.LexicalEmbedder{}` to start without
+writing a schema or running an embedding service. Add `Materialize: true` to
+cache folded beliefs against a backend log watermark. Repeated exact reads
+then skip unchanged history. [Materialization contract](docs/materialization.md).
 
 ## What it does differently
 
@@ -51,7 +131,7 @@ never revives one that was superseded.
 ## Using it
 
 ```go
-registry, err := recall.LoadRegistry(predicatesJSON)
+registry := recall.DefaultRegistry()
 store := recall.NewStore(db, "memories", registry, embed)
 
 store.Remember("preference", "user", "prefers_editor", "neovim", 1.0, "user_stated")
@@ -151,10 +231,9 @@ automatically retried.
 The [session example](examples/sessions) runs remember, correction, as-of reads,
 and forgetting in separate processes, with instructions for a server restart.
 It uses fixture vectors for exact reads and needs no embedding service. Cold
-persistence and restart require a server containing
-[polign_db #99](https://github.com/Polign/polign_db/pull/99), now on server main;
-the published v0.6.3 server predates that support. This API and adapter are
-available from the source checkout pending their feature release.
+persistence and restart require Polign v0.6.4+, containing
+[polign_db #99](https://github.com/Polign/polign_db/pull/99). The v0.6.3 server
+predates that support.
 
 ## Input and stored-event validation
 

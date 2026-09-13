@@ -39,16 +39,19 @@ type Config struct {
 	Collection string
 	Registry   Registry
 	Embedder   Embedder
+	// Materialize caches current pair beliefs when the backend supplies watermarks.
+	Materialize bool
 }
 
 // Client is a context-aware memory client. Configuration is immutable, and
 // operations have independent request state. Concurrent writes still follow the
 // backend's consistency guarantees; Client does not promise serializable writes.
 type Client struct {
-	backend    Backend
-	collection string
-	registry   Registry
-	embedder   Embedder
+	backend      Backend
+	collection   string
+	registry     Registry
+	embedder     Embedder
+	materialized *Materialization
 }
 
 // NewClient validates configuration and copies the registry.
@@ -70,7 +73,11 @@ func NewClient(cfg Config) (*Client, error) {
 	if nilInterface(embedder) {
 		embedder = nil
 	}
-	return &Client{backend: cfg.Backend, collection: collection, registry: cfg.Registry.Clone(), embedder: embedder}, nil
+	c := &Client{backend: cfg.Backend, collection: collection, registry: cfg.Registry.Clone(), embedder: embedder}
+	if cfg.Materialize {
+		c.materialized = &Materialization{}
+	}
+	return c, nil
 }
 
 func nilInterface(v any) bool {
@@ -194,7 +201,7 @@ func (c *Client) forContext(ctx context.Context) (*Store, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &Store{db: requestBackend{ctx: ctx, backend: c.backend}, collection: c.collection, registry: c.registry, now: time.Now,
+	return &Store{db: requestBackend{ctx: ctx, backend: c.backend}, collection: c.collection, registry: c.registry, now: time.Now, materialized: c.materialized,
 		embed: func(text string) ([]float32, error) {
 			if err := ctx.Err(); err != nil {
 				return nil, err
