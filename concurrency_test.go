@@ -127,3 +127,45 @@ func TestLostAcknowledgementRetryIsStateBasedNotExactlyOnce(t *testing.T) {
 		t.Fatalf("retry replay = %+v, %v", got, err)
 	}
 }
+
+// A peer whose clock runs ahead, or a local clock stepped backwards, leaves
+// events in the log that the writer's own clock has not reached. Forget used to
+// fold at that clock, see nothing held, and return success having written
+// nothing, so the belief reappeared as soon as time caught up.
+func TestForgetWithdrawsAnEventLaterThanTheWritersClock(t *testing.T) {
+	s, _, clock := newStore(t)
+	*clock = at(2 * time.Hour)
+	mustRemember(t, s, "prefers_editor", "vim")
+	*clock = at(time.Hour) // the writer's clock now trails the log
+
+	withdrawn, err := s.Forget("user", "prefers_editor", "")
+	if err != nil || withdrawn != 1 {
+		t.Fatalf("Forget = %d, %v; want 1 withdrawn", withdrawn, err)
+	}
+	// The retraction is stamped just after the assertion it withdraws, so the
+	// belief still stands at that exact instant and is gone from there on.
+	got, err := s.foldPair(pair{"user", "prefers_editor"}, at(2*time.Hour))
+	if err != nil || len(got) != 1 {
+		t.Fatalf("assertion missing at its own instant: %v %v", got, err)
+	}
+	if got, err := s.foldPair(pair{"user", "prefers_editor"}, at(3*time.Hour)); err != nil || len(got) != 0 {
+		t.Fatalf("belief survived its retraction: %v %v", got, err)
+	}
+}
+
+// A stopped or coarse clock must not let two statements share an instant. Ties
+// are ordered by id hash, which is deterministic but uncorrelated with the
+// order the statements were made, so a correction could silently invert.
+func TestCorrectionSurvivesAStoppedClock(t *testing.T) {
+	s, _, clock := newStore(t)
+	*clock = at(time.Hour)
+	first := mustRemember(t, s, "prefers_editor", "vim")
+	second := mustRemember(t, s, "prefers_editor", "neovim")
+	if !first.Stored.ObservedAt.Before(second.Stored.ObservedAt) {
+		t.Fatalf("two statements share an instant: %s and %s", first.Stored.ObservedAt, second.Stored.ObservedAt)
+	}
+	got, err := s.foldPair(pair{"user", "prefers_editor"}, at(2*time.Hour))
+	if err != nil || len(got) != 1 || got[0].Value != "neovim" {
+		t.Fatalf("correction inverted under a stopped clock: %v %v", got, err)
+	}
+}

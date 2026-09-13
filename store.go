@@ -56,11 +56,19 @@ type Store struct {
 	embed        func(string) ([]float32, error)
 	now          func() time.Time
 	materialized *Materialization
+	registryErr  error
 }
 
 // NewStore returns a store over one collection.
+//
+// An invalid registry is recorded rather than returned, because this
+// constructor has never had an error to return. Every operation reports it, so
+// a bad cardinality surfaces at the first call instead of silently folding a
+// multi-valued predicate as single-valued and appearing much later as a
+// malformed audit.
 func NewStore(db VectorDB, collection string, registry Registry, embed func(string) []float32) *Store {
 	return &Store{db: db, collection: collection, registry: registry.Clone(), now: time.Now,
+		registryErr: registry.Validate(),
 		embed: func(text string) ([]float32, error) {
 			if embed == nil {
 				return nil, ErrEmbedderRequired
@@ -88,6 +96,10 @@ type RememberResult struct {
 // rewritten, so there is no window in which a crash can leave two live beliefs
 // for a single-valued predicate.
 func (s *Store) Remember(kind, subject, predicate string, value any, confidence float64, source string) (RememberResult, error) {
+	if s.registryErr != nil {
+		return RememberResult{}, s.registryErr
+	}
+
 	if confidence == 0 {
 		confidence = 1
 	}
@@ -131,7 +143,11 @@ func (s *Store) remember(kind, subject, predicate string, value any, confidence 
 	if err != nil {
 		return zero, err
 	}
-	now := s.now().UTC()
+	// Remember keeps the writer's own instant. Observation time, not write
+	// acceptance order, decides what is believed, so a statement observed
+	// earlier stays earlier: TestObservationTimeOverridesWriteAcceptanceOrder
+	// pins that, and Superseded below is only meaningful at this same ceiling.
+	now := disambiguateInstant(events, s.now())
 	held := Fold(events, spec.Cardinal(), now)
 
 	// Idempotence lives here rather than in the id: stating what is already
@@ -177,6 +193,10 @@ func (s *Store) remember(kind, subject, predicate string, value any, confidence 
 // not answer that. With value set only that value is withdrawn; without it
 // every value for the pair is.
 func (s *Store) Forget(subject, predicate, value string) (int, error) {
+	if s.registryErr != nil {
+		return 0, s.registryErr
+	}
+
 	predicate = strings.TrimSpace(predicate)
 	var typed any
 	if value = strings.TrimSpace(value); value != "" {
@@ -211,7 +231,12 @@ func (s *Store) forgetValue(subject, predicate string, typed any) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	now := s.now().UTC()
+	// A retraction has to land after everything it withdraws. Folding and
+	// stamping at the writer's own clock makes Forget a silent no-op whenever
+	// the log already holds a later instant: it would report success, write
+	// nothing, and let the belief reappear. Remember keeps the writer's clock
+	// for the reason given there; Forget cannot.
+	now := writeInstant(events, s.now())
 	held := Fold(events, spec.Cardinal(), now)
 	if len(held) == 0 {
 		return 0, nil
@@ -272,6 +297,10 @@ type Query struct {
 
 // Recall returns the beliefs that hold at the query's instant.
 func (s *Store) Recall(q Query) ([]Belief, error) {
+	if s.registryErr != nil {
+		return nil, s.registryErr
+	}
+
 	if err := validateQuery(q); err != nil {
 		return nil, err
 	}
@@ -315,22 +344,71 @@ func (s *Store) pairBeliefs(p pair, asOf time.Time) ([]Belief, error) {
 	return s.materializedBeliefs(p, asOf)
 }
 
+// cardinality reports how a predicate folds. An unregistered predicate folds
+// as single-valued, which is the safer default: it supersedes rather than
+// accumulates.
+func (s *Store) cardinality(predicate string) Cardinality {
+	if spec, ok := s.registry[predicate]; ok {
+		return spec.Cardinal()
+	}
+	return Single
+}
+
+// disambiguateInstant keeps a new event off an instant this pair's log already
+// occupies. Two events sharing an instant are ordered by their id hash, which
+// is deterministic but uncorrelated with the order they were stated, so a
+// stopped clock or a coarse one can silently invert a correction. Unlike
+// writeInstant this never moves past a later event, so a deliberately backdated
+// statement stays backdated.
+func disambiguateInstant(events []Event, now time.Time) time.Time {
+	now = now.UTC()
+	for again := true; again; {
+		again = false
+		for _, e := range events {
+			if e.ObservedAt.Equal(now) {
+				now = now.Add(time.Nanosecond)
+				again = true
+			}
+		}
+	}
+	return now
+}
+
+// writeInstant places a new event after everything already in this pair's log.
+//
+// Folding at the writer's own clock is wrong whenever the log already holds a
+// later instant, which a peer whose clock runs ahead or a local step backwards
+// both produce. The decision would not see that event, and the event written
+// at the writer's instant would sort before it: Forget would report success
+// having withdrawn nothing, and a correction through Remember would revert as
+// soon as the clock caught up. Neither reports an error, which is the worst
+// available outcome for a memory that is asked to be correctable.
+func writeInstant(events []Event, now time.Time) time.Time {
+	now = now.UTC()
+	for _, e := range events {
+		if !e.ObservedAt.Before(now) {
+			now = e.ObservedAt.UTC().Add(time.Nanosecond)
+		}
+	}
+	return now
+}
+
 func (s *Store) foldPair(p pair, asOf time.Time) ([]Belief, error) {
 	events, err := s.History(p.subject, p.predicate)
 	if err != nil {
 		return nil, err
 	}
-	card := Single
-	if spec, ok := s.registry[p.predicate]; ok {
-		card = spec.Cardinal()
-	}
-	return Fold(events, card, asOf), nil
+	return Fold(events, s.cardinality(p.predicate), asOf), nil
 }
 
 // History returns every event recorded for one subject and predicate, oldest
 // first. It is the audit primitive: the fold is a pure function of exactly
 // this, so anything the store answered can be re-derived from it.
 func (s *Store) History(subject, predicate string) ([]Event, error) {
+	if s.registryErr != nil {
+		return nil, s.registryErr
+	}
+
 	filter := map[string]any{
 		"subject":   normalizeSubject(subject),
 		"predicate": strings.TrimSpace(predicate),
@@ -377,7 +455,7 @@ func dedupePairs(events []Event) []pair {
 	seen := map[pair]bool{}
 	out := make([]pair, 0, len(events))
 	for _, e := range events {
-		p := pair{e.Subject, e.Predicate}
+		p := pair{normalizeSubject(e.Subject), strings.TrimSpace(e.Predicate)}
 		if p.subject == "" || p.predicate == "" || seen[p] {
 			continue
 		}
@@ -417,7 +495,11 @@ func (s *Store) append(e Event) error {
 	if err != nil {
 		return err
 	}
-	return s.db.Put(s.collection, e.ID, values, e.Metadata())
+	if err := s.db.Put(s.collection, e.ID, values, e.Metadata()); err != nil {
+		return err
+	}
+	s.materialized.invalidate(pair{normalizeSubject(e.Subject), strings.TrimSpace(e.Predicate)})
+	return nil
 }
 
 // searchEvents runs a semantic search over the event log.
@@ -467,12 +549,28 @@ func (s *Store) completeEvents(filter map[string]any, limit int) ([]Event, error
 	return out, nil
 }
 
-// eventsMatching reads a bounded exact subset for an explicitly limited export.
+// coldListUnsupported is the server's way of saying this collection is served
+// from object storage and has no complete in-memory listing index.
+const coldListUnsupported = "listing is not supported for a cold-served resource"
+
+// eventsMatching reads a bounded exact subset for an explicitly limited export,
+// falling back to filtered vector search on a cold-served collection.
 // It cannot establish a complete history or exhaustive candidate discovery.
+//
+// A server cold-started from an object store deliberately has no listing index,
+// so List is refused. Filtered search scans the same segments and merges the
+// write-ahead tail, which makes it the exact-filter fallback on a failover node
+// reading from S3, GCS, or Azure. The fallback belongs here and nowhere else:
+// search is bounded and approximate, so it can serve an export that already
+// declares itself bounded, and must never stand in for completeEvents, which
+// exists to refuse a truncated log.
 func (s *Store) eventsMatching(filter map[string]any, limit int) ([]Event, error) {
 	vectors, _, err := s.db.List(s.collection, filter, limit)
 	if err != nil {
-		return nil, err
+		if !strings.Contains(err.Error(), coldListUnsupported) {
+			return nil, err
+		}
+		return s.searchEvents("typed durable memory record", filter, limit)
 	}
 	out := make([]Event, 0, len(vectors))
 	for _, v := range vectors {

@@ -1,7 +1,7 @@
 {
   "version": "recall-audit-v1",
   "event_version": "recall-event-v1",
-  "fold_version": "recall-fold-v1",
+  "fold_version": "recall-fold-v2",
   "scope": {
     "subject": "",
     "predicate": ""
@@ -49,5 +49,5 @@
       "observed_at": "2026-09-01T14:00:00.000000000Z"
     }
   ],
-  "digest": "sha256:audit-v1:cd43be48e0dffc282bea0f154b415becfc0a4d39c5cf911122e2715d6541596b"
+  "digest": "sha256:audit-v1:46433777e1bda4c3b4d3096c44c5a9e151362e0fcc7f048aa37ce26e1bdd4d99"
 }

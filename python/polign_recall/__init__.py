@@ -2,4 +2,4 @@
 from .client import Belief, Client, Event, RecallError, RememberResult, ExtractionResult
 
 __all__ = ["Belief", "Client", "Event", "RecallError", "RememberResult", "ExtractionResult"]
-__version__ = "0.1.0"
+__version__ = "0.2.0"

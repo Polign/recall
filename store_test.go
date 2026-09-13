@@ -380,3 +380,26 @@ func TestMinConfidenceFiltersAfterFolding(t *testing.T) {
 		t.Fatalf("got %v, want nothing above the confidence floor", got)
 	}
 }
+
+// Every other path keys a pair on the normalized subject, so a record written
+// by an import or another tool with a different case must not become a second
+// pair. Both would resolve to the same normalized history and the caller would
+// receive one belief twice, spending its limit on a duplicate.
+func TestBroadRecallDoesNotDuplicateAnUnnormalizedSubject(t *testing.T) {
+	s, db, clock := newStore(t)
+	*clock = at(time.Hour)
+	mustRemember(t, s, "prefers_editor", "vim")
+
+	stray := Event{ID: "stray", Kind: "preference", Subject: "User", Predicate: "prefers_editor",
+		Value: "emacs", Confidence: 1, Source: "user_stated", ObservedAt: at(30 * time.Minute)}
+	if err := db.Put("memories", stray.ID, []float32{1, 0, 0}, stray.Metadata()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Recall(Query{Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Value != "vim" {
+		t.Fatalf("unnormalized subject produced a duplicate pair: %+v", got)
+	}
+}

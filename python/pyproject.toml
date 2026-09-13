@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "polign-recall"
-version = "0.1.0"
+version = "0.2.0"
 description = "Typed, correctable agent memory through Recall's MCP server"
 readme = "README.md"
 requires-python = ">=3.10"

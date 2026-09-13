@@ -32,7 +32,7 @@ func TestOfflineVerificationAndReplay(t *testing.T) {
 	}
 	for name, input := range map[string]string{
 		"case tampering":  strings.Replace(string(raw), "Neovim", "neovim", 1),
-		"unknown version": strings.Replace(string(raw), "recall-fold-v1", "recall-fold-v2", 1),
+		"unknown version": strings.Replace(string(raw), "recall-fold-v2", "recall-fold-v3", 1),
 		"unknown field":   strings.Replace(string(raw), "\"as_of\"", "\"not_as_of\"", 1),
 		"trailing JSON":   string(raw) + "{}",
 		"invalid JSON":    "{",

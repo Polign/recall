@@ -63,7 +63,7 @@ change today's reconstruction of yesterday's beliefs.
 ## Version and checksum contract
 
 The first bundle declares `recall-audit-v1`, `recall-event-v1`, and
-`recall-fold-v1`. These identify the envelope, the existing typed Event fields,
+`recall-fold-v2`. These identify the envelope, the existing typed Event fields,
 and the current fold semantics (including targeted single-value retractions).
 Future incompatible semantics require a new version and an explicit verifier
 implementation; unknown versions are refused. Existing stored metadata is not
@@ -88,7 +88,7 @@ event count. Each sorted event contributes these fields:
 
 | Order | Field | Encoding |
 | --- | --- | --- |
-| 1–4 | ID, kind, subject, predicate | Exact strings |
+| 1 to 4 | ID, kind, subject, predicate | Exact strings |
 | 5 | Value type | `null`, `string`, `number`, or `boolean` |
 | 6 | Value | Empty for null; exact string; 16 lowercase hex digits of IEEE-754 binary64 bits for a number; `true` or `false` for a boolean |
 | 7 | Confidence | Same 16-digit IEEE-754 encoding |
