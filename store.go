@@ -50,11 +50,12 @@ const defaultLimit = 20
 // derives each answer from the log returned by its backend at read time.
 // Consistency across concurrent operations depends on that backend.
 type Store struct {
-	db         VectorDB
-	collection string
-	registry   Registry
-	embed      func(string) ([]float32, error)
-	now        func() time.Time
+	db           VectorDB
+	collection   string
+	registry     Registry
+	embed        func(string) ([]float32, error)
+	now          func() time.Time
+	materialized *Materialization
 }
 
 // NewStore returns a store over one collection.
@@ -311,6 +312,10 @@ func (s *Store) Recall(q Query) ([]Belief, error) {
 }
 
 func (s *Store) pairBeliefs(p pair, asOf time.Time) ([]Belief, error) {
+	return s.materializedBeliefs(p, asOf)
+}
+
+func (s *Store) foldPair(p pair, asOf time.Time) ([]Belief, error) {
 	events, err := s.History(p.subject, p.predicate)
 	if err != nil {
 		return nil, err

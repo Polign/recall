@@ -2,3 +2,11 @@
 *.test
 *.out
 /dist/
+
+# Python build output
+__pycache__/
+*.egg-info/
+/build/
+/python/build/
+/python/dist/
+.venv/
