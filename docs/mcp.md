@@ -5,6 +5,11 @@ Any host that supports MCP's stdio transport can launch the server and use its
 tools. The [Claude Code plugin](https://github.com/Polign/polign/tree/main/plugins/recall)
 is one ready-made integration.
 
+The development version of the Polign CLI also provides `polign recall skill`:
+an embedded agent guide covering setup, tool calls, correction rules, and history.
+It prints Markdown offline, without requiring a configured database. This command
+is pending a Polign release; it is not part of Polign 0.6.6.
+
 ## Connect to your memory backend
 
 Install [Polign v0.6.4 or later](https://github.com/Polign/polign#install) and

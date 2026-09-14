@@ -125,6 +125,19 @@ its history. **It does not permanently delete the record.**
 [Caching memory reads](docs/materialization.md) ·
 [Exporting and replaying history](docs/audit.md)
 
+## Repository layout
+
+| Path | Contents |
+| --- | --- |
+| `recall.go`, `doc.go` | Public Go API at `github.com/Polign/recall` |
+| [`internal/engine/`](internal/engine) | Memory implementation and its unit tests |
+| [`polign/`](polign) | Public Go backend adapter |
+| [`python/`](python) | Python package and tests |
+| [`cmd/`](cmd) | Command-line tools, including `recall-audit` |
+| [`examples/`](examples) | Runnable Go and Python examples |
+| [`docs/`](docs) | Integration guides, reference, and [development guide](docs/development.md) |
+| [`testdata/`](testdata) | Shared audit fixtures |
+
 ## License
 
 [Apache 2.0](LICENSE).
