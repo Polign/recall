@@ -1,5 +1,16 @@
 # Changelog
 
+## Python client 0.3.0 - unreleased
+
+- `pip install polign-recall` is now the whole install. It depends on the new
+  `polign_db` package, which ships the `polign` CLI and `polign-server` as
+  platform wheels (Linux, macOS and Windows on x86_64 and arm64). The client
+  runs that binary, then falls back to `polign` on `PATH`.
+- `Client(local_dir=...)` keeps the database on the same machine: it starts a
+  background `polign-server` for the directory through `polign recall setup
+  -local`, shares it between processes, and ignores any `POLIGN_URL` or
+  `POLIGN_API_KEY` in the environment. Linux and macOS.
+
 ## [0.4.0] - 2026-09-13
 
 Correctness release from a full review of 0.3.0. **The fold version is now

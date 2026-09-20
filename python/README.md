@@ -1,19 +1,21 @@
 # polign-recall
 
 A Python client for Recall's typed, correctable agent memory. Requires Python
-3.10+ and `polign` CLI v0.6.4+ on PATH. No Python runtime dependencies.
+3.10+.
 
 ```sh
-pip install ./python
-polign-server -store fs:./recall-data
+pip install polign-recall
 ```
 
-In another terminal:
+That is the whole install. pip also brings the
+[`polign_db`](https://pypi.org/project/polign-db/) package, which holds the
+`polign` CLI and `polign-server` binaries for Linux, macOS and Windows, so
+there is nothing else to download.
 
 ```python
 from polign_recall import Client
 
-with Client() as memory:
+with Client(local_dir="./recall-data") as memory:
     memory.remember("user", "prefers_editor", "vim")
     changed = memory.remember("user", "prefers_editor", "neovim")
     print(memory.recall("user", "prefers_editor")[0].value)  # neovim
@@ -21,10 +23,25 @@ with Client() as memory:
     memory.forget("user", "prefers_editor", "neovim")
 ```
 
-The client owns a long-lived `polign mcp -memory-only -write` subprocess and
-shares the Go implementation's validation and fold. Set `POLIGN_URL`,
+`local_dir` keeps the database on this machine. The first client to open the
+directory starts a `polign-server` for it in the background, listening on
+localhost only and protected by a key stored in the directory. Later clients,
+including ones in other processes, share that server. It keeps running after
+your program exits; its process id is in `runtime.json` and its log in
+`server.log`, both inside the directory. Managed local databases work on Linux
+and macOS.
+
+To use a server you run yourself, leave `local_dir` out and set `POLIGN_URL`,
 `POLIGN_API_KEY`, and `POLIGN_COLLECTION` in the environment, or pass
-`env={...}` to Client. Use `write=False` for a read-only connection.
+`env={...}` to Client. With neither, the client connects to
+`http://localhost:23000`, where `polign-server -store fs:./recall-data` listens
+by default.
+
+The client owns a long-lived `polign mcp -memory-only -write` subprocess and
+shares the Go implementation's validation and fold. Use `write=False` for a
+read-only connection. It runs the `polign` binary pip installed; on a platform
+without a `polign_db` wheel it runs `polign` from `PATH` (CLI v0.7.0+), and
+`command=[...]` overrides both.
 
 `remember(text=..., statements=[...])` accepts proposals from your agent's model;
 the client does not run a second model. Every statement must have subject,

@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 from polign_recall import Client, RecallError
 
@@ -149,3 +150,60 @@ class ResilienceTests(unittest.TestCase):
         with self.assertRaises(RecallError) as caught:
             Client(command=[str(Path(self.directory.name) / "definitely-absent")])
         self.assertEqual(caught.exception.code, "transport_error")
+
+
+# Stands in for the `polign` CLI: `recall setup` writes the two files a managed
+# local database leaves behind, and `mcp` answers list_predicates with the
+# connection it was handed, so a test can see what the client passed on.
+FAKE_POLIGN = r'''#!%s
+import json, os, sys
+args = sys.argv[1:]
+if args[:2] == ["recall", "setup"]:
+    if os.environ.get("POLIGN_URL") or os.environ.get("POLIGN_API_KEY"):
+        sys.exit("setup inherited a connection meant for another server")
+    directory = args[args.index("-config-dir") + 1]
+    if os.path.basename(directory) == "broken":
+        sys.exit("local Recall database did not become ready")
+    os.makedirs(directory, exist_ok=True)
+    json.dump({"url": "http://127.0.0.1:4242", "pid": 1}, open(os.path.join(directory, "runtime.json"), "w"))
+    open(os.path.join(directory, "local-key"), "w").write("plgn_local_secret\n")
+    sys.exit(0)
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    seen = [{"url": os.environ.get("POLIGN_URL"), "key": os.environ.get("POLIGN_API_KEY"), "argv": args}]
+    result = {"content": [{"type": "text", "text": json.dumps(seen)}]} if request["method"] == "tools/call" else {}
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+''' % sys.executable
+
+
+@unittest.skipIf(sys.platform == "win32", "managed local databases are Unix only")
+class LocalDirTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.polign = Path(self.directory.name) / "polign"
+        self.polign.write_text(FAKE_POLIGN)
+        self.polign.chmod(0o755)
+        patcher = unittest.mock.patch("polign_recall.client.polign_bin", return_value=str(self.polign))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_local_dir_connects_to_the_managed_server(self):
+        # A connection aimed at some other server must not leak into either step.
+        with unittest.mock.patch.dict(os.environ, {"POLIGN_URL": "http://elsewhere:23000", "POLIGN_API_KEY": "plgn_other"}):
+            with Client(local_dir=Path(self.directory.name) / "data", write=False) as memory:
+                (seen,) = memory.predicates()
+        self.assertEqual(seen, {"url": "http://127.0.0.1:4242", "key": "plgn_local_secret",
+                                "argv": ["mcp", "-memory-only"]})
+
+    def test_a_failed_local_start_is_a_recall_error(self):
+        with self.assertRaises(RecallError) as caught:
+            Client(local_dir=Path(self.directory.name) / "broken")
+        self.assertEqual(caught.exception.code, "transport_error")
+        self.assertIn("did not become ready", str(caught.exception))
+
+    def test_local_dir_and_command_are_exclusive(self):
+        with self.assertRaises(ValueError):
+            Client(local_dir=self.directory.name, command=["polign", "mcp"])

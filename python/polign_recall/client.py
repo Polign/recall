@@ -4,6 +4,7 @@ import json
 import math
 import os
 import queue
+import shutil
 import subprocess
 import threading
 import time
@@ -67,25 +68,83 @@ class ExtractionResult:
     results: tuple[RememberResult, ...]
 
 
+def polign_bin() -> str:
+    """The `polign` CLI to run: the one pip installed with the polign_db
+    package, then whatever `polign` is on PATH."""
+    try:
+        import polign_db
+        return polign_db.find_bin("polign")
+    except (ImportError, OSError):
+        return shutil.which("polign") or "polign"
+
+
+# Connection settings that belong to some other server. A managed local
+# database must not inherit them, from the caller or from the environment.
+_CONNECTION = ("POLIGN_URL", "POLIGN_API_KEY", "POLIGN_COLLECTION", "POLIGN_PREDICATES")
+
+
+def _local_server(polign: str, directory: str | os.PathLike[str], timeout: float) -> dict[str, str]:
+    """Start (or find) the managed local database kept in `directory` and
+    return the POLIGN_URL and POLIGN_API_KEY that reach it.
+
+    `polign recall setup -local` does the work: it starts one detached
+    polign-server for the directory, shared by every process that opens it,
+    and is safe to run again while that server is up.
+    """
+    directory = os.path.abspath(directory)
+    env = {k: v for k, v in os.environ.items() if k not in _CONNECTION}
+    argv = [polign, "recall", "setup", "-local", "-no-plugin", "-config-dir", directory]
+    try:
+        done = subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, capture_output=True,
+                              text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise RecallError(f"local database in {directory} did not start within {timeout:g}s",
+                          code="timeout") from exc
+    except OSError as exc:
+        raise RecallError(f"could not start {polign!r}: {exc}", code="transport_error") from exc
+    if done.returncode != 0:
+        raise RecallError(f"local database in {directory} did not start: "
+                          f"{(done.stderr or done.stdout).strip()}", code="transport_error")
+    try:
+        with open(os.path.join(directory, "runtime.json")) as f:
+            url = json.load(f)["url"]
+        with open(os.path.join(directory, "local-key")) as f:
+            key = f.read().strip()
+    except (OSError, ValueError, KeyError) as exc:
+        raise RecallError(f"local database in {directory} left no connection details: {exc}",
+                          code="transport_error") from exc
+    return {"POLIGN_URL": url, "POLIGN_API_KEY": key}
+
+
 class Client:
     """Owns one MCP subprocess. Thread-safe, with serialized calls and timeouts.
 
     Environment overrides extend the inherited environment. Credentials belong
     in POLIGN_API_KEY, not command-line arguments. The default enables memory
     writes; pass write=False to expose only read operations.
+
+    The `polign` CLI comes with the polign_db package that pip installs next
+    to this one. With `local_dir`, the client also runs the database: it keeps
+    a local polign-server for that directory and connects to it, ignoring any
+    POLIGN_URL or POLIGN_API_KEY. Without it, the CLI connects to POLIGN_URL
+    (default http://localhost:23000).
     """
 
     def __init__(self, *, command: Sequence[str] | None = None,
                  env: Mapping[str, str] | None = None, timeout: float = 120,
-                 write: bool = True):
+                 write: bool = True, local_dir: str | os.PathLike[str] | None = None):
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be finite and positive")
+        if local_dir is not None and command is not None:
+            raise ValueError("local_dir runs the polign CLI itself and cannot be combined with command")
         self.timeout = timeout
         self._lock = threading.RLock()
         self._responses: queue.Queue[Any] = queue.Queue()
         self._id = 0
         self._closed = False
-        argv = list(command) if command is not None else ["polign", "mcp", "-memory-only"] + (["-write"] if write else [])
+        argv = list(command) if command is not None else [polign_bin(), "mcp", "-memory-only"] + (["-write"] if write else [])
+        if local_dir is not None:
+            env = {**(env or {}), **_local_server(argv[0], local_dir, timeout)}
         try:
             self._process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                              stderr=None, env={**os.environ, **(env or {})})
