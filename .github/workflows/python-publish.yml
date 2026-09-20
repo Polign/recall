@@ -1,0 +1,90 @@
+name: python-publish
+
+# Publishes the Python client to PyPI:
+#   python-vX.Y.Z -> `polign-recall` (python/)
+# Go library releases use bare `vX.Y.Z` tags, so the prefix keeps the two tag
+# lines apart.
+#
+# Authentication is PyPI trusted publishing: the PyPI project trusts this
+# repository, this workflow file, and the `pypi` GitHub environment, so no
+# long-lived token is stored anywhere. A brand new project needs a pending
+# publisher created on PyPI by hand before the first run.
+#
+# `python-v0.2.0` was tagged before this workflow existed, so pushing it again
+# will not start anything. Publish that first release with the manual trigger,
+# run from `main` with the version typed in; later releases go out by pushing
+# the tag.
+
+on:
+  push:
+    tags: ["python-v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish, e.g. 0.2.0. A python-v<version> tag must already exist."
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  pypi:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write # OIDC token for PyPI trusted publishing
+    steps:
+      # Always build from the tag, so a manual run cannot publish whatever
+      # happens to be on the branch it was started from.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('python-v{0}', inputs.version) || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve the version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "PKG_VERSION=$INPUT_VERSION" >> "$GITHUB_ENV"
+          else
+            echo "PKG_VERSION=${GITHUB_REF_NAME#python-v}" >> "$GITHUB_ENV"
+          fi
+
+      # The version is written by hand in two places; make a mismatch fail here
+      # instead of publishing a stray version.
+      - name: Check the package version matches the tag
+        working-directory: python
+        run: |
+          pkg="$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)"
+          if [ "$PKG_VERSION" != "$pkg" ]; then
+            echo "::error::publishing ${PKG_VERSION}, but python/pyproject.toml says ${pkg}"
+            exit 1
+          fi
+          mod="$(grep -m1 '^__version__ = "' polign_recall/__init__.py | cut -d'"' -f2)"
+          if [ "$PKG_VERSION" != "$mod" ]; then
+            echo "::error::polign_recall/__init__.py says ${mod}, expected ${PKG_VERSION}"
+            exit 1
+          fi
+
+      - name: Build sdist and wheel
+        working-directory: python
+        run: |
+          python -m pip install build
+          python -m build
+
+      - name: Check the wheel is not empty
+        working-directory: python
+        run: python -m zipfile -l dist/*.whl | grep -q "polign_recall/client.py"
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: python/dist
+          # PyPI uploads are immutable; a re-run of an already published
+          # version is left alone instead of failing the job.
+          skip-existing: true
