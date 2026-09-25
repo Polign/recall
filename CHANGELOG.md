@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-25
+
 ### Added
 
 - Statements that fit no predicate are kept instead of dropped. Every registry
@@ -21,11 +23,16 @@
 - Recall returns typed memories ahead of notes on the same page.
 - The error for an unregistered predicate in typed `remember` now says to use
   `note` when nothing fits.
+- The Go implementation now lives in `internal/engine`, with public aliases
+  preserving the supported API and method sets. Reflection reports the
+  internal package as the defining path of those types.
 
-## Python client 0.3.0 - unreleased
+## Python client 0.3.1 - unreleased
 
 - `ExtractionResult.unfiled` lists proposals kept as notes because no
   registered predicate fit them.
+
+## Python client 0.3.0 - 2026-09-20
 
 - `pip install polign-recall` is now the whole install. It depends on the new
   `polign_db` package, which ships the `polign` CLI and `polign-server` as

@@ -80,7 +80,7 @@ class IntegrationTests(unittest.TestCase):
     def test_sessions_extraction_history_and_retraction(self):
         subject = "python-integration"
         with self.connect() as memory:
-            self.assertEqual(len(memory.predicates()), 15)
+            self.assertIn("note", {p["predicate"] for p in memory.predicates()})
             first = memory.remember(subject, "prefers_editor", "vim")
             text = "I now prefer neovim."
             extraction = memory.remember(text=text, statements=[{
@@ -98,6 +98,21 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(memory.forget(subject, "prefers_editor", "neovim"), 1)
             self.assertEqual(memory.recall(subject, "prefers_editor"), [])
             self.assertGreaterEqual(len(memory.history(subject, "prefers_editor")), 3)
+
+    def test_unregistered_proposals_are_kept_as_notes(self):
+        subject = "python-notes"
+        text = "I use fish as my shell."
+        proposal = {"subject": subject, "predicate": "prefers_shell",
+                    "value": "fish", "evidence": text}
+        with self.connect() as memory:
+            result = memory.remember(text=text, statements=[proposal])
+            self.assertEqual(result.unfiled, (proposal,))
+            self.assertEqual(result.results[0].stored.predicate, "note")
+            self.assertEqual(result.results[0].stored.value, text)
+        with self.connect() as memory:
+            self.assertEqual(memory.recall(subject, "note")[0].value, text)
+            self.assertEqual(memory.forget(subject, "note", text), 1)
+            self.assertEqual(memory.recall(subject, "note"), [])
 
 
 if __name__ == "__main__":
