@@ -1,6 +1,31 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Statements that fit no predicate are kept instead of dropped. Every registry
+  now accepts `note`, a multi-valued text predicate, even when the registry
+  does not list it. A registry that defines `note` itself must keep it `multi`
+  and `string`.
+- `RememberText` keeps the whole text as a note, once per subject, when a
+  proposal names an unregistered predicate or when there are no proposals (the
+  subject is then `user`). Those proposals come back in the new `Unfiled` field.
+  Before, an unregistered predicate rejected the whole batch.
+- `Client.Promote` files a note under a typed predicate: it writes the typed
+  memory, then withdraws the note.
+- `recall-audit -notes` prints only the notes in a bundle.
+
+### Changed
+
+- Recall returns typed memories ahead of notes on the same page.
+- The error for an unregistered predicate in typed `remember` now says to use
+  `note` when nothing fits.
+
 ## Python client 0.3.0 - unreleased
+
+- `ExtractionResult.unfiled` lists proposals kept as notes because no
+  registered predicate fit them.
 
 - `pip install polign-recall` is now the whole install. It depends on the new
   `polign_db` package, which ships the `polign` CLI and `polign-server` as

@@ -47,6 +47,17 @@ type RememberRequest = engine.RememberRequest
 // zero are values; an omitted value never implicitly withdraws everything.
 type ForgetRequest = engine.ForgetRequest
 
+// PromoteRequest files a note under a typed predicate. Note is the note's
+// value exactly as recall returned it; the remaining fields are the typed
+// statement it becomes, with RememberRequest's defaults.
+type PromoteRequest = engine.PromoteRequest
+
+// NotePredicate is where a statement goes when no registered predicate fits
+// it. Every client and store registers it, so "nothing matched" always has a
+// place to be written instead of being dropped. A note is multi-valued free
+// text: it never supersedes anything, and recall ranks it after typed beliefs.
+const NotePredicate = engine.NotePredicate
+
 // StoredVector is one record as the database returns it.
 type StoredVector = engine.StoredVector
 
@@ -170,6 +181,10 @@ type Proposal = engine.Proposal
 type Extractor = engine.Extractor
 
 type ExtractionResult = engine.ExtractionResult
+
+// DefaultSubject is who a note is about when the text yielded no proposal to
+// take a subject from.
+const DefaultSubject = engine.DefaultSubject
 
 // ProposedStatements adapts proposals made by the calling agent. This lets an
 // MCP host use its own model for extraction without another model service.

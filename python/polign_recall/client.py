@@ -66,6 +66,9 @@ class RememberResult:
 class ExtractionResult:
     proposals: tuple[dict[str, Any], ...]
     results: tuple[RememberResult, ...]
+    # Proposals whose predicate is not registered. Their text was kept as a
+    # note instead of being refused.
+    unfiled: tuple[dict[str, Any], ...] = ()
 
 
 def polign_bin() -> str:
@@ -266,7 +269,8 @@ class Client:
                 raise ValueError("text mode requires statements proposed by your agent")
             data = self._tool("remember", {"text": text, "statements": list(statements)})
             return ExtractionResult(tuple(data.get("proposals") or []),
-                                    tuple(RememberResult.decode(r) for r in data["results"]))
+                                    tuple(RememberResult.decode(r) for r in data["results"]),
+                                    tuple(data.get("unfiled") or []))
         if statements is not None:
             raise ValueError("statements requires original text")
         if subject is None or predicate is None or value is _MISSING:

@@ -145,11 +145,11 @@ func TestMaterializationFutureEventsLateArrivalsAndTornHistory(t *testing.T) {
 
 func TestDefaultRegistryAndLexicalSpace(t *testing.T) {
 	r := DefaultRegistry()
-	if len(r) != 15 || r.Validate() != nil {
+	if len(r) != 16 || r.Validate() != nil || r[NotePredicate] != notePredicate {
 		t.Fatal("invalid defaults")
 	}
 	delete(r, "name")
-	if len(DefaultRegistry()) != 15 {
+	if len(DefaultRegistry()) != 16 {
 		t.Fatal("registry aliases global state")
 	}
 	e := LexicalEmbedder{}

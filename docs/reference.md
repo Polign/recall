@@ -7,7 +7,7 @@ This page covers memory records, the Go API, backend requirements, and limits.
 - [Memory records and corrections](#memory-records-and-corrections)
 - [Go client](#context-aware-client) and [Polign adapter](#polign-http-adapter)
 - [Validation](#input-and-stored-event-validation) and [complete histories](#complete-histories)
-- [Audit bundles](#audit-bundles), [registry](#the-registry), and [embeddings](#embeddings)
+- [Audit bundles](#audit-bundles), [registry](#the-registry), [notes](#notes), and [embeddings](#embeddings)
 
 ## Free text, without a second model
 
@@ -25,9 +25,17 @@ The calling agent proposes facts from the text and sends one `remember` call:
 }
 ```
 
-Recall checks the predicate, typed value, subject, and verbatim evidence before
-writing. An invalid proposal rejects the whole batch before any write. Storage
-failures can leave a completed prefix, reported in the error. Extracted facts
+Recall checks the typed value, subject, and verbatim evidence before writing.
+An invalid proposal rejects the whole batch before any write. Storage
+failures can leave a completed prefix, reported in the error.
+
+Nothing stated is dropped. If a proposal names a predicate that is not in the
+registry, or the text yields no proposals at all, Recall keeps the whole text
+as a [note](#notes) instead of refusing it. It writes one note per subject; with
+no proposals, the subject is `user`. The proposals that became notes come back
+in `unfiled`, so you can see which predicates your registry is missing. A wrong
+value for a registered predicate, such as the string `"8000"` for a number,
+still rejects the batch, because the agent can correct it. Extracted facts
 are marked `agent_inferred` with a default confidence of 0.8; this is a convention,
 not a calibrated model probability. The evidence quote is returned with the
 proposal; it is not stored in the durable event metadata. Validation cannot prove
@@ -279,6 +287,38 @@ encoding, and the limits of replay and retries.
 numerically in a filter instead of lexically.
 
 `Registry.PromptTable()` renders the registry for an agent's system prompt.
+
+### Notes
+
+Every registry accepts `note`, even one that does not list it. A note holds a
+statement that no other predicate fits, as free text. It keeps information that
+would otherwise be refused and lost.
+
+- A note is multi-valued: a new note never replaces an older one, and it never
+  conflicts with a typed memory.
+- Recall returns typed memories ahead of notes in the same answer.
+- A typed `remember` with an unregistered predicate is still refused, so the
+  agent gets a chance to pick the right name. The error lists the registered
+  predicates and says to use `note` when none of them fits.
+- A registry may define `note` with its own description. It must stay
+  `multi` and `string`.
+
+To review notes, recall with predicate `note`, or replay an audit bundle with
+`recall-audit -notes`. When notes show a recurring kind of fact, add a predicate
+for it, then move each note across with `Promote`:
+
+```go
+res, err := client.Promote(ctx, recall.PromoteRequest{
+    Subject:   "user",
+    Note:      "I use fish as my shell.",
+    Predicate: "prefers_shell",
+    Value:     "fish",
+})
+```
+
+`Promote` writes the typed memory first and then withdraws the note. If it
+fails in between, the fact is stored twice rather than lost. The note stays in
+history.
 
 ## Embeddings
 

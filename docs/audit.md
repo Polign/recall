@@ -34,7 +34,11 @@ From this source checkout:
 ```sh
 go run ./cmd/recall-audit < testdata/audit-v1.json
 go run ./cmd/recall-audit -digest "$TRUSTED_DIGEST" < bundle.json
+go run ./cmd/recall-audit -notes < bundle.json
 ```
+
+`-notes` prints only [notes](reference.md#notes), the statements no registered
+predicate fit. Use it to decide which predicates to add.
 
 The command reads at most 64 MiB, rejects unknown JSON fields and trailing JSON,
 verifies the bundle, and prints replayed beliefs. Invalid input produces an

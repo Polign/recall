@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -22,11 +23,28 @@ type Extractor interface {
 type ExtractionResult struct {
 	Proposals []Proposal       `json:"proposals"`
 	Results   []RememberResult `json:"results"`
+	// Unfiled lists the proposals whose predicate is not registered. Their
+	// text was kept as a note rather than refused; the predicates they name
+	// are the ones this registry is missing.
+	Unfiled []Proposal `json:"unfiled,omitempty"`
 }
+
+// DefaultSubject is who a note is about when the text yielded no proposal to
+// take a subject from.
+const DefaultSubject = "user"
+
+// noteConfidence marks a note as weaker than an extracted fact (0.8): it
+// records that something was said, not what it means.
+const noteConfidence = 0.5
 
 // RememberText validates the entire proposal batch before the first write.
 // Writes are sequential, not transactional. On a storage failure, the returned
 // result contains the successful prefix, so callers must not blindly retry.
+//
+// Nothing stated is dropped. A proposal whose predicate is not registered, or
+// text that yielded no proposals at all, is kept as a note holding the whole
+// text, once per subject. A malformed proposal for a registered predicate
+// still fails the batch, because the caller can correct it.
 func (c *Client) RememberText(ctx context.Context, text string, extractor Extractor) (ExtractionResult, error) {
 	out := ExtractionResult{Results: []RememberResult{}}
 	if ctx == nil {
@@ -48,23 +66,35 @@ func (c *Client) RememberText(ctx context.Context, text string, extractor Extrac
 	if len(proposals) > 32 {
 		return out, fmt.Errorf("recall: extractor exceeded 32 proposals")
 	}
+	var filed []int
+	var noteSubjects []string
 	for i, p := range proposals {
-		spec, ok := c.registry[p.Predicate]
-		if !ok {
-			return out, fmt.Errorf("recall: proposal %d: predicate %q is not registered", i, p.Predicate)
-		}
-		if normalizeSubject(p.Subject) == "" {
+		subject := normalizeSubject(p.Subject)
+		if subject == "" {
 			return out, fmt.Errorf("recall: proposal %d: subject is required", i)
-		}
-		if _, err := normalizeValue(p.Predicate, spec, p.Value); err != nil {
-			return out, fmt.Errorf("recall: proposal %d: %w", i, err)
 		}
 		if strings.TrimSpace(p.Evidence) == "" || !strings.Contains(text, p.Evidence) {
 			return out, fmt.Errorf("recall: proposal %d: evidence must quote the input", i)
 		}
+		spec, ok := c.registry[p.Predicate]
+		if !ok {
+			out.Unfiled = append(out.Unfiled, p)
+			if !slices.Contains(noteSubjects, subject) {
+				noteSubjects = append(noteSubjects, subject)
+			}
+			continue
+		}
+		if _, err := normalizeValue(p.Predicate, spec, p.Value); err != nil {
+			return out, fmt.Errorf("recall: proposal %d: %w", i, err)
+		}
+		filed = append(filed, i)
+	}
+	if len(proposals) == 0 {
+		noteSubjects = []string{DefaultSubject}
 	}
 	out.Proposals = proposals
-	for i, p := range proposals {
+	for _, i := range filed {
+		p := proposals[i]
 		kind := "fact"
 		if strings.HasPrefix(p.Predicate, "prefers_") {
 			kind = "preference"
@@ -73,6 +103,14 @@ func (c *Client) RememberText(ctx context.Context, text string, extractor Extrac
 		r, err := c.Remember(ctx, RememberRequest{Subject: p.Subject, Predicate: p.Predicate, Value: p.Value, Kind: kind, Source: "agent_inferred", Confidence: &confidence})
 		if err != nil {
 			return out, fmt.Errorf("recall: proposal %d failed after %d completed writes: %w", i, len(out.Results), err)
+		}
+		out.Results = append(out.Results, r)
+	}
+	for _, subject := range noteSubjects {
+		confidence := noteConfidence
+		r, err := c.Remember(ctx, RememberRequest{Subject: subject, Predicate: NotePredicate, Value: text, Source: "agent_inferred", Confidence: &confidence})
+		if err != nil {
+			return out, fmt.Errorf("recall: note for %q failed after %d completed writes: %w", subject, len(out.Results), err)
 		}
 		out.Results = append(out.Results, r)
 	}

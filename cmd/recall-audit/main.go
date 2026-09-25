@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"unicode/utf8"
 
 	"github.com/Polign/recall"
@@ -28,11 +29,12 @@ func main() {
 func run(args []string, in io.Reader, out io.Writer) error {
 	flags := flag.NewFlagSet("recall-audit", flag.ContinueOnError)
 	trusted := flags.String("digest", "", "expected bundle digest obtained through a trusted channel")
+	notes := flags.Bool("notes", false, "print only notes: statements no registered predicate fit, to review for new predicates")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("usage: recall-audit [-digest expected] < bundle.json")
+		return fmt.Errorf("usage: recall-audit [-digest expected] [-notes] < bundle.json")
 	}
 	const maxBytes = 64 << 20
 	raw, err := io.ReadAll(io.LimitReader(in, maxBytes+1))
@@ -61,6 +63,9 @@ func run(args []string, in io.Reader, out io.Writer) error {
 	beliefs, err := b.Replay()
 	if err != nil {
 		return err
+	}
+	if *notes {
+		beliefs = slices.DeleteFunc(beliefs, func(b recall.Belief) bool { return b.Predicate != recall.NotePredicate })
 	}
 	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")

@@ -69,11 +69,15 @@ func NewClient(cfg Config) (*Client, error) {
 	if err := cfg.Registry.Validate(); err != nil {
 		return nil, err
 	}
+	registry, err := cfg.Registry.withNote()
+	if err != nil {
+		return nil, err
+	}
 	embedder := cfg.Embedder
 	if nilInterface(embedder) {
 		embedder = nil
 	}
-	c := &Client{backend: cfg.Backend, collection: collection, registry: cfg.Registry.Clone(), embedder: embedder}
+	c := &Client{backend: cfg.Backend, collection: collection, registry: registry, embedder: embedder}
 	if cfg.Materialize {
 		c.materialized = &Materialization{}
 	}
@@ -142,6 +146,52 @@ func (c *Client) Forget(ctx context.Context, q ForgetRequest) (int, error) {
 		return 0, fmt.Errorf("recall: forget requires exactly one value or all=true")
 	}
 	return s.forgetValue(q.Subject, q.Predicate, q.Value)
+}
+
+// PromoteRequest files a note under a typed predicate. Note is the note's
+// value exactly as recall returned it; the remaining fields are the typed
+// statement it becomes, with RememberRequest's defaults.
+type PromoteRequest struct {
+	Subject    string
+	Note       string
+	Predicate  string
+	Value      any
+	Kind       string
+	Confidence *float64
+	Source     string
+}
+
+// Promote records a typed statement and then withdraws the note it came from,
+// in that order: a failure between the two writes leaves the fact stated
+// twice, never not at all. The note stays in history, so the promotion is
+// auditable and can be reversed.
+func (c *Client) Promote(ctx context.Context, q PromoteRequest) (RememberResult, error) {
+	if strings.TrimSpace(q.Predicate) == NotePredicate {
+		return RememberResult{}, fmt.Errorf("recall: promote files a note under another predicate, not %q", NotePredicate)
+	}
+	s, err := c.forContext(ctx)
+	if err != nil {
+		return RememberResult{}, err
+	}
+	events, err := s.History(q.Subject, NotePredicate)
+	if err != nil {
+		return RememberResult{}, err
+	}
+	held := false
+	for _, b := range Fold(events, Multi, s.now()) {
+		held = held || ValueKey(b.Value) == ValueKey(strings.TrimSpace(q.Note))
+	}
+	if !held {
+		return RememberResult{}, fmt.Errorf("recall: %q holds no current note matching %q", normalizeSubject(q.Subject), q.Note)
+	}
+	r, err := c.Remember(ctx, RememberRequest{Subject: q.Subject, Predicate: q.Predicate, Value: q.Value, Kind: q.Kind, Confidence: q.Confidence, Source: q.Source})
+	if err != nil {
+		return RememberResult{}, err
+	}
+	if _, err := s.forgetValue(q.Subject, NotePredicate, strings.TrimSpace(q.Note)); err != nil {
+		return r, fmt.Errorf("recall: stored %s but could not withdraw the note: %w", q.Predicate, err)
+	}
+	return r, nil
 }
 
 // Recall returns current or historical beliefs.

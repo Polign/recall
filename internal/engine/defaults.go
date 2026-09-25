@@ -25,6 +25,7 @@ func DefaultRegistry() Registry {
 	}
 	r["uses_technology"] = Predicate{"multi", "string", "Technology used by the subject or project"}
 	r["project_constraint"] = Predicate{"multi", "string", "An explicit project requirement or constraint"}
+	r[NotePredicate] = notePredicate
 	return r
 }
 

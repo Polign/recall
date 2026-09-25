@@ -37,7 +37,7 @@ func (s *Store) recallExact(q Query, limit int, asOf time.Time) ([]Belief, error
 	total := -1
 	var previous []Event
 	seen := make(map[pair]bool)
-	out := make([]Belief, 0, limit)
+	var out ranked
 	for {
 		events, count, err := s.exactCandidates(filter, width)
 		if err != nil {
@@ -62,16 +62,13 @@ func (s *Store) recallExact(q Query, limit int, asOf time.Time) ([]Belief, error
 				return nil, err
 			}
 			for _, b := range beliefs {
-				if matchesBelief(b, q) {
-					out = append(out, b)
-					if len(out) == limit {
-						return out, nil
-					}
+				if matchesBelief(b, q) && out.add(b) == limit {
+					return out.beliefs(), nil
 				}
 			}
 		}
 		if len(events) == total {
-			return out, nil
+			return out.beliefs(), nil
 		}
 		if width == MaxCandidateEvents {
 			return nil, fmt.Errorf("%w: examined %d of %d events; narrow the query", ErrIncompleteCandidates, width, total)

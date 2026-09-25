@@ -67,8 +67,14 @@ type Store struct {
 // multi-valued predicate as single-valued and appearing much later as a
 // malformed audit.
 func NewStore(db VectorDB, collection string, registry Registry, embed func(string) []float32) *Store {
-	return &Store{db: db, collection: collection, registry: registry.Clone(), now: time.Now,
-		registryErr: registry.Validate(),
+	registryErr := registry.Validate()
+	withNote, err := registry.withNote()
+	if err != nil {
+		withNote = registry.Clone()
+		registryErr = errors.Join(registryErr, err)
+	}
+	return &Store{db: db, collection: collection, registry: withNote, now: time.Now,
+		registryErr: registryErr,
 		embed: func(text string) ([]float32, error) {
 			if embed == nil {
 				return nil, ErrEmbedderRequired
@@ -122,8 +128,9 @@ func (s *Store) remember(kind, subject, predicate string, value any, confidence 
 	}
 	spec, ok := s.registry[predicate]
 	if !ok {
-		return zero, fmt.Errorf("predicate %q is not in the registry; registered predicates are: %s",
-			predicate, strings.Join(s.registry.Names(), ", "))
+		return zero, fmt.Errorf("predicate %q is not in the registry; registered predicates are: %s. "+
+			"If none of them fits, remember it with predicate %q and the statement as the value",
+			predicate, strings.Join(s.registry.Names(), ", "), NotePredicate)
 	}
 	value, err := normalizeValue(predicate, spec, value)
 	if err != nil {
@@ -321,7 +328,7 @@ func (s *Store) Recall(q Query) ([]Belief, error) {
 		return nil, err
 	}
 
-	out := make([]Belief, 0, limit)
+	var out ranked
 	for _, p := range pairs {
 		beliefs, err := s.pairBeliefs(p, asOf)
 		if err != nil {
@@ -331,13 +338,31 @@ func (s *Store) Recall(q Query) ([]Belief, error) {
 			if !matchesBelief(b, q) {
 				continue
 			}
-			out = append(out, b)
-			if len(out) >= limit {
-				return out, nil
+			if out.add(b) >= limit {
+				return out.beliefs(), nil
 			}
 		}
 	}
-	return out, nil
+	return out.beliefs(), nil
+}
+
+// ranked collects one page of beliefs and returns typed beliefs ahead of
+// notes. A note is kept so nothing is lost, but it is the store's weakest
+// claim: when a typed belief and a note answer the same query, the typed one
+// comes first. Which beliefs make the page is unchanged; only their order is.
+type ranked struct{ typed, notes []Belief }
+
+func (r *ranked) add(b Belief) int {
+	if b.Predicate == NotePredicate {
+		r.notes = append(r.notes, b)
+	} else {
+		r.typed = append(r.typed, b)
+	}
+	return len(r.typed) + len(r.notes)
+}
+
+func (r *ranked) beliefs() []Belief {
+	return append(append(make([]Belief, 0, len(r.typed)+len(r.notes)), r.typed...), r.notes...)
 }
 
 func (s *Store) pairBeliefs(p pair, asOf time.Time) ([]Belief, error) {

@@ -40,6 +40,32 @@ func (p Predicate) Cardinal() Cardinality {
 // across two names that never meet.
 type Registry map[string]Predicate
 
+// NotePredicate is where a statement goes when no registered predicate fits
+// it. Every client and store registers it, so "nothing matched" always has a
+// place to be written instead of being dropped. A note is multi-valued free
+// text: it never supersedes anything, and recall ranks it after typed beliefs.
+const NotePredicate = "note"
+
+// notePredicate is the only spec NotePredicate may have.
+var notePredicate = Predicate{Cardinality: "multi", ValueType: "string",
+	Description: "A statement worth keeping that no other predicate fits, in the words it was stated"}
+
+// withNote returns a copy of r with NotePredicate registered. A registry may
+// define note itself, with its own description, but not as anything other
+// than multi-valued text: a single-valued note would let one note erase
+// another.
+func (r Registry) withNote() (Registry, error) {
+	out := r.Clone()
+	if p, ok := out[NotePredicate]; ok {
+		if p.Cardinal() != Multi || (p.ValueType != "" && p.ValueType != "string") {
+			return nil, fmt.Errorf("predicate registry: %q is reserved for statements no other predicate fits and must be multi-valued string", NotePredicate)
+		}
+		return out, nil
+	}
+	out[NotePredicate] = notePredicate
+	return out, nil
+}
+
 // LoadRegistry parses and validates a registry document.
 func LoadRegistry(raw []byte) (Registry, error) {
 	var r Registry
