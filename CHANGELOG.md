@@ -27,10 +27,12 @@
   preserving the supported API and method sets. Reflection reports the
   internal package as the defining path of those types.
 
-## Python client 0.3.1 - unreleased
+## Python client 0.3.1 - 2026-09-25
 
 - `ExtractionResult.unfiled` lists proposals kept as notes because no
   registered predicate fit them.
+- Requires `polign_db>=0.7.2` on supported wheel platforms so an install
+  includes the matching note-aware CLI.
 
 ## Python client 0.3.0 - 2026-09-20
 
