@@ -145,7 +145,7 @@ func assemble(rc *ResumeContext, turns []Turn, memories []Belief, outputs []Outp
 	keptOuts, outCost := fitOutputs(outputs, outShare+(memShare+turnShare-turnCost-memCost))
 	// Anything still unused buys older turns.
 	if spare := left - turnCost - memCost - outCost; spare > 0 && len(keptTurns) < len(turns) {
-		keptTurns, turnCost = fitTurns(turns, turnCost+spare)
+		keptTurns, _ = fitTurns(turns, turnCost+spare)
 	}
 
 	if len(keptOuts) > 0 {

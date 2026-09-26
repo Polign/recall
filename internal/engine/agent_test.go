@@ -120,7 +120,7 @@ func TestResumeFreshAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Release(t.Context())
+	defer func() { _ = a.Release(t.Context()) }()
 	rc := a.Resumed()
 	if !rc.Fresh || rc.WorkingState != nil || rc.Epoch != 1 || a.Collection() != "memory_agents" {
 		t.Fatalf("fresh resume = %+v", rc)
@@ -173,7 +173,7 @@ func TestResumeRebuildsWhatTheLastProcessWrote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resume after release: %v", err)
 	}
-	defer next.Release(ctx)
+	defer func() { _ = next.Release(ctx) }()
 	rc := next.Resumed()
 	if rc.Fresh || rc.WorkingState == nil || rc.WorkingState.Version != 2 || rc.WorkingState.LastMilestone != "call sites found" {
 		t.Fatalf("working state = %+v", rc.WorkingState)
@@ -210,7 +210,7 @@ func TestLargeTurnIsStoredAsOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Release(ctx)
+	defer func() { _ = a.Release(ctx) }()
 	big := strings.Repeat("row,value\n", 200)
 	turn, err := a.RecordTurn(ctx, Turn{Role: "tool", Name: "sql", Content: big})
 	if err != nil {
@@ -243,7 +243,7 @@ func TestLeaseKeepsOneProcessPerAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rival.Release(ctx)
+	defer func() { _ = rival.Release(ctx) }()
 	// The stalled process wakes up. Its next write must renew first, and the
 	// renewal finds the chain moved on.
 	a.lease.mu.Lock()
@@ -287,12 +287,12 @@ func TestBudgetKeepsWorkingStateAndDropsOldTurns(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	a.Release(ctx)
+	_ = a.Release(ctx)
 	next, err := c.Resume(ctx, ResumeRequest{AgentID: "a", TokenBudget: 600})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer next.Release(ctx)
+	defer func() { _ = next.Release(ctx) }()
 	rc := next.Resumed()
 	if !strings.Contains(rc.Briefing, "a goal that must survive any budget") {
 		t.Fatal("working state dropped")
@@ -312,7 +312,7 @@ func TestPointerValidationAndRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Release(ctx)
+	defer func() { _ = a.Release(ctx) }()
 	if _, err := a.SetPointer(ctx, Pointer{Name: "x", Type: PointerObject}); err == nil {
 		t.Fatal("object pointer without a uri accepted")
 	}
@@ -357,7 +357,7 @@ func TestDeferredResumeReadsNowAndWritesAfterTheLease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deferred resume while held: %v", err)
 	}
-	defer next.Release(ctx)
+	defer func() { _ = next.Release(ctx) }()
 	rc := next.Resumed()
 	if rc.LeaseHeld || rc.WorkingState == nil || rc.WorkingState.Goal != "rebook the flight" || rc.TurnSeq != 1 {
 		t.Fatalf("deferred context = %+v", rc)
