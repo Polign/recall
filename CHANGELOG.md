@@ -55,8 +55,9 @@ Leases need Polign 0.8.0 or later; an older server answers
   preserving the supported API and method sets. Reflection reports the
   internal package as the defining path of those types.
 
-## Python client 0.4.0 - Unreleased
+## Python client 0.4.0 - 2026-09-26
 
+- Requires `polign_db` 0.8.0 or later, the first with `polign mcp -agent`.
 - `Client(agent=True)` runs `polign mcp -agent` and adds `resume`, which
   takes an agent's lease and returns a `ResumedAgent` with its rebuilt
   `ResumeContext`. The agent writes its working state, turns, outputs and
