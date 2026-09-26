@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-26
+
 ### Added
 
 - `Client.Resume` resumes an agent from its own records instead of a
@@ -24,6 +26,9 @@
   a process replacing a crashed one can start at once. `Agent.AcquireLease`
   takes the lease later and picks up anything written in between; writes
   before it fail with `ErrLeaseNotHeld`.
+
+Leases need Polign 0.8.0 or later; an older server answers
+`ErrLeaseUnsupported`. Everything else works with the servers 0.5.0 did.
 
 ## [0.5.0] - 2026-09-25
 
