@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Added
+
+- `Client.Resume` resumes an agent from its own records instead of a
+  snapshot. It takes the agent's lease and returns an `Agent` whose
+  `Resumed()` context holds the working state, pointers, recent turns,
+  relevant memories and stored-output references within a token budget, and
+  a `Briefing` to hand the model.
+- `Agent` writes those records: `UpdateWorkingState`, `Milestone`,
+  `RecordTurn`, `StoreOutput`, `SetPointer` and `RemovePointer`, with
+  `WorkingStateHistory`, `RecentTurns`, `FetchOutput` and `Pointers` to read
+  them back. Records go in a collection of their own.
+- `LeaseBackend`, with `ErrLeaseHeld`, `ErrLeaseLost` and
+  `ErrLeaseUnsupported`, keeps one process per agent. The Polign adapter
+  implements it over the server's lease API.
+- `polign.StatusError.NotFound` reports a 404.
+
 ## [0.5.0] - 2026-09-25
 
 ### Added
@@ -26,6 +42,23 @@
 - The Go implementation now lives in `internal/engine`, with public aliases
   preserving the supported API and method sets. Reflection reports the
   internal package as the defining path of those types.
+
+## Python client 0.4.0 - Unreleased
+
+- `Client(agent=True)` runs `polign mcp -agent` and adds `resume`, which
+  takes an agent's lease and returns a `ResumedAgent` with its rebuilt
+  `ResumeContext`. The agent writes its working state, turns, outputs and
+  pointers through it, and releases the lease on `release()`, on leaving a
+  `with` block, or when the client closes.
+- A resume refused because another process holds the agent raises
+  `RecallError` with code `"lease_held"`; a write after another process took
+  the agent over raises code `"lease_lost"`.
+- New types: `ResumeContext`, `ResumedAgent`, `WorkingState`, `Turn`,
+  `Output`, `OutputRef`, `Pointer`. `Client.agent_enabled` says whether a
+  client can resume.
+- Closing a client opened with `agent=True` ends the MCP session by closing
+  its input first, so the server hands leases over instead of leaving them to
+  expire.
 
 ## Python client 0.3.1 - 2026-09-25
 

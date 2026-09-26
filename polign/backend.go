@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -37,7 +38,10 @@ type Backend struct {
 	maxResponseBytes int64
 }
 
-var _ recall.Backend = (*Backend)(nil)
+var (
+	_ recall.Backend      = (*Backend)(nil)
+	_ recall.LeaseBackend = (*Backend)(nil)
+)
 
 // New validates the endpoint and creates a backend without making requests.
 func New(cfg Config) (*Backend, error) {
@@ -68,6 +72,10 @@ type StatusError struct {
 func (e *StatusError) Error() string {
 	return fmt.Sprintf("polign: HTTP %d: %s", e.StatusCode, e.Message)
 }
+
+// NotFound reports a 404, which Recall reads as "nothing written here yet"
+// when an agent lists a collection it has not written to.
+func (e *StatusError) NotFound() bool { return e.StatusCode == http.StatusNotFound }
 
 func collectionPath(collection string) (string, error) {
 	if strings.TrimSpace(collection) == "" || collection == "." || collection == ".." {
@@ -165,24 +173,94 @@ func (b *Backend) Search(ctx context.Context, collection string, values []float3
 	return *result.Hits, nil
 }
 
+type leaseGrant struct {
+	Epoch     uint64    `json:"epoch"`
+	Holder    string    `json:"holder"`
+	ExpiresAt time.Time `json:"expires_at"`
+	TTLMillis int64     `json:"ttl_ms"`
+}
+
+// AcquireLease takes an agent's lease. A live holder is reported as a
+// recall.LeaseHeldError; a server without the lease API as
+// recall.ErrLeaseUnsupported.
+func (b *Backend) AcquireLease(ctx context.Context, collection, name, holder string, ttl time.Duration) (recall.LeaseGrant, error) {
+	var g leaseGrant
+	raw, err := b.lease(ctx, collection, name, "acquire", map[string]any{"holder": holder, "ttl_ms": ttl.Milliseconds()}, &g)
+	var se *StatusError
+	if errors.As(err, &se) && se.StatusCode == http.StatusConflict {
+		var held struct {
+			Holder    string    `json:"holder"`
+			ExpiresAt time.Time `json:"expires_at"`
+		}
+		_ = json.Unmarshal(raw, &held)
+		return recall.LeaseGrant{}, &recall.LeaseHeldError{Holder: held.Holder, Expires: held.ExpiresAt}
+	}
+	if err != nil {
+		return recall.LeaseGrant{}, err
+	}
+	return recall.LeaseGrant{Epoch: g.Epoch, Holder: g.Holder, TTL: time.Duration(g.TTLMillis) * time.Millisecond}, nil
+}
+
+// RenewLease extends a held lease; a 409 means another holder took over and
+// is reported as recall.ErrLeaseLost.
+func (b *Backend) RenewLease(ctx context.Context, collection, name, holder string, epoch uint64, ttl time.Duration) (recall.LeaseGrant, error) {
+	var g leaseGrant
+	_, err := b.lease(ctx, collection, name, "renew", map[string]any{"holder": holder, "epoch": epoch, "ttl_ms": ttl.Milliseconds()}, &g)
+	var se *StatusError
+	if errors.As(err, &se) && se.StatusCode == http.StatusConflict {
+		return recall.LeaseGrant{}, fmt.Errorf("%w: %s", recall.ErrLeaseLost, se.Message)
+	}
+	if err != nil {
+		return recall.LeaseGrant{}, err
+	}
+	return recall.LeaseGrant{Epoch: g.Epoch, Holder: g.Holder, TTL: time.Duration(g.TTLMillis) * time.Millisecond}, nil
+}
+
+// ReleaseLease hands a held lease over at once.
+func (b *Backend) ReleaseLease(ctx context.Context, collection, name, holder string, epoch uint64) error {
+	_, err := b.lease(ctx, collection, name, "release", map[string]any{"holder": holder, "epoch": epoch}, nil)
+	return err
+}
+
+func (b *Backend) lease(ctx context.Context, collection, name, action string, body map[string]any, out any) ([]byte, error) {
+	path, err := collectionPath(collection)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := b.doRaw(ctx, http.MethodPost, path+"/leases/"+url.PathEscape(name)+"/"+action, body, out)
+	var se *StatusError
+	// A server older than the lease API has no such route.
+	if errors.As(err, &se) && (se.StatusCode == http.StatusNotFound || se.StatusCode == http.StatusMethodNotAllowed || se.StatusCode == http.StatusNotImplemented) {
+		return raw, fmt.Errorf("%w: %s", recall.ErrLeaseUnsupported, se.Error())
+	}
+	return raw, err
+}
+
 func (b *Backend) do(ctx context.Context, method, path string, body, out any) error {
+	_, err := b.doRaw(ctx, method, path, body, out)
+	return err
+}
+
+// doRaw is do that also returns the response body, so a caller can read the
+// details an error response carries.
+func (b *Backend) doRaw(ctx context.Context, method, path string, body, out any) ([]byte, error) {
 	if ctx == nil {
-		return fmt.Errorf("polign: context must not be nil")
+		return nil, fmt.Errorf("polign: context must not be nil")
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	var data []byte
 	if body != nil {
 		var err error
 		data, err = json.Marshal(body)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 	req, err := http.NewRequestWithContext(ctx, method, b.baseURL+path, bytes.NewReader(data))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
@@ -193,15 +271,15 @@ func (b *Backend) do(ctx context.Context, method, path string, body, out any) er
 	}
 	resp, err := b.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("polign: request: %w", err)
+		return nil, fmt.Errorf("polign: request: %w", err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, b.maxResponseBytes+1))
 	if err != nil {
-		return fmt.Errorf("polign: response: %w", err)
+		return nil, fmt.Errorf("polign: response: %w", err)
 	}
 	if int64(len(raw)) > b.maxResponseBytes {
-		return fmt.Errorf("polign: response exceeds %d bytes", b.maxResponseBytes)
+		return nil, fmt.Errorf("polign: response exceeds %d bytes", b.maxResponseBytes)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var detail struct {
@@ -215,12 +293,12 @@ func (b *Backend) do(ctx context.Context, method, path string, body, out any) er
 		if len(message) > 4096 {
 			message = message[:4096]
 		}
-		return &StatusError{StatusCode: resp.StatusCode, Message: message}
+		return raw, &StatusError{StatusCode: resp.StatusCode, Message: message}
 	}
 	if out != nil {
 		if err := json.Unmarshal(raw, out); err != nil {
-			return fmt.Errorf("polign: decode response: %w", err)
+			return raw, fmt.Errorf("polign: decode response: %w", err)
 		}
 	}
-	return nil
+	return raw, nil
 }

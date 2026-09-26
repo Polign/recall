@@ -6,7 +6,7 @@ import tempfile
 import unittest
 import unittest.mock
 
-from polign_recall import Client, RecallError
+from polign_recall import Client, RecallError, ResumeContext, WorkingState
 
 
 FAKE = r'''
@@ -115,6 +115,68 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(memory.recall(subject, "note"), [])
 
 
+@unittest.skipUnless(os.environ.get("RECALL_TEST_POLIGN"), "set RECALL_TEST_POLIGN and POLIGN_URL for integration")
+class AgentIntegrationTests(unittest.TestCase):
+    def connect(self):
+        return Client(command=[os.environ["RECALL_TEST_POLIGN"], "mcp", "-memory-only", "-write", "-agent"],
+                      agent=True)
+
+    def test_resume_writes_records_and_a_second_client_sees_them(self):
+        agent_id = "py-agent-" + os.urandom(4).hex()
+        with self.connect() as first:
+            agent = first.resume(agent_id, lease_ttl=30)
+            self.assertTrue(agent.context.fresh)
+            self.assertEqual(agent.context.agent_id, agent_id)
+            agent.update_working_state(goal="port billing to v2", plan=["find call sites", "migrate"])
+            state = agent.update_working_state(progress="call sites listed")
+            self.assertEqual(state.goal, "port billing to v2")
+            self.assertEqual(state.plan, ("find call sites", "migrate"))
+            self.assertEqual(state.version, 2)
+            self.assertEqual(agent.milestone("call sites found").last_milestone, "call sites found")
+            agent.record_turn("user", "please continue")
+            turn = agent.record_turn("tool", "billing.charge(\n" * 2000, name="grep")
+            self.assertTrue(turn.output_ref)
+            self.assertEqual(agent.fetch_output(turn.output_ref).content, "billing.charge(\n" * 2000)
+            self.assertEqual([t.seq for t in agent.recent_turns()], [1, 2])
+            pointer = agent.set_pointer("wip", "git_ref", {"repo": "github.com/acme/billing", "branch": "agent/wip"})
+            self.assertEqual(pointer.fields["branch"], "agent/wip")
+            agent.set_pointer("scratch", "object", {"uri": "s3://b/scratch.tar"})
+            agent.remove_pointer("scratch")
+            self.assertEqual([p.name for p in agent.pointers()], ["wip"])
+            self.assertGreaterEqual(len(agent.working_state_history()), 2)
+
+            # Another process cannot take the agent while this one holds it.
+            with self.connect() as second:
+                with self.assertRaises(RecallError) as caught:
+                    second.resume(agent_id)
+                self.assertEqual(caught.exception.code, "lease_held")
+            self.assertTrue(agent.release())
+            self.assertFalse(agent.release())
+
+        with self.connect() as later:
+            with later.resume(agent_id) as agent:
+                context = agent.context
+                self.assertIsInstance(context, ResumeContext)
+                self.assertFalse(context.fresh)
+                self.assertIsInstance(context.working_state, WorkingState)
+                self.assertEqual(context.working_state.progress, "call sites listed")
+                self.assertEqual(context.turn_seq, 2)
+                self.assertEqual([p.name for p in context.pointers], ["wip"])
+                self.assertIn("port billing to v2", context.briefing)
+                self.assertIn("please continue", context.briefing)
+                self.assertEqual(agent.record_turn("assistant", "resumed").seq, 3)
+
+    def test_closing_the_client_hands_the_lease_over(self):
+        agent_id = "py-agent-" + os.urandom(4).hex()
+        with self.connect() as first:
+            first.resume(agent_id, lease_ttl=60).record_turn("user", "hello")
+        # No explicit release: closing the client ended the session, and the
+        # server released the lease instead of leaving it to expire.
+        with self.connect() as second:
+            with second.resume(agent_id) as agent:
+                self.assertEqual(agent.context.turn_seq, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -213,6 +275,11 @@ class LocalDirTests(unittest.TestCase):
         self.assertEqual(seen, {"url": "http://127.0.0.1:4242", "key": "plgn_local_secret",
                                 "argv": ["mcp", "-memory-only"]})
 
+    def test_agent_mode_adds_the_agent_flag(self):
+        with Client(local_dir=Path(self.directory.name) / "data", agent=True) as memory:
+            (seen,) = memory.predicates()
+        self.assertEqual(seen["argv"], ["mcp", "-memory-only", "-write", "-agent"])
+
     def test_a_failed_local_start_is_a_recall_error(self):
         with self.assertRaises(RecallError) as caught:
             Client(local_dir=Path(self.directory.name) / "broken")
@@ -222,3 +289,77 @@ class LocalDirTests(unittest.TestCase):
     def test_local_dir_and_command_are_exclusive(self):
         with self.assertRaises(ValueError):
             Client(local_dir=self.directory.name, command=["polign", "mcp"])
+
+
+# Stands in for `polign mcp -agent`: agent_resume on the id "busy" fails the
+# way the real server does when another process holds the lease.
+AGENT_FAKE = r'''
+import json, sys
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    result = {}
+    if request["method"] == "tools/call":
+        name, args = request["params"]["name"], request["params"]["arguments"]
+        if name == "agent_resume" and args["agent_id"] == "busy":
+            text = 'recall: agent lease is held by another process: held by "pod-a" until 2026-09-26T00:00:00Z'
+            result = {"isError": True, "content": [{"type": "text", "text": text}]}
+        elif name == "agent_resume":
+            payload = {"agent_id": args["agent_id"], "fresh": False, "epoch": 3, "future_field": 1,
+                       "working_state": {"goal": "g", "plan": ["a"], "version": 4, "extra": True},
+                       "memories": [{"subject": "s", "predicate": "p", "value": "v", "confidence": 1,
+                                     "source": "user_stated", "kind": "fact", "observed_at": "t", "event_id": "e"}],
+                       "recent_turns": [{"seq": 7, "role": "user", "content": "hi", "at": "t"}],
+                       "omitted": {"turns": 2}, "turn_seq": 7, "token_budget": 8000, "tokens": 50,
+                       "briefing": "B", "args": args, "argv": sys.argv[1:]}
+            result = {"content": [{"type": "text", "text": json.dumps(payload)}]}
+        elif name == "agent_release":
+            result = {"content": [{"type": "text", "text": json.dumps({"released": True})}]}
+        else:
+            result = {"content": [{"type": "text", "text": json.dumps(args)}]}
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+'''
+
+
+class AgentTransportTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        script = Path(self.directory.name) / "fake.py"
+        script.write_text(AGENT_FAKE)
+        self.command = [sys.executable, "-u", str(script)]
+
+    def test_resume_decodes_and_ignores_unknown_fields(self):
+        with Client(command=self.command, agent=True) as client:
+            self.assertTrue(client.agent_enabled)
+            with client.resume("coder-1", token_budget=4000, lease_ttl=2.5, holder="me") as agent:
+                context = agent.context
+                self.assertEqual(context.epoch, 3)
+                self.assertEqual(context.working_state.plan, ("a",))
+                self.assertEqual(context.working_state.version, 4)
+                self.assertEqual(context.memories[0].value, "v")
+                self.assertEqual(context.recent_turns[0].seq, 7)
+                self.assertEqual(context.omitted, {"turns": 2, "memories": 0, "outputs": 0})
+                # The fake echoes nothing back for these, but the call shapes are checked.
+                sent = agent._call("update_working_state", goal="x", plan=None)
+                self.assertEqual(sent, {"agent_id": "coder-1", "goal": "x"})
+
+    def test_a_held_lease_has_its_own_code(self):
+        with Client(command=self.command, agent=True) as client:
+            with self.assertRaises(RecallError) as caught:
+                client.resume("busy")
+            self.assertEqual(caught.exception.code, "lease_held")
+
+    def test_agent_mode_needs_write_and_resume_needs_agent_mode(self):
+        with self.assertRaises(ValueError):
+            Client(command=self.command, agent=True, write=False)
+        with Client(command=self.command) as client:
+            with self.assertRaises(ValueError):
+                client.resume("coder-1")
+
+    def test_release_after_close_is_false(self):
+        client = Client(command=self.command, agent=True)
+        agent = client.resume("coder-1")
+        client.close()
+        self.assertFalse(agent.release())

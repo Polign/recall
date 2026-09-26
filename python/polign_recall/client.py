@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field, fields
 from datetime import datetime
 from typing import Any, Mapping, Sequence
 
@@ -71,6 +71,148 @@ class ExtractionResult:
     unfiled: tuple[dict[str, Any], ...] = ()
 
 
+def _known(cls: type, data: Any) -> dict[str, Any]:
+    """The keys of `data` that `cls` declares. A newer server may send fields
+    this client does not know yet; they are dropped instead of failing."""
+    if not isinstance(data, dict):
+        raise RecallError(f"malformed {cls.__name__}: {data!r}", code="protocol_error")
+    names = {f.name for f in fields(cls)}
+    return {k: v for k, v in data.items() if k in names}
+
+
+def _belief(data: Any) -> Belief:
+    return Belief(**{"subject": "", "predicate": "", "value": "", "confidence": 0.0, "source": "",
+                     "kind": "", "observed_at": "", "event_id": "", **_known(Belief, data)})
+
+
+@dataclass(frozen=True)
+class WorkingState:
+    """The agent's note to its next instance. Every resume includes it whole."""
+    goal: str = ""
+    plan: tuple[str, ...] = ()
+    progress: str = ""
+    focus: str = ""
+    decisions: tuple[str, ...] = ()
+    open_questions: tuple[str, ...] = ()
+    notes: str = ""
+    step: int = 0
+    last_milestone: str = ""
+    # Written by the server.
+    version: int = 0
+    turn_seq: int = 0
+    updated_at: str = ""
+
+    @classmethod
+    def decode(cls, data: Any) -> WorkingState:
+        known = _known(cls, data)
+        for key in ("plan", "decisions", "open_questions"):
+            known[key] = tuple(known.get(key) or ())
+        return cls(**known)
+
+
+@dataclass(frozen=True)
+class Turn:
+    """One message of the agent's run, kept verbatim. When the content was too
+    large, it holds only the opening and `output_ref` names the full output."""
+    seq: int
+    role: str
+    content: str
+    name: str = ""
+    output_ref: str = ""
+    at: str = ""
+
+    @classmethod
+    def decode(cls, data: Any) -> Turn:
+        return cls(**{"seq": 0, "role": "", "content": "", **_known(cls, data)})
+
+
+@dataclass(frozen=True)
+class OutputRef:
+    """A stored output, without its content."""
+    ref: str
+    tool: str = ""
+    summary: str = ""
+    tokens: int = 0
+    at: str = ""
+
+    @classmethod
+    def decode(cls, data: Any) -> OutputRef:
+        return cls(**{"ref": "", **_known(cls, data)})
+
+
+@dataclass(frozen=True)
+class Output:
+    """A stored output with its full content."""
+    ref: str
+    content: str
+    tool: str = ""
+    summary: str = ""
+    at: str = ""
+
+    @classmethod
+    def decode(cls, data: Any) -> Output:
+        return cls(**{"ref": "", "content": "", **_known(cls, data)})
+
+
+@dataclass(frozen=True)
+class Pointer:
+    """Where a piece of the agent's work lives: a branch, an object, an image."""
+    name: str
+    type: str
+    fields: Mapping[str, str]
+    note: str = ""
+    at: str = ""
+
+    @classmethod
+    def decode(cls, data: Any) -> Pointer:
+        known = {"name": "", "type": "", **_known(cls, data)}
+        known["fields"] = dict(known.get("fields") or {})
+        return cls(**known)
+
+
+@dataclass(frozen=True)
+class ResumeContext:
+    """What `Client.resume` returns: the agent's records, trimmed to the token
+    budget, and `briefing`, the same content as one text to hand the model."""
+    agent_id: str
+    fresh: bool
+    briefing: str
+    epoch: int = 0
+    working_state: WorkingState | None = None
+    pointers: tuple[Pointer, ...] = ()
+    outputs: tuple[OutputRef, ...] = ()
+    memories: tuple[Belief, ...] = ()
+    recent_turns: tuple[Turn, ...] = ()
+    # How many of each were left out to fit the budget.
+    omitted: Mapping[str, int] = field(default_factory=dict)
+    turn_seq: int = 0
+    token_budget: int = 0
+    tokens: int = 0
+
+    @classmethod
+    def decode(cls, data: Any) -> ResumeContext:
+        known = {"agent_id": "", "fresh": False, "briefing": "", **_known(cls, data)}
+        ws = known.get("working_state")
+        known["working_state"] = WorkingState.decode(ws) if ws else None
+        known["pointers"] = tuple(Pointer.decode(p) for p in known.get("pointers") or ())
+        known["outputs"] = tuple(OutputRef.decode(o) for o in known.get("outputs") or ())
+        known["memories"] = tuple(_belief(b) for b in known.get("memories") or ())
+        known["recent_turns"] = tuple(Turn.decode(t) for t in known.get("recent_turns") or ())
+        omitted = known.get("omitted") or {}
+        known["omitted"] = {k: int(omitted.get(k, 0)) for k in ("turns", "memories", "outputs")}
+        return cls(**known)
+
+
+def _lease_error(exc: RecallError) -> RecallError:
+    """Give lease failures their own code, so a caller can tell "someone else
+    is running this agent" from a broken call."""
+    text = str(exc)
+    for marker, code in (("lease is held", "lease_held"), ("lease was lost", "lease_lost")):
+        if marker in text:
+            return RecallError(text, code=code, partial=exc.partial)
+    return exc
+
+
 def polign_bin() -> str:
     """The `polign` CLI to run: the one pip installed with the polign_db
     package, then whatever `polign` is on PATH."""
@@ -131,13 +273,20 @@ class Client:
     a local polign-server for that directory and connects to it, ignoring any
     POLIGN_URL or POLIGN_API_KEY. Without it, the CLI connects to POLIGN_URL
     (default http://localhost:23000).
+
+    `agent=True` also turns on the agent resume tools, for `resume`. It needs
+    write=True. Agents resumed through this client stay held until they are
+    released or the client closes.
     """
 
     def __init__(self, *, command: Sequence[str] | None = None,
                  env: Mapping[str, str] | None = None, timeout: float = 120,
-                 write: bool = True, local_dir: str | os.PathLike[str] | None = None):
+                 write: bool = True, local_dir: str | os.PathLike[str] | None = None,
+                 agent: bool = False):
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be finite and positive")
+        if agent and not write:
+            raise ValueError("agent=True needs write=True: resuming an agent writes its records")
         if local_dir is not None and command is not None:
             raise ValueError("local_dir runs the polign CLI itself and cannot be combined with command")
         self.timeout = timeout
@@ -145,7 +294,9 @@ class Client:
         self._responses: queue.Queue[Any] = queue.Queue()
         self._id = 0
         self._closed = False
-        argv = list(command) if command is not None else [polign_bin(), "mcp", "-memory-only"] + (["-write"] if write else [])
+        self._agent = agent
+        argv = list(command) if command is not None else (
+            [polign_bin(), "mcp", "-memory-only"] + (["-write"] if write else []) + (["-agent"] if agent else []))
         if local_dir is not None:
             env = {**(env or {}), **_local_server(argv[0], local_dir, timeout)}
         try:
@@ -304,11 +455,54 @@ class Client:
     def predicates(self) -> list[dict[str, Any]]:
         return self._tool("list_predicates", {})
 
+    @property
+    def agent_enabled(self) -> bool:
+        """True when the client was opened with agent=True, so `resume` works."""
+        return self._agent
+
+    def resume(self, agent_id: str, *, token_budget: int | None = None,
+               lease_ttl: float | None = None, holder: str | None = None,
+               output_threshold: int | None = None) -> ResumedAgent:
+        """Take the agent's lease and return it with the context to start from.
+
+        This is also how an agent starts the first time; `context.fresh` is
+        then true. It raises RecallError with code "lease_held" while another
+        process holds the agent. `lease_ttl` is in seconds; the server renews
+        the lease in the background until release.
+        """
+        if not self._agent:
+            raise ValueError("resume needs a client opened with agent=True")
+        args: dict[str, Any] = {"agent_id": agent_id}
+        if token_budget is not None:
+            args["token_budget"] = token_budget
+        if lease_ttl is not None:
+            if not math.isfinite(lease_ttl) or lease_ttl <= 0:
+                raise ValueError("lease_ttl must be finite and positive")
+            args["lease_ttl_seconds"] = max(1, math.ceil(lease_ttl))
+        if holder is not None:
+            args["holder"] = holder
+        if output_threshold is not None:
+            args["output_threshold"] = output_threshold
+        try:
+            data = self._tool("agent_resume", args)
+        except RecallError as exc:
+            raise _lease_error(exc) from None
+        return ResumedAgent(self, agent_id, ResumeContext.decode(data))
+
     def close(self) -> None:
         with self._lock:
             if self._closed:
                 return
             self._closed = True
+            if self._agent and self._process.poll() is None and self._process.stdin is not None:
+                # Closing stdin ends the session cleanly, and the server then
+                # hands every lease over. A terminated server leaves them to
+                # expire, so the next process would wait out the TTL.
+                try:
+                    self._process.stdin.close()
+                    self._process.wait(timeout=min(self.timeout, 15))
+                except (OSError, ValueError, subprocess.TimeoutExpired):
+                    pass
             if self._process.poll() is None:
                 self._process.terminate()
                 try:
@@ -319,10 +513,99 @@ class Client:
             self._reader.join(timeout=1)
             for stream in (self._process.stdin, self._process.stdout):
                 if stream is not None:
-                    stream.close()
+                    try:
+                        stream.close()
+                    except OSError:
+                        pass
 
     def __enter__(self) -> Client:
         return self
 
     def __exit__(self, *args: Any) -> None:
         self.close()
+
+
+class ResumedAgent:
+    """An agent this client holds. Its writes are what the next resume reads.
+
+    Every method is a call on the client's subprocess, so they are blocking
+    and serialized like the memory calls. Use it as a context manager, or call
+    `release` on a clean shutdown so the next process need not wait for the
+    lease to expire.
+    """
+
+    def __init__(self, client: Client, agent_id: str, context: ResumeContext):
+        self.client = client
+        self.agent_id = agent_id
+        self.context = context
+
+    def _call(self, tool: str, /, **args: Any) -> Any:
+        try:
+            return self.client._tool(tool, {"agent_id": self.agent_id,
+                                            **{k: v for k, v in args.items() if v is not None}})
+        except RecallError as exc:
+            raise _lease_error(exc) from None
+
+    def update_working_state(self, **fields: Any) -> WorkingState:
+        """Supersede the working state. Fields you pass replace the current
+        ones and the rest are kept: goal, plan, progress, focus, decisions,
+        open_questions, notes, step."""
+        for key in ("plan", "decisions", "open_questions"):
+            if key in fields and fields[key] is not None:
+                fields[key] = list(fields[key])
+        return WorkingState.decode(self._call("update_working_state", **fields))
+
+    def milestone(self, name: str, progress: str | None = None) -> WorkingState:
+        """Record a durable point. A crash costs at most the work since the last one."""
+        return WorkingState.decode(self._call("agent_milestone", name=name, progress=progress))
+
+    def record_turn(self, role: str, content: str, name: str | None = None) -> Turn:
+        """Append one message, verbatim. role is system, user, assistant or tool."""
+        return Turn.decode(self._call("record_turn", role=role, content=content, name=name))
+
+    def recent_turns(self, limit: int | None = None) -> list[Turn]:
+        """The newest turns, oldest first (20 by default)."""
+        return [Turn.decode(t) for t in self._call("recent_turns", limit=limit) or []]
+
+    def store_output(self, content: str, tool: str | None = None, summary: str | None = None,
+                     ref: str | None = None) -> OutputRef:
+        """Keep a large output whole, to fetch by reference instead of carrying it."""
+        return OutputRef.decode(self._call("store_output", content=content, tool=tool,
+                                           summary=summary, ref=ref))
+
+    def fetch_output(self, ref: str) -> Output:
+        return Output.decode(self._call("fetch_output", ref=ref))
+
+    def set_pointer(self, name: str, type: str, fields: Mapping[str, str],
+                    note: str | None = None) -> Pointer:
+        """Record where a piece of work lives, replacing a pointer of the same
+        name. type is git_ref, object, env, external or process."""
+        return Pointer.decode(self._call("set_pointer", name=name, type=type,
+                                         fields=dict(fields), note=note))
+
+    def remove_pointer(self, name: str) -> None:
+        self._call("remove_pointer", name=name)
+
+    def pointers(self) -> list[Pointer]:
+        return [Pointer.decode(p) for p in self._call("list_pointers") or []]
+
+    def working_state_history(self, limit: int | None = None) -> list[WorkingState]:
+        """Earlier versions of the working state, newest first."""
+        return [WorkingState.decode(w) for w in self._call("working_state_history", limit=limit) or []]
+
+    def release(self) -> bool:
+        """Hand the lease over now. Returns False if this client no longer
+        held the agent, including when the client is already closed (closing
+        releases every agent it held)."""
+        try:
+            return bool(self._call("agent_release").get("released"))
+        except RecallError as exc:
+            if exc.code == "closed":
+                return False
+            raise
+
+    def __enter__(self) -> ResumedAgent:
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        self.release()

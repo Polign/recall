@@ -199,6 +199,69 @@ persistence and restart require Polign v0.6.4+, containing
 [polign_db #99](https://github.com/Polign/polign_db/pull/99). The v0.6.3 server
 predates that support.
 
+## Resuming an agent
+
+An agent can resume from what it wrote down instead of from a container
+snapshot. `Client.Resume` takes the agent's lease, reads its records back,
+and assembles the context it should start from, within a token budget. The
+same call starts an agent for the first time: with nothing recorded, the
+context is marked `Fresh`.
+
+```go
+agent, err := client.Resume(ctx, recall.ResumeRequest{AgentID: "coder-1", TokenBudget: 8000})
+if err != nil { return err }
+defer agent.Release(context.Background())
+
+start := agent.Resumed().Briefing // hand this to the model as its starting context
+
+agent.UpdateWorkingState(ctx, recall.WorkingState{
+    Goal: "migrate billing to the v2 API",
+    Plan: []string{"find call sites", "migrate", "run tests"},
+    Focus: "finding call sites",
+})
+agent.RecordTurn(ctx, recall.Turn{Role: "assistant", Content: reply})
+agent.SetPointer(ctx, recall.Pointer{Name: "wip", Type: recall.PointerGitRef,
+    Fields: map[string]string{"repo": "github.com/acme/billing", "branch": "agent/coder-1/wip", "sha": sha}})
+agent.Milestone(ctx, "call sites found", "42 call sites listed")
+```
+
+An agent keeps four kinds of record:
+
+- **Working state**: one note to its next instance (goal, plan, progress,
+  focus, decisions, open questions). Each update supersedes it, and
+  `WorkingStateHistory` reads the earlier versions.
+- **Pointers** to where its work lives: `git_ref`, `object`, `env`,
+  `external` or `process`. Setting a pointer with an existing name replaces
+  it. The work stays in the system that already keeps it.
+- **Turns**, verbatim. A turn larger than `OutputThreshold` (2,000 estimated
+  tokens by default) is stored as an output, and the turn keeps its opening
+  and a reference.
+- **Outputs**: large tool results, kept whole up to 1 MiB and read back with
+  `FetchOutput`.
+
+`ResumeContext` holds the working state and pointers whole, then fills what
+is left of the budget with recent turns (newest first), memories that match
+the agent's focus and open questions, and references to stored outputs.
+`Omitted` counts what did not fit. `Briefing` renders it all as one message
+that tells the model to check the world before its first action.
+
+Agent records live in their own collection, the memory collection's name
+with `_agents` appended unless `ResumeRequest.Collection` says otherwise.
+They cannot share the memory collection, because every record there must
+decode as a memory event. Records are embedded with the client's embedder,
+or the lexical embedder when it has none.
+
+**One process per agent.** Resume needs a backend that implements
+`LeaseBackend`; the Polign adapter does, against a server with the lease API.
+A second process resuming the same agent gets `ErrLeaseHeld` (a
+`*LeaseHeldError` names the holder). The holder renews in the background every
+third of the TTL (60 seconds by default), and every write renews first when a
+third of the TTL has passed, so writes land inside an epoch the server
+granted. Once another process has taken over, writes fail with
+`ErrLeaseLost`. `Release` hands the lease over at once; without it, the next
+process waits out the TTL. Set `Unleased` only on a backend without leases,
+when something else already guarantees one process per agent.
+
 ## Input and stored-event validation
 
 Queries return at most `MaxRecall` (1,000) beliefs and exports read at most

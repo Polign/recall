@@ -317,3 +317,57 @@ var ErrIncompleteCandidates = engine.ErrIncompleteCandidates
 // MaxRecall bounds the number of beliefs a query can request. Candidate
 // discovery and result allocations are bounded independently of caller input.
 const MaxRecall = engine.MaxRecall
+
+// --- resuming agents ----------------------------------------------------------
+
+// Agent is a resumed agent: it holds the agent's lease and writes its working
+// state, pointers, turns and outputs. Obtain one from Client.Resume.
+type Agent = engine.Agent
+
+// ResumeRequest names the agent to resume and how to build its context.
+type ResumeRequest = engine.ResumeRequest
+
+// ResumeContext is the context a resumed agent starts from. Its Briefing is
+// one message a harness can hand the model as its starting context.
+type ResumeContext = engine.ResumeContext
+
+// WorkingState is an agent's handoff note to its next instance.
+type WorkingState = engine.WorkingState
+
+// Turn is one message of an agent's run, kept verbatim.
+type Turn = engine.Turn
+
+// Output is a large tool result, kept whole and fetched by reference.
+type Output = engine.Output
+
+// OutputRef describes a stored output without its content.
+type OutputRef = engine.OutputRef
+
+// Pointer is a typed reference to where some of an agent's work lives.
+type Pointer = engine.Pointer
+
+// Pointer types.
+const (
+	PointerGitRef   = engine.PointerGitRef
+	PointerObject   = engine.PointerObject
+	PointerEnv      = engine.PointerEnv
+	PointerExternal = engine.PointerExternal
+	PointerProcess  = engine.PointerProcess
+)
+
+// LeaseBackend optionally grants per-agent leases. Resume requires it unless
+// ResumeRequest.Unleased is set.
+type LeaseBackend = engine.LeaseBackend
+
+// LeaseGrant is one held lease epoch; the epoch is the fencing token.
+type LeaseGrant = engine.LeaseGrant
+
+// LeaseHeldError names who holds a lease that could not be taken.
+type LeaseHeldError = engine.LeaseHeldError
+
+var (
+	ErrLeaseHeld        = engine.ErrLeaseHeld
+	ErrLeaseLost        = engine.ErrLeaseLost
+	ErrLeaseUnsupported = engine.ErrLeaseUnsupported
+	ErrAgentClosed      = engine.ErrAgentClosed
+)
