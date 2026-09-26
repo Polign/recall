@@ -45,6 +45,9 @@ var (
 	ErrLeaseUnsupported = errors.New("recall: backend does not support agent leases")
 	// ErrAgentClosed means Release already ran on this Agent.
 	ErrAgentClosed = errors.New("recall: agent was released")
+	// ErrLeaseNotHeld means a deferred resume has not taken the lease yet.
+	// Nothing was written; call AcquireLease, then write.
+	ErrLeaseNotHeld = errors.New("recall: agent lease not acquired yet; call AcquireLease before writing")
 )
 
 // LeaseGrant is one held epoch. The epoch is the fencing token: it only ever
@@ -111,7 +114,11 @@ type Turn struct {
 	Content string `json:"content"`
 	// OutputRef is set when the content was too large to keep in the turn and
 	// was stored as an output instead; Content then holds its opening.
-	OutputRef string    `json:"output_ref,omitempty"`
+	OutputRef string `json:"output_ref,omitempty"`
+	// MessageID is the harness's own id for the message, when it has one.
+	// A harness that restores its message history after a resume uses it to
+	// tell messages already recorded from new ones.
+	MessageID string    `json:"message_id,omitempty"`
 	At        time.Time `json:"at"`
 }
 
@@ -178,6 +185,11 @@ type ResumeRequest struct {
 	// Unleased skips the lease. Use it only on a backend without leases, when
 	// something else already guarantees one process per agent.
 	Unleased bool
+	// Deferred reads the agent's records without taking its lease, so the
+	// context is ready at once even while a crashed process's lease is still
+	// live. Writes fail with ErrLeaseNotHeld until AcquireLease succeeds.
+	// Reading needs no lease: only writes can conflict.
+	Deferred bool
 	// NoKeepAlive stops the background renewal. The lease is then renewed
 	// only by writes, and an agent idle past its TTL can be taken over.
 	NoKeepAlive bool
@@ -223,6 +235,7 @@ type Agent struct {
 	collection string
 	threshold  int
 	resumed    ResumeContext
+	req        ResumeRequest
 
 	mu      sync.Mutex
 	state   WorkingState
@@ -242,8 +255,11 @@ func (a *Agent) Collection() string { return a.collection }
 // Resumed returns the context assembled when the agent was resumed.
 func (a *Agent) Resumed() ResumeContext { return a.resumed }
 
-// Epoch returns the current lease epoch, or zero for an unleased agent.
+// Epoch returns the current lease epoch, or zero for an agent that holds
+// no lease.
 func (a *Agent) Epoch() uint64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.lease == nil {
 		return 0
 	}
@@ -277,6 +293,9 @@ func (c *Client) Resume(ctx context.Context, req ResumeRequest) (*Agent, error) 
 	if collection == c.collection {
 		return nil, fmt.Errorf("recall: agent records need their own collection, not the memory collection %q", c.collection)
 	}
+	if req.Unleased && req.Deferred {
+		return nil, fmt.Errorf("recall: a resume is either unleased or deferred, not both")
+	}
 	if req.TokenBudget < 0 || req.LeaseTTL < 0 {
 		return nil, fmt.Errorf("recall: token budget and lease ttl must not be negative")
 	}
@@ -284,20 +303,22 @@ func (c *Client) Resume(ctx context.Context, req ResumeRequest) (*Agent, error) 
 	if threshold == 0 {
 		threshold = defaultOutputThreshold
 	}
-	a := &Agent{c: c, id: req.AgentID, collection: collection, threshold: threshold}
+	a := &Agent{c: c, id: req.AgentID, collection: collection, threshold: threshold, req: req}
 
 	if !req.Unleased {
 		lb, ok := c.backend.(LeaseBackend)
 		if !ok {
 			return nil, ErrLeaseUnsupported
 		}
-		l, err := acquireAgentLease(ctx, lb, collection, req)
-		if err != nil {
-			return nil, err
-		}
-		a.lease = l
-		if !req.NoKeepAlive {
-			l.keepAlive()
+		if !req.Deferred {
+			l, err := acquireAgentLease(ctx, lb, collection, req)
+			if err != nil {
+				return nil, err
+			}
+			a.lease = l
+			if !req.NoKeepAlive {
+				l.keepAlive()
+			}
 		}
 	}
 
@@ -310,12 +331,76 @@ func (c *Client) Resume(ctx context.Context, req ResumeRequest) (*Agent, error) 
 	return a, nil
 }
 
+// AcquireLease takes the lease for an agent resumed with Deferred. It tries
+// once: while another process holds the lease it returns a *LeaseHeldError,
+// and the caller retries when it likes. On success it rereads the newest
+// turn and working state, because the previous holder may have written after
+// the deferred read, and later writes must continue from its records rather
+// than overwrite them. Calling it again once held does nothing.
+func (a *Agent) AcquireLease(ctx context.Context) error {
+	if ctx == nil {
+		return fmt.Errorf("recall: context must not be nil")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closed {
+		return ErrAgentClosed
+	}
+	if a.lease != nil || a.req.Unleased {
+		return nil
+	}
+	lb, ok := a.c.backend.(LeaseBackend)
+	if !ok {
+		return ErrLeaseUnsupported
+	}
+	l, err := acquireAgentLease(ctx, lb, a.collection, a.req)
+	if err != nil {
+		return err
+	}
+	heads, _, err := a.list(ctx, recWorkingHead, nil, 1)
+	if err == nil && len(heads) > 0 {
+		var ws WorkingState
+		if err = decodeBody(heads[0], &ws); err == nil && ws.Version > a.state.Version {
+			a.state = ws
+		}
+	}
+	var latest int64
+	if err == nil {
+		latest, err = a.latestTurn(ctx, a.turnSeq)
+	}
+	if err != nil {
+		// Holding a lease this process cannot safely write under helps
+		// nobody; hand it back so a retry starts clean.
+		releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = l.release(releaseCtx)
+		return err
+	}
+	a.turnSeq = max(a.turnSeq, latest)
+	a.lease = l
+	if !a.req.NoKeepAlive {
+		l.keepAlive()
+	}
+	return nil
+}
+
+// LeaseHeld reports whether this process holds the agent's lease: always
+// true for an unleased agent, false for a deferred one until AcquireLease.
+func (a *Agent) LeaseHeld() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.req.Unleased || a.lease != nil
+}
+
 // abandon releases the lease after a failed resume, best effort.
 func (a *Agent) abandon() {
-	if a.lease != nil {
+	a.mu.Lock()
+	l := a.lease
+	a.mu.Unlock()
+	if l != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = a.lease.release(ctx)
+		_ = l.release(ctx)
 	}
 }
 
@@ -328,11 +413,12 @@ func (a *Agent) Release(ctx context.Context) error {
 		return nil
 	}
 	a.closed = true
+	l := a.lease
 	a.mu.Unlock()
-	if a.lease == nil {
+	if l == nil {
 		return nil
 	}
-	return a.lease.release(ctx)
+	return l.release(ctx)
 }
 
 // UpdateWorkingState supersedes the working state. The previous version stays
@@ -411,12 +497,16 @@ func (a *Agent) RecordTurn(ctx context.Context, t Turn) (Turn, error) {
 	if !validRoles[role] {
 		return Turn{}, fmt.Errorf(`recall: turn role must be "system", "user", "assistant" or "tool", got %q`, t.Role)
 	}
+	messageID := strings.TrimSpace(t.MessageID)
+	if len(messageID) > 256 {
+		return Turn{}, fmt.Errorf("recall: turn message id must be at most 256 bytes")
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if err := a.writable(ctx); err != nil {
 		return Turn{}, err
 	}
-	turn := Turn{Seq: a.turnSeq + 1, Role: role, Name: strings.TrimSpace(t.Name), Content: t.Content, At: time.Now().UTC()}
+	turn := Turn{Seq: a.turnSeq + 1, Role: role, Name: strings.TrimSpace(t.Name), Content: t.Content, MessageID: messageID, At: time.Now().UTC()}
 	if a.threshold > 0 && estimateTokens(t.Content) > a.threshold {
 		out, err := a.storeOutputLocked(ctx, Output{Tool: turn.Name, Content: t.Content})
 		if err != nil {
@@ -679,6 +769,9 @@ func (a *Agent) writable(ctx context.Context) error {
 	}
 	if a.lease != nil {
 		return a.lease.guard(ctx)
+	}
+	if a.req.Deferred {
+		return ErrLeaseNotHeld
 	}
 	return ctx.Err()
 }

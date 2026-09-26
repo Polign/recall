@@ -119,6 +119,8 @@ class Turn:
     content: str
     name: str = ""
     output_ref: str = ""
+    # The harness's id for the message, when record_turn was given one.
+    message_id: str = ""
     at: str = ""
 
     @classmethod
@@ -178,6 +180,8 @@ class ResumeContext:
     fresh: bool
     briefing: str
     epoch: int = 0
+    # False after resume(defer_lease=True) until the agent's acquire() succeeds.
+    lease_held: bool = True
     working_state: WorkingState | None = None
     pointers: tuple[Pointer, ...] = ()
     outputs: tuple[OutputRef, ...] = ()
@@ -207,7 +211,8 @@ def _lease_error(exc: RecallError) -> RecallError:
     """Give lease failures their own code, so a caller can tell "someone else
     is running this agent" from a broken call."""
     text = str(exc)
-    for marker, code in (("lease is held", "lease_held"), ("lease was lost", "lease_lost")):
+    for marker, code in (("lease is held", "lease_held"), ("lease was lost", "lease_lost"),
+                         ("lease not acquired", "lease_not_held")):
         if marker in text:
             return RecallError(text, code=code, partial=exc.partial)
     return exc
@@ -462,13 +467,18 @@ class Client:
 
     def resume(self, agent_id: str, *, token_budget: int | None = None,
                lease_ttl: float | None = None, holder: str | None = None,
-               output_threshold: int | None = None) -> ResumedAgent:
+               output_threshold: int | None = None, defer_lease: bool = False) -> ResumedAgent:
         """Take the agent's lease and return it with the context to start from.
 
         This is also how an agent starts the first time; `context.fresh` is
         then true. It raises RecallError with code "lease_held" while another
         process holds the agent. `lease_ttl` is in seconds; the server renews
         the lease in the background until release.
+
+        With `defer_lease=True` it returns the context at once without taking
+        the lease, even while a crashed process's lease is still live. Writes
+        then raise RecallError with code "lease_not_held" until the agent's
+        `acquire()` returns True.
         """
         if not self._agent:
             raise ValueError("resume needs a client opened with agent=True")
@@ -483,6 +493,8 @@ class Client:
             args["holder"] = holder
         if output_threshold is not None:
             args["output_threshold"] = output_threshold
+        if defer_lease:
+            args["defer_lease"] = True
         try:
             data = self._tool("agent_resume", args)
         except RecallError as exc:
@@ -538,6 +550,27 @@ class ResumedAgent:
         self.client = client
         self.agent_id = agent_id
         self.context = context
+        self._lease_held = context.lease_held
+
+    @property
+    def lease_held(self) -> bool:
+        """False after a deferred resume until `acquire` succeeds."""
+        return self._lease_held
+
+    def acquire(self) -> bool:
+        """Take the lease after resume(defer_lease=True). Tries once: returns
+        False while another process still holds it, so call it again later.
+        Returns True once held, and at once if it already was."""
+        if self._lease_held:
+            return True
+        try:
+            self._call("agent_acquire")
+        except RecallError as exc:
+            if exc.code == "lease_held":
+                return False
+            raise
+        self._lease_held = True
+        return True
 
     def _call(self, tool: str, /, **args: Any) -> Any:
         try:
@@ -559,9 +592,14 @@ class ResumedAgent:
         """Record a durable point. A crash costs at most the work since the last one."""
         return WorkingState.decode(self._call("agent_milestone", name=name, progress=progress))
 
-    def record_turn(self, role: str, content: str, name: str | None = None) -> Turn:
-        """Append one message, verbatim. role is system, user, assistant or tool."""
-        return Turn.decode(self._call("record_turn", role=role, content=content, name=name))
+    def record_turn(self, role: str, content: str, name: str | None = None,
+                    message_id: str | None = None) -> Turn:
+        """Append one message, verbatim. role is system, user, assistant or tool.
+        `message_id` is your harness's id for the message, kept with the turn,
+        so that after a resume you can tell messages already recorded from
+        new ones."""
+        return Turn.decode(self._call("record_turn", role=role, content=content, name=name,
+                                      message_id=message_id))
 
     def recent_turns(self, limit: int | None = None) -> list[Turn]:
         """The newest turns, oldest first (20 by default)."""

@@ -17,8 +17,11 @@ import (
 type ResumeContext struct {
 	AgentID string `json:"agent_id"`
 	// Fresh means the agent had no records: this is its first start.
-	Fresh        bool          `json:"fresh"`
-	Epoch        uint64        `json:"epoch,omitempty"`
+	Fresh bool   `json:"fresh"`
+	Epoch uint64 `json:"epoch,omitempty"`
+	// LeaseHeld is false after a deferred resume: the context is ready, but
+	// writes wait for AcquireLease.
+	LeaseHeld    bool          `json:"lease_held"`
 	WorkingState *WorkingState `json:"working_state,omitempty"`
 	Pointers     []Pointer     `json:"pointers,omitempty"`
 	Outputs      []OutputRef   `json:"outputs,omitempty"`
@@ -45,7 +48,7 @@ func (a *Agent) load(ctx context.Context, budget int) (ResumeContext, error) {
 	if budget == 0 {
 		budget = defaultTokenBudget
 	}
-	rc := ResumeContext{AgentID: a.id, Epoch: a.Epoch(), TokenBudget: budget}
+	rc := ResumeContext{AgentID: a.id, Epoch: a.Epoch(), LeaseHeld: a.LeaseHeld(), TokenBudget: budget}
 
 	heads, _, err := a.list(ctx, recWorkingHead, nil, 1)
 	if err != nil {

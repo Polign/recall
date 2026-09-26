@@ -370,4 +370,5 @@ var (
 	ErrLeaseLost        = engine.ErrLeaseLost
 	ErrLeaseUnsupported = engine.ErrLeaseUnsupported
 	ErrAgentClosed      = engine.ErrAgentClosed
+	ErrLeaseNotHeld     = engine.ErrLeaseNotHeld
 )

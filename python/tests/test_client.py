@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 import unittest.mock
 
@@ -133,7 +134,7 @@ class AgentIntegrationTests(unittest.TestCase):
             self.assertEqual(state.plan, ("find call sites", "migrate"))
             self.assertEqual(state.version, 2)
             self.assertEqual(agent.milestone("call sites found").last_milestone, "call sites found")
-            agent.record_turn("user", "please continue")
+            self.assertEqual(agent.record_turn("user", "please continue", message_id="m-1").message_id, "m-1")
             turn = agent.record_turn("tool", "billing.charge(\n" * 2000, name="grep")
             self.assertTrue(turn.output_ref)
             self.assertEqual(agent.fetch_output(turn.output_ref).content, "billing.charge(\n" * 2000)
@@ -165,6 +166,31 @@ class AgentIntegrationTests(unittest.TestCase):
                 self.assertIn("port billing to v2", context.briefing)
                 self.assertIn("please continue", context.briefing)
                 self.assertEqual(agent.record_turn("assistant", "resumed").seq, 3)
+
+    def test_deferred_resume_reads_at_once_and_writes_after_the_lease(self):
+        agent_id = "py-agent-" + os.urandom(4).hex()
+        crashed = self.connect()
+        crashed.resume(agent_id, lease_ttl=5).update_working_state(goal="rebook the flight")
+        # Kill the server process outright: no release, the lease stays live.
+        crashed._process.kill()
+        crashed.close()
+        with self.connect() as client:
+            started = time.monotonic()
+            agent = client.resume(agent_id, defer_lease=True)
+            self.assertLess(time.monotonic() - started, 3)
+            self.assertFalse(agent.lease_held)
+            self.assertIn("rebook the flight", agent.context.briefing)
+            with self.assertRaises(RecallError) as caught:
+                agent.record_turn("assistant", "sorry, we got cut off")
+            self.assertEqual(caught.exception.code, "lease_not_held")
+            self.assertFalse(agent.acquire())
+            deadline = time.monotonic() + 15
+            while not agent.acquire():
+                self.assertLess(time.monotonic(), deadline, "lease never became free")
+                time.sleep(0.5)
+            self.assertTrue(agent.lease_held)
+            self.assertEqual(agent.record_turn("assistant", "sorry, we got cut off").seq, 1)
+            agent.release()
 
     def test_closing_the_client_hands_the_lease_over(self):
         agent_id = "py-agent-" + os.urandom(4).hex()

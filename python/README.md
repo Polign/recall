@@ -87,6 +87,24 @@ time. While another process holds it, `resume` raises `RecallError` with code
 `"lease_held"`. The lease is renewed in the background and handed over when
 you call `release()`, leave the `with` block, or close the client.
 
+If the process before crashed without releasing, `resume` has to wait for its
+lease to expire. When you cannot wait, as on a live call, pass
+`defer_lease=True`: `resume` returns the context at once without the lease,
+because reading cannot conflict with anyone. Writes then raise `RecallError`
+with code `"lease_not_held"`, so keep them in a buffer and call
+`agent.acquire()` until it returns True:
+
+```python
+agent = client.resume("call-42", defer_lease=True, lease_ttl=6)
+greet_with(agent.context.briefing)  # no waiting
+while not agent.acquire():          # False while the crashed process's lease is live
+    time.sleep(1)
+agent.record_turn("assistant", "Sorry, we got cut off.")
+```
+
+Once it holds the lease, anything the crashed process wrote after the
+resume is picked up, and new turns continue after it.
+
 The other methods write what the next resume reads: `update_working_state`
 (fields you leave out are kept), `milestone`, `record_turn` (a turn longer
 than the output threshold is stored whole and the turn keeps a reference),

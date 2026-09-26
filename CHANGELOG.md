@@ -17,6 +17,13 @@
   `ErrLeaseUnsupported`, keeps one process per agent. The Polign adapter
   implements it over the server's lease API.
 - `polign.StatusError.NotFound` reports a 404.
+- `Turn.MessageID` keeps a harness's own id for a message, so a harness that
+  restores its message history after a resume can tell recorded messages
+  from new ones.
+- `ResumeRequest.Deferred` returns the context without taking the lease, so
+  a process replacing a crashed one can start at once. `Agent.AcquireLease`
+  takes the lease later and picks up anything written in between; writes
+  before it fail with `ErrLeaseNotHeld`.
 
 ## [0.5.0] - 2026-09-25
 
@@ -53,6 +60,13 @@
 - A resume refused because another process holds the agent raises
   `RecallError` with code `"lease_held"`; a write after another process took
   the agent over raises code `"lease_lost"`.
+- `resume(defer_lease=True)` returns the context without waiting for a
+  crashed process's lease. `ResumedAgent.acquire()` takes it later (False
+  while it is still held), and writes before that raise code
+  `"lease_not_held"`. `ResumeContext.lease_held` and
+  `ResumedAgent.lease_held` say which state the agent is in.
+- `record_turn(message_id=...)` keeps the harness's id for a message with
+  the turn, and `Turn.message_id` reads it back.
 - New types: `ResumeContext`, `ResumedAgent`, `WorkingState`, `Turn`,
   `Output`, `OutputRef`, `Pointer`. `Client.agent_enabled` says whether a
   client can resume.

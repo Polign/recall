@@ -262,6 +262,18 @@ granted. Once another process has taken over, writes fail with
 process waits out the TTL. Set `Unleased` only on a backend without leases,
 when something else already guarantees one process per agent.
 
+**Resuming without waiting.** When a process dies without releasing, the
+next one normally waits out the TTL before `Resume` succeeds. Where that
+silence costs something, as on a phone call, set `Deferred`: `Resume` reads
+the records and returns the context at once without taking the lease, since
+reading cannot conflict with anything. Writes fail with `ErrLeaseNotHeld`
+until `AcquireLease` succeeds, so buffer them. `AcquireLease` tries once and
+returns a `*LeaseHeldError` while the old lease is live; retry it until it
+succeeds. When it does, it rereads the newest turn and working state, so
+anything the old process wrote after the deferred read is continued, not
+overwritten. `ResumeContext.LeaseHeld` and `Agent.LeaseHeld` report which
+state the agent is in.
+
 ## Input and stored-event validation
 
 Queries return at most `MaxRecall` (1,000) beliefs and exports read at most

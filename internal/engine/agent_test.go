@@ -159,7 +159,7 @@ func TestResumeRebuildsWhatTheLastProcessWrote(t *testing.T) {
 	if _, err := a.Milestone(ctx, "call sites found", "42 call sites listed"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.RecordTurn(ctx, Turn{Role: "user", Content: "keep going"}); err != nil {
+	if _, err := a.RecordTurn(ctx, Turn{Role: "user", Content: "keep going", MessageID: "msg-151"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.Release(ctx); err != nil {
@@ -178,7 +178,7 @@ func TestResumeRebuildsWhatTheLastProcessWrote(t *testing.T) {
 	if rc.Fresh || rc.WorkingState == nil || rc.WorkingState.Version != 2 || rc.WorkingState.LastMilestone != "call sites found" {
 		t.Fatalf("working state = %+v", rc.WorkingState)
 	}
-	if rc.TurnSeq != 151 || len(rc.RecentTurns) == 0 || rc.RecentTurns[len(rc.RecentTurns)-1].Content != "keep going" {
+	if rc.TurnSeq != 151 || len(rc.RecentTurns) == 0 || rc.RecentTurns[len(rc.RecentTurns)-1].MessageID != "msg-151" {
 		t.Fatalf("turn seq %d, last turns %+v", rc.TurnSeq, rc.RecentTurns)
 	}
 	if len(rc.Pointers) != 1 || rc.Pointers[0].Fields["sha"] != "abc123" {
@@ -334,5 +334,59 @@ func TestPointerValidationAndRemoval(t *testing.T) {
 	}
 	if ps, err := a.Pointers(ctx); err != nil || len(ps) != 0 {
 		t.Fatalf("after removal = %+v, %v", ps, err)
+	}
+}
+
+func TestDeferredResumeReadsNowAndWritesAfterTheLease(t *testing.T) {
+	ctx := t.Context()
+	b := newLeasingBackend()
+	c := newAgentClient(t, b)
+	old, err := c.Resume(ctx, ResumeRequest{AgentID: "call-1", NoKeepAlive: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.UpdateWorkingState(ctx, WorkingState{Goal: "rebook the flight"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.RecordTurn(ctx, Turn{Role: "user", Content: "the 9am one please"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The old worker has not released: a normal resume would have to wait.
+	next, err := c.Resume(ctx, ResumeRequest{AgentID: "call-1", Deferred: true, NoKeepAlive: true})
+	if err != nil {
+		t.Fatalf("deferred resume while held: %v", err)
+	}
+	defer next.Release(ctx)
+	rc := next.Resumed()
+	if rc.LeaseHeld || rc.WorkingState == nil || rc.WorkingState.Goal != "rebook the flight" || rc.TurnSeq != 1 {
+		t.Fatalf("deferred context = %+v", rc)
+	}
+	if _, err := next.RecordTurn(ctx, Turn{Role: "assistant", Content: "sorry, we got cut off"}); !errors.Is(err, ErrLeaseNotHeld) {
+		t.Fatalf("write before acquire err = %v, want ErrLeaseNotHeld", err)
+	}
+	if err := next.AcquireLease(ctx); !errors.Is(err, ErrLeaseHeld) {
+		t.Fatalf("acquire while held err = %v, want ErrLeaseHeld", err)
+	}
+
+	// The old worker got one more turn out before it died.
+	if _, err := old.RecordTurn(ctx, Turn{Role: "assistant", Content: "booking the 9am"}); err != nil {
+		t.Fatal(err)
+	}
+	b.expire("memory_agents", "call-1")
+
+	if err := next.AcquireLease(ctx); err != nil {
+		t.Fatalf("acquire after expiry: %v", err)
+	}
+	if !next.LeaseHeld() || next.Epoch() < 2 {
+		t.Fatalf("held %v epoch %d", next.LeaseHeld(), next.Epoch())
+	}
+	turn, err := next.RecordTurn(ctx, Turn{Role: "assistant", Content: "sorry, we got cut off"})
+	if err != nil || turn.Seq != 3 {
+		t.Fatalf("first write after acquire = %+v, %v; want seq 3, after the old worker's last turn", turn, err)
+	}
+	turns, err := next.RecentTurns(ctx, 10)
+	if err != nil || len(turns) != 3 || turns[1].Content != "booking the 9am" {
+		t.Fatalf("turns = %+v, %v", turns, err)
 	}
 }
