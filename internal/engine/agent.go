@@ -118,8 +118,12 @@ type Turn struct {
 	// MessageID is the harness's own id for the message, when it has one.
 	// A harness that restores its message history after a resume uses it to
 	// tell messages already recorded from new ones.
-	MessageID string    `json:"message_id,omitempty"`
-	At        time.Time `json:"at"`
+	MessageID string `json:"message_id,omitempty"`
+	// Brief is a shorter form of Content for the resume briefing, when the
+	// harness has one: a tool call with its long arguments elided, say. The
+	// record keeps Content whole; only the briefing shows Brief instead.
+	Brief string    `json:"brief,omitempty"`
+	At    time.Time `json:"at"`
 }
 
 // Output is a large tool result, kept whole and retrieved by reference.
@@ -205,6 +209,8 @@ const (
 	// turnPage groups turns so that the newest can be found without listing
 	// them all: turn s lives on page (s-1)/turnPage.
 	turnPage = 64
+	// maxBriefBytes bounds a turn's short form for the briefing.
+	maxBriefBytes = 4096
 	// maxOutputBytes bounds one stored output.
 	maxOutputBytes = 1 << 20
 	// maxPointers bounds how many pointers one agent can hold.
@@ -501,12 +507,15 @@ func (a *Agent) RecordTurn(ctx context.Context, t Turn) (Turn, error) {
 	if len(messageID) > 256 {
 		return Turn{}, fmt.Errorf("recall: turn message id must be at most 256 bytes")
 	}
+	if len(t.Brief) > maxBriefBytes {
+		return Turn{}, fmt.Errorf("recall: turn brief must be at most %d bytes", maxBriefBytes)
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if err := a.writable(ctx); err != nil {
 		return Turn{}, err
 	}
-	turn := Turn{Seq: a.turnSeq + 1, Role: role, Name: strings.TrimSpace(t.Name), Content: t.Content, MessageID: messageID, At: time.Now().UTC()}
+	turn := Turn{Seq: a.turnSeq + 1, Role: role, Name: strings.TrimSpace(t.Name), Content: t.Content, MessageID: messageID, Brief: t.Brief, At: time.Now().UTC()}
 	if a.threshold > 0 && estimateTokens(t.Content) > a.threshold {
 		out, err := a.storeOutputLocked(ctx, Output{Tool: turn.Name, Content: t.Content})
 		if err != nil {

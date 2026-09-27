@@ -390,3 +390,34 @@ func TestDeferredResumeReadsNowAndWritesAfterTheLease(t *testing.T) {
 		t.Fatalf("turns = %+v, %v", turns, err)
 	}
 }
+
+func TestBriefingShowsATurnsBriefAndTheRecordKeepsItWhole(t *testing.T) {
+	ctx := t.Context()
+	c := newAgentClient(t, newLeasingBackend())
+	a, err := c.Resume(ctx, ResumeRequest{AgentID: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	full := `write_file(path="a.py", content="` + strings.Repeat("x = 1\n", 100) + `")`
+	if _, err := a.RecordTurn(ctx, Turn{Role: "assistant", Content: full, Brief: `write_file(path="a.py", content=<600 chars>)`}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.RecordTurn(ctx, Turn{Role: "assistant", Content: "x", Brief: strings.Repeat("b", maxBriefBytes+1)}); err == nil {
+		t.Fatal("an oversized brief was accepted")
+	}
+	_ = a.Release(ctx)
+
+	next, err := c.Resume(ctx, ResumeRequest{AgentID: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = next.Release(ctx) }()
+	briefing := next.Resumed().Briefing
+	if !strings.Contains(briefing, "content=<600 chars>") || strings.Contains(briefing, "x = 1") {
+		t.Fatalf("briefing did not use the brief:\n%s", briefing)
+	}
+	turns, err := next.RecentTurns(ctx, 5)
+	if err != nil || len(turns) != 1 || turns[0].Content != full {
+		t.Fatalf("recorded turn lost its content: %+v, %v", turns, err)
+	}
+}

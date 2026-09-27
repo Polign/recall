@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-26
+
+### Added
+
+- `Turn.Brief`, a shorter form of a turn for the resume briefing. A harness
+  that records a tool call can keep the call whole in `Content` and give the
+  briefing a form with long arguments elided.
+
+### Changed
+
+- The resume briefing's header is one sentence and no longer tells the agent
+  to update its working state. Every model call after a resume carries the
+  header, and that standing instruction led agents resumed early in a run to
+  record a note after every action, doubling the cost of those runs. When to
+  take notes is left to the tool descriptions and the harness's own prompt.
+
 ## [0.6.0] - 2026-09-26
 
 ### Added
@@ -54,6 +70,11 @@ Leases need Polign 0.8.0 or later; an older server answers
 - The Go implementation now lives in `internal/engine`, with public aliases
   preserving the supported API and method sets. Reflection reports the
   internal package as the defining path of those types.
+
+## Python client 0.4.1 - 2026-09-26
+
+- `record_turn(brief=...)` keeps a shorter form of a turn for the resume
+  briefing, and `Turn.brief` reads it back.
 
 ## Python client 0.4.0 - 2026-09-26
 

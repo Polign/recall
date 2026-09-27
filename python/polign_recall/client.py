@@ -121,6 +121,8 @@ class Turn:
     output_ref: str = ""
     # The harness's id for the message, when record_turn was given one.
     message_id: str = ""
+    # The shorter form the resume briefing shows, when record_turn was given one.
+    brief: str = ""
     at: str = ""
 
     @classmethod
@@ -593,13 +595,15 @@ class ResumedAgent:
         return WorkingState.decode(self._call("agent_milestone", name=name, progress=progress))
 
     def record_turn(self, role: str, content: str, name: str | None = None,
-                    message_id: str | None = None) -> Turn:
+                    message_id: str | None = None, brief: str | None = None) -> Turn:
         """Append one message, verbatim. role is system, user, assistant or tool.
         `message_id` is your harness's id for the message, kept with the turn,
         so that after a resume you can tell messages already recorded from
-        new ones."""
+        new ones. `brief` is a shorter form for the resume briefing (a tool
+        call with its long arguments elided, say); the record keeps `content`
+        whole."""
         return Turn.decode(self._call("record_turn", role=role, content=content, name=name,
-                                      message_id=message_id))
+                                      message_id=message_id, brief=brief))
 
     def recent_turns(self, limit: int | None = None) -> list[Turn]:
         """The newest turns, oldest first (20 by default)."""

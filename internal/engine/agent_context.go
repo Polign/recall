@@ -182,9 +182,13 @@ func writeHeader(b *strings.Builder, rc *ResumeContext) {
 		fmt.Fprintf(b, "You are agent %s, starting for the first time. Nothing was recorded by an earlier run.\n", rc.AgentID)
 		return
 	}
-	fmt.Fprintf(b, "You are agent %s, resuming work. Your previous process stopped; this is the note it left you, "+
-		"pointers to its work, and its last turns. Treat it as a hint, not the truth: check that the world still "+
-		"matches it before your first action, then update your working state.\n", rc.AgentID)
+	// Every model call after a resume carries this header, so it is short,
+	// and it says nothing about taking notes: a standing instruction to update
+	// the working state, even "when your plan changes", led agents resumed
+	// early in a run to spend a model call on a note after every action. When
+	// to take notes belongs in the tool descriptions and the harness's prompt.
+	fmt.Fprintf(b, "You are agent %s, resuming after your previous process stopped. Continue from your notes and "+
+		"last turns below; check only what you have reason to doubt.\n", rc.AgentID)
 }
 
 func writeWorkingState(b *strings.Builder, ws WorkingState) {
@@ -259,7 +263,11 @@ func turnText(t Turn) string {
 	if t.Name != "" {
 		who += " " + t.Name
 	}
-	return fmt.Sprintf("[%s #%d] %s\n", who, t.Seq, t.Content)
+	body := t.Content
+	if t.Brief != "" {
+		body = t.Brief
+	}
+	return fmt.Sprintf("[%s #%d] %s\n", who, t.Seq, body)
 }
 
 func beliefText(m Belief) string {
