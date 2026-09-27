@@ -40,7 +40,7 @@ by default.
 The client owns a long-lived `polign mcp -memory-only -write` subprocess and
 shares the Go implementation's validation and fold. Use `write=False` for a
 read-only connection. It runs the `polign` binary pip installed; on a platform
-without a `polign_db` wheel it runs `polign` from `PATH` (CLI v0.7.0+), and
+without a `polign_db` wheel it runs `polign` from `PATH` (CLI v0.8.0+), and
 `command=[...]` overrides both.
 
 `remember(text=..., statements=[...])` accepts proposals from your agent's model;
@@ -110,5 +110,5 @@ The other methods write what the next resume reads: `update_working_state`
 than the output threshold is stored whole and the turn keeps a reference),
 `store_output` and `fetch_output` for large tool results, `set_pointer`,
 `remove_pointer` and `pointers`, and `recent_turns` and
-`working_state_history` to read back. Needs a `polign` CLI newer than 0.7.4,
+`working_state_history` to read back. Needs a `polign` CLI 0.8.0 or later,
 the first with `polign mcp -agent`.
