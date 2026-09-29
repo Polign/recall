@@ -15,7 +15,7 @@ dependencies = [
     # The `polign` CLI and `polign-server`, as platform wheels. The marker
     # covers exactly the platforms those wheels exist for, so an install
     # anywhere else still succeeds and falls back to `polign` on PATH.
-    "polign_db>=0.8.0; (sys_platform == 'linux' or sys_platform == 'darwin' or sys_platform == 'win32') and (platform_machine == 'x86_64' or platform_machine == 'AMD64' or platform_machine == 'arm64' or platform_machine == 'aarch64' or platform_machine == 'ARM64')",
+    "polign_db>=0.8.1; (sys_platform == 'linux' or sys_platform == 'darwin' or sys_platform == 'win32') and (platform_machine == 'x86_64' or platform_machine == 'AMD64' or platform_machine == 'arm64' or platform_machine == 'aarch64' or platform_machine == 'ARM64')",
 ]
 
 [project.urls]
