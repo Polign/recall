@@ -40,6 +40,11 @@ type Event struct {
 	// order. Fold orders by this instant and then ID; skewed writer clocks
 	// can place a later accepted write earlier in the log.
 	ObservedAt time.Time `json:"observed_at"`
+	// Evidence is the exact excerpt a statement was drawn from, when it came
+	// from text. EvidenceID is the event that holds that text whole, a note
+	// written by RememberText. Both are empty for a statement made directly.
+	Evidence   string `json:"evidence,omitempty"`
+	EvidenceID string `json:"evidence_id,omitempty"`
 }
 
 // Belief is a statement that holds at some instant: the result of folding a
@@ -57,6 +62,10 @@ type Belief struct {
 	// EventID identifies the event this belief came from, so a caller can
 	// fetch its full history or cite it.
 	EventID string `json:"event_id"`
+	// Evidence and EvidenceID are the surviving event's: the excerpt this
+	// belief was drawn from and the event holding the whole text.
+	Evidence   string `json:"evidence,omitempty"`
+	EvidenceID string `json:"evidence_id,omitempty"`
 }
 
 // Cardinality decides what a second value for the same subject and predicate
@@ -191,6 +200,8 @@ func beliefOf(e Event) Belief {
 		Kind:       e.Kind,
 		ObservedAt: e.ObservedAt,
 		EventID:    e.ID,
+		Evidence:   e.Evidence,
+		EvidenceID: e.EvidenceID,
 	}
 }
 

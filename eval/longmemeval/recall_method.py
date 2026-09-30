@@ -106,15 +106,30 @@ def exact_evidence(evidence: str, text: str) -> str | None:
     return m.group(0) if m else None
 
 
+def write(client: Any, text: str, statements: list, sid: str, date: str, log: list) -> None:
+    """remember(text, statements), 32 statements per call, logging every event
+    written: the episode note and each statement."""
+    for j in range(0, max(len(statements), 1), 32):
+        result = client.remember(text=text, statements=statements[j:j + 32], observed_at=instant(date))
+        written = list(result.results)
+        if result.episode is not None and all(r.stored.event_id != result.episode.stored.event_id for r in written):
+            written.insert(0, result.episode)
+        for rr in written:
+            log.append({"event_id": rr.stored.event_id, "session_id": sid, "date": date,
+                        "predicate": rr.stored.predicate,
+                        "probe": f"{rr.stored.subject} {rr.stored.predicate} {rr.stored.value}"})
+
+
 def ingest_typed(client: Any, entry: dict[str, Any], rounds, extractor: str, stats: dict,
                  link: bool = False) -> list[dict[str, Any]]:
     """Extracts typed statements from each session in date order and writes
     them with remember(text, statements). Statements whose evidence is not an
     exact excerpt are dropped here rather than failing the whole batch.
 
-    With link, every round is first kept whole as a note (the episode), and
-    each statement is written with the round its evidence quotes as its text,
-    so the log records which episode a fact came from."""
+    With link, every round goes through remember(text=round, statements=...)
+    on its own, so Recall keeps the round whole as the episode note and links
+    each statement to it (evidence, evidence_id). This is the product path; a
+    round with no statements is still kept as its episode."""
     import extract
 
     reg = extract.registry()
@@ -122,17 +137,8 @@ def ingest_typed(client: Any, entry: dict[str, Any], rounds, extractor: str, sta
     subjects: list[str] = []
     log = []
     for sid, date, turns in lme.sessions(entry):
-        episodes: list[tuple[str, str]] = []  # (round text, episode event id)
-        if link:
-            for r in rounds(turns):
-                text = render(r)
-                if not text.strip():
-                    continue
-                result = client.remember(text=text, statements=[], observed_at=instant(date))
-                for rr in result.results:
-                    episodes.append((text, rr.stored.event_id))
-                    log.append({"event_id": rr.stored.event_id, "session_id": sid, "date": date,
-                                "predicate": "note", "probe": str(rr.stored.value), "source": text})
+        round_texts = [t for t in (render(r) for r in rounds(turns)) if t.strip()]
+        by_round: dict[str, list] = {t: [] for t in round_texts}
         for i, text in enumerate(chunks_of(turns, rounds)):
             key = f"{sid}#{i}"
             statements = cache.get(key)
@@ -150,26 +156,18 @@ def ingest_typed(client: Any, entry: dict[str, Any], rounds, extractor: str, sta
             for st in valid:
                 if st["subject"] not in subjects:
                     subjects.append(st["subject"])
-            groups: list[tuple[str, str, list]] = []  # (text written with, episode id, statements)
             if link:
-                by_episode: dict[str, list] = {}
                 for st in valid:
-                    home = next((ep for ep in episodes if st["evidence"] in ep[0]), None)
+                    home = next((t for t in round_texts if st["evidence"] in t), None)
                     if home is None:  # the quote spans two rounds
                         stats["cross_round"] += 1
                         continue
-                    by_episode.setdefault(home[1], []).append(st)
-                groups = [(next(t for t, e in episodes if e == eid), eid, sts) for eid, sts in by_episode.items()]
-            else:
-                groups = [(text, "", valid)]
-            for body, episode, sts in groups:
-                for j in range(0, len(sts), 32):  # remember takes 32 statements per call
-                    result = client.remember(text=body, statements=sts[j:j + 32], observed_at=instant(date))
-                    for rr in result.results:
-                        log.append({"event_id": rr.stored.event_id, "session_id": sid, "date": date,
-                                    "predicate": rr.stored.predicate,
-                                    "probe": f"{rr.stored.subject} {rr.stored.predicate} {rr.stored.value}",
-                                    **({"source": body, "episode": episode} if link else {})})
+                    by_round[home].append(st)
+                continue
+            write(client, text, valid, sid, date, log)
+        if link:
+            for body in round_texts:
+                write(client, body, by_round[body], sid, date, log)
     stats["subjects"] = len(subjects)
     return log
 
@@ -244,7 +242,8 @@ def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
                 stats["index_wait_s"] = wait_for_text_index(store, log[-1]["event_id"], log[-1]["probe"])
 
             t1 = time.monotonic()
-            beliefs = client.recall(query=entry["question"], limit=k, as_of=instant(entry["question_date"]))
+            beliefs = client.recall(query=entry["question"], limit=k, as_of=instant(entry["question_date"]),
+                                    with_sources=method == "recall-linked")
             recall_ms = (time.monotonic() - t1) * 1000
 
             where = {r["event_id"]: r for r in log}
@@ -254,7 +253,7 @@ def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
                 src = where.get(b.event_id, {})
                 content = describe(b, client, reg)
                 if method == "recall-linked":
-                    source = src.get("source", "")
+                    source = b.source_text
                     if b.predicate == "note":
                         if content in shown:
                             continue

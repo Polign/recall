@@ -28,6 +28,10 @@ type ExtractionResult struct {
 	// text was kept as a note rather than refused; the predicates they name
 	// are the ones this registry is missing.
 	Unfiled []Proposal `json:"unfiled,omitempty"`
+	// Episode is the note holding the whole text, written first so that every
+	// statement can name it as its evidence. Restating text already kept
+	// returns the existing note.
+	Episode *RememberResult `json:"episode,omitempty"`
 }
 
 // DefaultSubject is who a note is about when the text yielded no proposal to
@@ -42,9 +46,11 @@ const noteConfidence = 0.5
 // Writes are sequential, not transactional. On a storage failure, the returned
 // result contains the successful prefix, so callers must not blindly retry.
 //
-// Nothing stated is dropped. A proposal whose predicate is not registered, or
-// text that yielded no proposals at all, is kept as a note holding the whole
-// text, once per subject. A malformed proposal for a registered predicate
+// The text itself is kept first, whole, as a note about DefaultSubject: the
+// episode. Every statement then records its quoted excerpt as Evidence and the
+// episode as EvidenceID, so what was said stays readable however it was
+// interpreted. A proposal whose predicate is not registered is also kept as a
+// note under its own subject. A malformed proposal for a registered predicate
 // still fails the batch, because the caller can correct it.
 func (c *Client) RememberText(ctx context.Context, text string, extractor Extractor) (ExtractionResult, error) {
 	return c.RememberTextAt(ctx, text, extractor, time.Time{})
@@ -84,6 +90,9 @@ func (c *Client) RememberTextAt(ctx context.Context, text string, extractor Extr
 		if strings.TrimSpace(p.Evidence) == "" || !strings.Contains(text, p.Evidence) {
 			return out, fmt.Errorf("recall: proposal %d: evidence must quote the input", i)
 		}
+		if len(strings.TrimSpace(p.Evidence)) > MaxEvidenceBytes {
+			return out, fmt.Errorf("recall: proposal %d: evidence is longer than %d bytes; quote the part that supports the fact", i, MaxEvidenceBytes)
+		}
 		spec, ok := c.registry[p.Predicate]
 		if !ok {
 			out.Unfiled = append(out.Unfiled, p)
@@ -97,10 +106,18 @@ func (c *Client) RememberTextAt(ctx context.Context, text string, extractor Extr
 		}
 		filed = append(filed, i)
 	}
+	out.Proposals = proposals
+
+	confidence := noteConfidence
+	episode, err := c.Remember(ctx, RememberRequest{Subject: DefaultSubject, Predicate: NotePredicate, Value: text, Source: "agent_inferred", Confidence: &confidence, ObservedAt: observedAt})
+	if err != nil {
+		return out, fmt.Errorf("recall: keeping the text failed before any statement was written: %w", err)
+	}
+	out.Episode = &episode
 	if len(proposals) == 0 {
 		noteSubjects = []string{DefaultSubject}
 	}
-	out.Proposals = proposals
+
 	for _, i := range filed {
 		p := proposals[i]
 		kind := "fact"
@@ -108,13 +125,21 @@ func (c *Client) RememberTextAt(ctx context.Context, text string, extractor Extr
 			kind = "preference"
 		}
 		confidence := 0.8
-		r, err := c.Remember(ctx, RememberRequest{Subject: p.Subject, Predicate: p.Predicate, Value: p.Value, Kind: kind, Source: "agent_inferred", Confidence: &confidence, ObservedAt: observedAt})
+		r, err := c.Remember(ctx, RememberRequest{Subject: p.Subject, Predicate: p.Predicate, Value: p.Value, Kind: kind, Source: "agent_inferred", Confidence: &confidence,
+			ObservedAt: observedAt, Evidence: p.Evidence, EvidenceID: episode.Stored.EventID})
 		if err != nil {
 			return out, fmt.Errorf("recall: proposal %d failed after %d completed writes: %w", i, len(out.Results), err)
 		}
 		out.Results = append(out.Results, r)
 	}
+	// Results keep their order: statements, then one note per subject. The
+	// note about DefaultSubject is the episode, already written, so callers
+	// reading Results for it still find it where they did.
 	for _, subject := range noteSubjects {
+		if subject == DefaultSubject {
+			out.Results = append(out.Results, episode)
+			continue
+		}
 		confidence := noteConfidence
 		r, err := c.Remember(ctx, RememberRequest{Subject: subject, Predicate: NotePredicate, Value: text, Source: "agent_inferred", Confidence: &confidence, ObservedAt: observedAt})
 		if err != nil {

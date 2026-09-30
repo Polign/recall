@@ -170,6 +170,19 @@ func DefaultRegistry() Registry {
 // LexicalEmbedder is a dependency-free signed feature-hashing fallback. It
 // retrieves overlapping words, not semantic synonyms. Use a dedicated collection
 // for this versioned 256-dimensional space; never mix it with model embeddings.
+// GetBackend is an optional Backend capability: reading records by id, which
+// Client.Events uses to follow a belief's EvidenceID to its text.
+type GetBackend = engine.GetBackend
+
+// ErrGetUnsupported reports a backend that cannot read records by id.
+var ErrGetUnsupported = engine.ErrGetUnsupported
+
+// MaxGetEvents bounds one Client.Events call.
+const MaxGetEvents = engine.MaxGetEvents
+
+// MaxEvidenceBytes bounds the excerpt a statement keeps as its evidence.
+const MaxEvidenceBytes = engine.MaxEvidenceBytes
+
 // TextSearchBackend is an optional Backend capability: a lexical (BM25)
 // search over the TextField metadata key of each event. When the backend has
 // it, semantic recall fuses it with the vector search.
@@ -297,6 +310,11 @@ type AuditBundle = engine.AuditBundle
 // remains the legacy, case-insensitive checksum for existing exports.
 func DigestV2(events []Event) (string, error) {
 	return engine.DigestV2(events)
+}
+
+// DigestV3 is DigestV2 that also covers each event's Evidence and EvidenceID.
+func DigestV3(events []Event) (string, error) {
+	return engine.DigestV3(events)
 }
 
 // VerifyDigest verifies either a legacy sha256: digest or a sha256:v2: digest.

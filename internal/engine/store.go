@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // StoredVector is one record as the database returns it.
@@ -130,7 +131,16 @@ func (s *Store) Remember(kind, subject, predicate string, value any, confidence 
 	if confidence == 0 {
 		confidence = 1
 	}
-	return s.remember(kind, subject, predicate, value, confidence, source, time.Time{})
+	return s.remember(kind, subject, predicate, value, confidence, source, provenance{})
+}
+
+// provenance is where a statement came from, beyond its source kind: when it
+// was made, and the text it was drawn from. The zero value means now, stated
+// directly.
+type provenance struct {
+	observedAt time.Time
+	evidence   string
+	evidenceID string
 }
 
 // MaxObservationSkew is how far past the writer's clock an observation time
@@ -138,16 +148,25 @@ func (s *Store) Remember(kind, subject, predicate string, value any, confidence 
 // query about the present until its time came, so a later one is refused.
 const MaxObservationSkew = time.Minute
 
-func (s *Store) remember(kind, subject, predicate string, value any, confidence float64, source string, observedAt time.Time) (RememberResult, error) {
+// MaxEvidenceBytes bounds the excerpt a statement keeps as its evidence. The
+// whole text lives in the evidence event; the excerpt is the quoted part.
+const MaxEvidenceBytes = 2048
+
+func (s *Store) remember(kind, subject, predicate string, value any, confidence float64, source string, from provenance) (RememberResult, error) {
 	var zero RememberResult
 
 	now := s.now()
-	if !observedAt.IsZero() {
-		if observedAt.After(now.Add(MaxObservationSkew)) {
+	if !from.observedAt.IsZero() {
+		if from.observedAt.After(now.Add(MaxObservationSkew)) {
 			return zero, fmt.Errorf("observed_at %s is in the future; a statement can only be recorded as made now or earlier",
-				observedAt.UTC().Format(time.RFC3339))
+				from.observedAt.UTC().Format(time.RFC3339))
 		}
-		now = observedAt
+		now = from.observedAt
+	}
+	from.evidence = strings.TrimSpace(from.evidence)
+	from.evidenceID = strings.TrimSpace(from.evidenceID)
+	if !utf8.ValidString(from.evidence) || len(from.evidence) > MaxEvidenceBytes {
+		return zero, fmt.Errorf("evidence must be UTF-8 of at most %d bytes", MaxEvidenceBytes)
 	}
 
 	if !validKinds[kind] {
@@ -214,6 +233,8 @@ func (s *Store) remember(kind, subject, predicate string, value any, confidence 
 		Confidence: confidence,
 		Source:     source,
 		ObservedAt: now,
+		Evidence:   from.evidence,
+		EvidenceID: from.evidenceID,
 	}
 	if err := s.append(ev); err != nil {
 		return zero, err

@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -27,7 +28,14 @@ func TestAuditGoldenCompatibility(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].Value != "Neovim" {
 		t.Fatalf("golden replay = %+v, %v", got, err)
 	}
-	if b.Digest != auditFixture(t).Digest {
+	// The golden bundle predates evidence. Rebuilt at its own event version,
+	// the fixture must checksum exactly as it did.
+	v1 := auditFixture(t)
+	v1.EventVersion = eventVersionV1
+	if v1.Digest, err = v1.checksum(); err != nil {
+		t.Fatal(err)
+	}
+	if b.EventVersion != eventVersionV1 || b.Digest != v1.Digest {
 		t.Fatal("bundle canonical encoding changed")
 	}
 	raw, err = os.ReadFile("../../testdata/audit-digests.json")
@@ -201,7 +209,7 @@ func TestAuditDetectsAllInputChanges(t *testing.T) {
 func TestAuditRejectsInvalidAndUnknownInputs(t *testing.T) {
 	for name, mutate := range map[string]func(*AuditBundle){
 		"bundle version":          func(b *AuditBundle) { b.Version = "recall-audit-v2" },
-		"event version":           func(b *AuditBundle) { b.EventVersion = "recall-event-v2" },
+		"event version":           func(b *AuditBundle) { b.EventVersion = "recall-event-v3" },
 		"fold version":            func(b *AuditBundle) { b.FoldVersion = "recall-fold-v3" },
 		"zero instant":            func(b *AuditBundle) { b.AsOf = time.Time{} },
 		"bad instant":             func(b *AuditBundle) { b.AsOf = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC) },
@@ -358,5 +366,45 @@ func TestDigestV2PreservesExactValuesAndLegacyVerification(t *testing.T) {
 	b, _ := DigestV2([]Event{})
 	if a != b {
 		t.Fatal("nil/empty digests differ")
+	}
+}
+
+// Evidence is part of what a v2 bundle vouches for: altering the excerpt or
+// the event it points to breaks the checksum, and a v1 bundle, which has no
+// place for evidence, refuses to carry any.
+func TestAuditCoversEvidence(t *testing.T) {
+	b := auditFixture(t)
+	b.Events[1].Evidence = "I use Neovim now"
+	b.Events[1].EvidenceID = "episode-1"
+	var err error
+	if b.Digest, err = b.checksum(); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := b.Replay(); err != nil || len(got) != 1 || got[0].Evidence != "I use Neovim now" || got[0].EvidenceID != "episode-1" {
+		t.Fatalf("replay with evidence = %+v, %v", got, err)
+	}
+	for name, mutate := range map[string]func(*AuditBundle){
+		"excerpt":  func(b *AuditBundle) { b.Events[1].Evidence = "I use Vim now" },
+		"pointer":  func(b *AuditBundle) { b.Events[1].EvidenceID = "episode-2" },
+		"dropped":  func(b *AuditBundle) { b.Events[1].Evidence, b.Events[1].EvidenceID = "", "" },
+		"v1 label": func(b *AuditBundle) { b.EventVersion = eventVersionV1 },
+	} {
+		tampered := b
+		tampered.Events = append([]Event(nil), b.Events...)
+		mutate(&tampered)
+		if _, err := tampered.Replay(); !errors.Is(err, ErrDigestMismatch) && !errors.Is(err, ErrInvalidAudit) {
+			t.Errorf("%s: tampered bundle replayed: %v", name, err)
+		}
+	}
+
+	d2, _ := DigestV2(b.Events)
+	d3, _ := DigestV3(b.Events)
+	if !strings.HasPrefix(d3, "sha256:v3:") || VerifyDigest(b.Events, d3) != nil || VerifyDigest(b.Events, d2) != nil {
+		t.Fatalf("digests do not verify: %s %s", d2, d3)
+	}
+	moved := append([]Event(nil), b.Events...)
+	moved[1].Evidence = "changed"
+	if VerifyDigest(moved, d3) == nil {
+		t.Fatal("DigestV3 ignored an evidence change")
 	}
 }

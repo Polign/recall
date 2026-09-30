@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // timeLayout is RFC3339 with a fixed nine-digit fraction. The stdlib's
@@ -90,9 +91,20 @@ func (e Event) Metadata() map[string]any {
 	if e.Value != nil {
 		md["value"] = e.Value
 	}
+	if e.Evidence != "" {
+		md["evidence"] = e.Evidence
+	}
+	if e.EvidenceID != "" {
+		md["evidence_id"] = e.EvidenceID
+	}
 	// The searchable text, for a database that indexes one metadata field
-	// lexically. Decoding ignores it: the event's fields are the record.
+	// lexically. The evidence is part of it, so a statement is also found by
+	// the words it was drawn from. Decoding ignores it: the event's fields are
+	// the record.
 	md[TextField] = e.Text()
+	if e.Evidence != "" {
+		md[TextField] = e.Text() + "\n" + e.Evidence
+	}
 	return md
 }
 
@@ -113,6 +125,8 @@ func EventFromMetadata(id string, m map[string]any) Event {
 		Source:     str("source"),
 		Retraction: retraction,
 		ObservedAt: parseTime(str("observed_at")),
+		Evidence:   str("evidence"),
+		EvidenceID: str("evidence_id"),
 	}
 }
 
@@ -171,6 +185,16 @@ func DecodeEvent(id string, m map[string]any) (Event, error) {
 	case bool:
 	default:
 		return invalid("value")
+	}
+	for _, k := range []string{"evidence", "evidence_id"} {
+		if raw, present := m[k]; present {
+			if v, ok := raw.(string); !ok || strings.TrimSpace(v) == "" || !utf8.ValidString(v) {
+				return invalid(k)
+			}
+		}
+	}
+	if e.Evidence != "" && e.Retraction {
+		return invalid("evidence")
 	}
 	return e, nil
 }

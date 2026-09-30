@@ -29,16 +29,23 @@ Recall checks the typed value, subject, and verbatim evidence before writing.
 An invalid proposal rejects the whole batch before any write. Storage
 failures can leave a completed prefix, reported in the error.
 
+Recall first keeps the whole text as a [note](#notes) about `user`: the
+episode, returned as `episode`. Each statement is then written with its quoted
+excerpt as `evidence` and the episode's event id as `evidence_id`, so what was
+said stays readable however it was interpreted. The excerpt is part of the
+statement's searchable text, so a fact is also found by the words it came from.
+`recall` with `with_sources: true` returns `evidence`, `evidence_id`, and the
+whole text as `source_text` for each belief remembered from text; without it
+those fields are left out.
+
 Nothing stated is dropped. If a proposal names a predicate that is not in the
-registry, or the text yields no proposals at all, Recall keeps the whole text
-as a [note](#notes) instead of refusing it. It writes one note per subject; with
-no proposals, the subject is `user`. The proposals that became notes come back
-in `unfiled`, so you can see which predicates your registry is missing. A wrong
+registry, Recall also keeps the whole text as a note under that proposal's
+subject instead of refusing it. The proposals that became notes come back in
+`unfiled`, so you can see which predicates your registry is missing. A wrong
 value for a registered predicate, such as the string `"8000"` for a number,
 still rejects the batch, because the agent can correct it. Extracted facts
 are marked `agent_inferred` with a default confidence of 0.8; this is a convention,
-not a calibrated model probability. The evidence quote is returned with the
-proposal; it is not stored in the durable event metadata. Validation cannot prove
+not a calibrated model probability. Validation cannot prove
 that an extracted statement is true. Typed `remember` also remains available.
 
 The default search uses local lexical word overlap, not semantic synonyms.

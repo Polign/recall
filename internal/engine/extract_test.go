@@ -36,7 +36,7 @@ func TestExtractionPartialWriteAndFalseZero(t *testing.T) {
 	failed := errors.New("write failed")
 	b := backendFuncs{list: underlying.List, search: underlying.Search, put: func(ctx context.Context, c, id string, v []float32, m map[string]any) error {
 		calls++
-		if calls == 2 {
+		if calls == 3 { // the episode, then the first statement, then this one
 			return failed
 		}
 		return underlying.Put(ctx, c, id, v, m)
@@ -50,6 +50,9 @@ func TestExtractionPartialWriteAndFalseZero(t *testing.T) {
 	out, err := c.RememberText(t.Context(), "disabled, port 0", p)
 	if !errors.Is(err, failed) || len(out.Results) != 1 || out.Results[0].Stored.Value != false {
 		t.Fatalf("partial: %+v %v", out, err)
+	}
+	if out.Episode == nil || out.Episode.Stored.Value != "disabled, port 0" {
+		t.Fatalf("the text was not kept before the statements: %+v", out.Episode)
 	}
 }
 

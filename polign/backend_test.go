@@ -294,3 +294,33 @@ func TestSearchTextWireContractAndMissingIndex(t *testing.T) {
 		}
 	}
 }
+
+func TestGetWireContract(t *testing.T) {
+	missing := false
+	b := newBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/collections/memories/vectors:get" || body["typed_metadata"] != true {
+			t.Errorf("get = %s %s %+v", r.Method, r.URL, body)
+		}
+		if missing {
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "not found: collection"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"vectors": []any{map[string]any{"id": "e1", "values": []float32{1}, "metadata": map[string]any{"value": "the whole text"}}}})
+	})
+	rows, err := b.Get(t.Context(), "memories", []string{"e1", "e2"})
+	if err != nil || len(rows) != 1 || rows[0].ID != "e1" || rows[0].Metadata["value"] != "the whole text" {
+		t.Fatalf("get = %+v, %v", rows, err)
+	}
+	missing = true
+	if rows, err := b.Get(t.Context(), "memories", []string{"e1"}); err != nil || len(rows) != 0 {
+		t.Fatalf("get on an unwritten collection = %+v, %v; want none", rows, err)
+	}
+	if _, err := b.Get(t.Context(), "memories", nil); err == nil {
+		t.Fatal("empty get accepted")
+	}
+}

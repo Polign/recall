@@ -19,7 +19,11 @@ const (
 	// AuditVersion identifies the bundle envelope and its canonical checksum.
 	AuditVersion = "recall-audit-v1"
 	// EventVersion identifies the typed Event fields recorded in a bundle.
-	EventVersion = "recall-event-v1"
+	// v2 adds Evidence and EvidenceID, and its bundles are checksummed with
+	// DigestV3, which covers them. v1 bundles still replay and verify.
+	EventVersion = "recall-event-v2"
+	// eventVersionV1 predates evidence; its checksum uses DigestV2.
+	eventVersionV1 = "recall-event-v1"
 	// FoldVersion identifies observation-time ordering and the current single
 	// and multi-value fold rules. Incompatible changes need a new replay path.
 	//
@@ -164,6 +168,9 @@ func (b AuditBundle) validateHeader() error {
 		{"event", b.EventVersion, EventVersion},
 		{"fold", b.FoldVersion, FoldVersion},
 	} {
+		if v.what == "event" && v.got == eventVersionV1 {
+			continue
+		}
 		if v.got != v.want {
 			return invalid(fmt.Sprintf("%s version %q cannot be replayed by this build, which writes %q", v.what, v.got, v.want))
 		}
@@ -200,7 +207,15 @@ func (b AuditBundle) checksum() (string, error) {
 	if len(b.Events) > MaxExport {
 		return "", fmt.Errorf("%w: more than %d events", ErrInvalidAudit, MaxExport)
 	}
-	digest, err := DigestV2(b.Events)
+	digest, err := DigestV3(b.Events)
+	if b.EventVersion == eventVersionV1 {
+		for _, e := range b.Events {
+			if e.Evidence != "" || e.EvidenceID != "" {
+				return "", fmt.Errorf("%w: event %q carries evidence, which %s bundles cannot record", ErrInvalidAudit, e.ID, eventVersionV1)
+			}
+		}
+		digest, err = DigestV2(b.Events)
+	}
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", ErrInvalidAudit, err)
 	}
@@ -230,15 +245,30 @@ func (b AuditBundle) checksum() (string, error) {
 // DigestV2 hashes exact typed event fields, including case-sensitive strings
 // and the IEEE-754 bits of finite numbers (so -0 and +0 differ). Instants are
 // canonical UTC timestamps. It rejects invalid events and duplicate IDs. Digest
-// remains the legacy, case-insensitive checksum for existing exports.
+// remains the legacy, case-insensitive checksum for existing exports. It does
+// not cover Evidence or EvidenceID; DigestV3 does.
 func DigestV2(events []Event) (string, error) {
+	return digestTyped(events, false)
+}
+
+// DigestV3 is DigestV2 that also covers each event's Evidence and EvidenceID,
+// so an export cannot alter what a statement was drawn from undetected.
+func DigestV3(events []Event) (string, error) {
+	return digestTyped(events, true)
+}
+
+func digestTyped(events []Event, withEvidence bool) (string, error) {
 	ordered := append([]Event(nil), events...)
 	for i := range ordered {
 		ordered[i].ObservedAt = ordered[i].ObservedAt.UTC()
 	}
 	SortEvents(ordered)
 	h := sha256.New()
-	hashFields(h, "recall-events-digest-v2", strconv.Itoa(len(ordered)))
+	label, prefix := "recall-events-digest-v2", "sha256:v2:"
+	if withEvidence {
+		label, prefix = "recall-events-digest-v3", "sha256:v3:"
+	}
+	hashFields(h, label, strconv.Itoa(len(ordered)))
 	seen := make(map[string]bool, len(ordered))
 	for _, e := range ordered {
 		if seen[e.ID] {
@@ -248,7 +278,7 @@ func DigestV2(events []Event) (string, error) {
 		if _, err := DecodeEvent(e.ID, e.Metadata()); err != nil {
 			return "", err
 		}
-		for _, field := range []string{e.ID, e.Subject, e.Predicate, e.Kind, e.Source} {
+		for _, field := range []string{e.ID, e.Subject, e.Predicate, e.Kind, e.Source, e.Evidence, e.EvidenceID} {
 			if !utf8.ValidString(field) {
 				return "", fmt.Errorf("%w: event %q has invalid UTF-8", ErrInvalidEvent, e.ID)
 			}
@@ -266,17 +296,22 @@ func DigestV2(events []Event) (string, error) {
 			valueType, value = "boolean", strconv.FormatBool(v)
 		}
 		hashFields(h, e.ID, e.Kind, e.Subject, e.Predicate, valueType, value, floatBits(e.Confidence), e.Source, strconv.FormatBool(e.Retraction), formatTime(e.ObservedAt))
+		if withEvidence {
+			// Every event contributes both fields, empty or not, so the field
+			// boundaries are fixed and no two logs share a digest.
+			hashFields(h, e.Evidence, e.EvidenceID)
+		}
 	}
-	return "sha256:v2:" + hex.EncodeToString(h.Sum(nil)), nil
+	return prefix + hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // VerifyDigest verifies either a legacy sha256: digest or a sha256:v2: digest.
 // Legacy verification intentionally retains its original identity semantics.
 func VerifyDigest(events []Event, expected string) error {
 	var actual string
-	if strings.HasPrefix(expected, "sha256:v2:") {
+	if strings.HasPrefix(expected, "sha256:v2:") || strings.HasPrefix(expected, "sha256:v3:") {
 		var err error
-		actual, err = DigestV2(events)
+		actual, err = digestTyped(events, strings.HasPrefix(expected, "sha256:v3:"))
 		if err != nil {
 			return err
 		}

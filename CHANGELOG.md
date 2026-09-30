@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+## Python client 0.6.0 - 2026-09-30
+
+- `recall(with_sources=True)` returns each belief's `evidence`, `evidence_id`
+  and `source_text`, the excerpt and the whole text it was drawn from;
+  `remember(text=...)` returns the episode note as `episode`.
+- Beliefs and events ignore fields they do not know, so a newer server cannot
+  break decoding.
+- Requires `polign_db` 0.10.0 or later, the first whose `recall` tool accepts
+  `with_sources`.
+
+## [0.8.0] - 2026-09-30
+
+### Added
+
+- Statements remembered from text keep what they were drawn from.
+  `RememberText` first keeps the whole text as a note (the episode, returned as
+  `ExtractionResult.Episode`), then writes each statement with its quoted
+  excerpt as `Evidence` and the episode as `EvidenceID`. Beliefs carry both.
+  The excerpt is part of the statement's searchable text, so a fact is also
+  found by the words it came from.
+- `Client.Events` reads events by id, through the optional `GetBackend`
+  (implemented by the Polign backend with its batch read), so a caller can
+  follow a belief's `EvidenceID` to the whole text.
+- Audit bundles record events as `recall-event-v2` and checksum them with
+  `DigestV3`, which also covers `Evidence` and `EvidenceID`. `recall-event-v1`
+  bundles and `sha256:v2:` digests still verify.
+
+### Changed
+
+- `RememberText` always keeps the text as a note about `DefaultSubject`, even
+  when every proposal is filed. Before, the text was kept only when nothing
+  could be filed. `Results` keep their order and contents.
+
 ## Python client 0.5.0 - 2026-09-29
 
 - `remember` takes `observed_at` (an RFC3339 string or an aware `datetime`)

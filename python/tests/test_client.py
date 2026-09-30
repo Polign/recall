@@ -25,6 +25,8 @@ for line in sys.stdin:
             result = {"isError": True, "content": [{"type":"text", "text":json.dumps({"error":"failed", "partial":{"results":[1]}})}]}
         elif request["params"]["name"] == "remember":
             belief = dict(subject=args["subject"], predicate=args["predicate"], value=args["value"], confidence=args.get("confidence",1), source="user_stated", kind="fact", observed_at="2026-09-12T00:00:00Z", event_id="a")
+            if args["subject"] == "future":
+                belief["field_from_a_newer_server"] = True
             result = {"content": [{"type":"text", "text":json.dumps({"stored":belief})}]}
         elif request["params"]["name"] == "forget":
             result = {"content": [{"type":"text", "text":json.dumps({"withdrawn": 1 if args.get("value") is False or args.get("value") == 0 else 0})}]}
@@ -73,6 +75,12 @@ class TransportTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 memory.remember("user", "prefers_editor", "vim", observed_at=datetime(2023, 3, 1))
 
+    def test_unknown_fields_from_a_newer_server_are_ignored(self):
+        with Client(command=self.command) as memory:
+            result = memory.remember("future", "prefers_editor", "vim")
+            self.assertEqual(result.stored.value, "vim")
+            self.assertEqual(result.stored.evidence, "")
+
     def test_partial_results_are_preserved(self):
         with Client(command=self.command) as memory:
             with self.assertRaises(RecallError) as failure:
@@ -116,6 +124,20 @@ class IntegrationTests(unittest.TestCase):
             memory.remember(dated, "prefers_editor", "vim", observed_at="2023-03-01T09:00:00Z")
             self.assertEqual(memory.recall(dated, "prefers_editor")[0].value, "emacs")
             self.assertEqual(memory.recall(dated, "prefers_editor", as_of="2023-04-01T00:00:00Z")[0].value, "vim")
+            # A fact remembered from text keeps the text it came from.
+            sourced = subject + "-sourced"
+            said = "I bought it on sale for $24, down from $30."
+            extraction = memory.remember(text=said, statements=[{
+                "subject": sourced, "predicate": "prefers_editor", "value": "helix", "evidence": "on sale for $24"
+            }])
+            self.assertIsNotNone(extraction.episode)
+            plain = memory.recall(sourced, "prefers_editor")[0]
+            self.assertEqual((plain.evidence, plain.source_text), ("", ""))
+            full = memory.recall(sourced, "prefers_editor", with_sources=True)[0]
+            self.assertEqual(full.evidence, "on sale for $24")
+            self.assertEqual(full.source_text, said)
+            self.assertEqual(full.evidence_id, extraction.episode.stored.event_id)
+            self.assertEqual(full.source, "agent_inferred")
         with self.connect() as memory:
             self.assertEqual(memory.recall(subject, "prefers_editor")[0].value, "neovim")
             self.assertEqual(memory.forget(subject, "prefers_editor", "neovim"), 1)

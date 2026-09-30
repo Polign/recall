@@ -173,6 +173,32 @@ func (b *Backend) Search(ctx context.Context, collection string, values []float3
 	return *result.Hits, nil
 }
 
+// Get reads events by id through Polign's batch read, in request order;
+// unknown ids are omitted. It lets Recall follow a belief's EvidenceID.
+func (b *Backend) Get(ctx context.Context, collection string, ids []string) ([]recall.StoredVector, error) {
+	path, err := collectionPath(collection)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 || len(ids) > recall.MaxGetEvents {
+		return nil, fmt.Errorf("polign: get takes 1 to %d ids", recall.MaxGetEvents)
+	}
+	var result struct {
+		Vectors *[]recall.StoredVector `json:"vectors"`
+	}
+	if err := b.do(ctx, http.MethodPost, path+"/vectors:get", map[string]any{"ids": ids, "typed_metadata": true}, &result); err != nil {
+		var status *StatusError
+		if errors.As(err, &status) && status.NotFound() {
+			return []recall.StoredVector{}, nil // nothing written to this collection yet
+		}
+		return nil, err
+	}
+	if result.Vectors == nil || len(*result.Vectors) > len(ids) {
+		return nil, fmt.Errorf("polign: invalid get response")
+	}
+	return *result.Vectors, nil
+}
+
 // SearchText runs Polign's BM25 search over each event's text field. Polign
 // indexes text as it persists segments, so a collection with nothing persisted
 // yet, or a server without a segment store, has no text index; both come back

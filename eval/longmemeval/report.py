@@ -19,10 +19,11 @@ import lme
 TYPES = ("single-session-user", "single-session-assistant", "single-session-preference",
          "multi-session", "knowledge-update", "temporal-reasoning")
 KS = (5, 10)
+EXCLUDE: set[str] = set()
 
 
 def accuracy(run: str) -> dict[str, tuple[float, int]]:
-    rows = lme.read_jsonl(lme.HERE / "out" / run / "judge.jsonl")
+    rows = [r for r in lme.read_jsonl(lme.HERE / "out" / run / "judge.jsonl") if r["question_id"] not in EXCLUDE]
     groups: dict[str, list[bool]] = defaultdict(list)
     for r in rows:
         groups[r["question_type"]].append(r["label"])
@@ -39,7 +40,7 @@ def retrieval(run: str, refs: dict[str, dict]) -> dict[str, float]:
     sums: dict[str, float] = defaultdict(float)
     n = 0
     for h in lme.read_jsonl(lme.HERE / "out" / run / "hyp.jsonl"):
-        if lme.is_abstention(h["question_id"]):
+        if lme.is_abstention(h["question_id"]) or h["question_id"] in EXCLUDE:
             continue
         gold = set(refs[h["question_id"]]["answer_session_ids"])
         ranked = h["retrieved_session_ids"]
@@ -59,8 +60,15 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("runs", nargs="+")
     ap.add_argument("--data", default="longmemeval_s_cleaned.json")
+    ap.add_argument("--holdout", type=int, default=0,
+                    help="leave out the stratified sample of this many questions used for tuning (run.py --limit)")
     args = ap.parse_args()
-    refs = {e["question_id"]: e for e in lme.load(args.data)}
+    entries = lme.load(args.data)
+    refs = {e["question_id"]: e for e in entries}
+    global EXCLUDE
+    EXCLUDE = {e["question_id"] for e in lme.sample(entries, args.holdout)} if args.holdout else set()
+    if EXCLUDE:
+        print(f"Held out: the {len(EXCLUDE)} tuning questions are left out.\n")
 
     accs = {r: accuracy(r) for r in args.runs}
     width = max(12, *(len(r) for r in args.runs))

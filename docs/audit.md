@@ -66,18 +66,22 @@ change today's reconstruction of yesterday's beliefs.
 
 ## Version and checksum contract
 
-The first bundle declares `recall-audit-v1`, `recall-event-v1`, and
-`recall-fold-v2`. These identify the envelope, the existing typed Event fields,
-and the current fold semantics (including targeted single-value retractions).
+Bundles declare `recall-audit-v1`, `recall-event-v2`, and `recall-fold-v2`.
+These identify the envelope, the typed Event fields, and the current fold
+semantics (including targeted single-value retractions). `recall-event-v2`
+adds `evidence` and `evidence_id`, and its bundles are checksummed with
+`DigestV3`. Bundles declaring `recall-event-v1` still replay and verify with
+`DigestV2`; a v1 bundle carrying evidence is refused.
 Future incompatible semantics require a new version and an explicit verifier
 implementation; unknown versions are refused. Existing stored metadata is not
 rewritten or assigned a new event ID by this feature.
 
 `Digest(events)` retains the legacy `sha256:<hex>` format and case-insensitive
 string identity. It intentionally does not detect `Neovim` changing to `neovim`.
-`DigestV2(events)` returns `sha256:v2:<hex>` and covers exact typed event fields.
-`VerifyDigest(events, expected)` dispatches between the two formats, preserving
-legacy verification. The golden fixtures in `testdata` were computed separately
+`DigestV2(events)` returns `sha256:v2:<hex>` and covers exact typed event fields
+except evidence. `DigestV3(events)` returns `sha256:v3:<hex>` and also covers
+each event's `evidence` and `evidence_id`. `VerifyDigest(events, expected)`
+dispatches between the three formats, preserving legacy verification. The golden fixtures in `testdata` were computed separately
 using Python SHA-256 and IEEE-754 packing.
 
 Both new hashes use a stream of length-prefixed UTF-8 fields: decimal byte
@@ -100,6 +104,10 @@ event count. Each sorted event contributes these fields:
 | 9 | Retraction | `true` or `false` |
 | 10 | Observed at | UTC RFC3339, exactly nine fractional digits and `Z` |
 
+`DigestV3` starts its stream with `recall-events-digest-v3` instead and, after
+field 10, adds two more for every event, empty or not: 11, evidence, and 12,
+evidence ID, as exact strings.
+
 This distinguishes positive and negative zero and preserves string case and
 whitespace. It hashes logical Event fields, not JSON source bytes: equivalent
 time zones and JSON property orders produce the same checksum. Derived
@@ -107,7 +115,8 @@ time zones and JSON property orders produce the same checksum. Derived
 
 The bundle checksum stream contains, in order: bundle version, event version,
 fold version, scope subject, scope predicate, as-of time in the same canonical
-UTC format, the full `sha256:v2:` event digest, and the decimal registry entry
+UTC format, the full event digest (`sha256:v3:` for `recall-event-v2`,
+`sha256:v2:` for `recall-event-v1`), and the decimal registry entry
 count. Registry entries follow sorted by name, contributing name, cardinality,
 value type, and description as exact strings. An omitted/default value type
 (`""`) remains distinct from an explicit `"string"`. The checksum is prefixed

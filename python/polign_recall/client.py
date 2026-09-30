@@ -35,6 +35,12 @@ class Belief:
     kind: str
     observed_at: str
     event_id: str
+    # Set by recall(with_sources=True) for a belief remembered from text: the
+    # excerpt it was drawn from, the event holding the whole text, and that
+    # text. `source` above is how the belief was come by, not this text.
+    evidence: str = ""
+    evidence_id: str = ""
+    source_text: str = ""
 
 
 @dataclass(frozen=True)
@@ -48,6 +54,8 @@ class Event:
     source: str
     observed_at: str
     retraction: bool = False
+    evidence: str = ""
+    evidence_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -58,8 +66,8 @@ class RememberResult:
 
     @classmethod
     def decode(cls, data: dict[str, Any]) -> RememberResult:
-        return cls(Belief(**data["stored"]), data.get("already_known", False),
-                   tuple(Belief(**b) for b in data.get("superseded", [])))
+        return cls(_belief(data["stored"]), data.get("already_known", False),
+                   tuple(_belief(b) for b in data.get("superseded", [])))
 
 
 @dataclass(frozen=True)
@@ -69,6 +77,9 @@ class ExtractionResult:
     # Proposals whose predicate is not registered. Their text was kept as a
     # note instead of being refused.
     unfiled: tuple[dict[str, Any], ...] = ()
+    # The note holding the whole text, which every statement names as its
+    # evidence. None from a server that predates it.
+    episode: RememberResult | None = None
 
 
 def _known(cls: type, data: Any) -> dict[str, Any]:
@@ -447,7 +458,8 @@ class Client:
             data = self._tool("remember", {"text": text, "statements": list(statements), **dated})
             return ExtractionResult(tuple(data.get("proposals") or []),
                                     tuple(RememberResult.decode(r) for r in data["results"]),
-                                    tuple(data.get("unfiled") or []))
+                                    tuple(data.get("unfiled") or []),
+                                    RememberResult.decode(data["episode"]) if data.get("episode") else None)
         if statements is not None:
             raise ValueError("statements requires original text")
         if subject is None or predicate is None or value is _MISSING:
@@ -458,12 +470,18 @@ class Client:
 
     def recall(self, subject: str | None = None, predicate: str | None = None, *,
                query: str | None = None, as_of: str | datetime | None = None,
-               min_confidence: float | None = None, limit: int | None = None) -> list[Belief]:
+               min_confidence: float | None = None, limit: int | None = None,
+               with_sources: bool = False) -> list[Belief]:
+        """What is believed. With `with_sources`, a belief remembered from text
+        also carries `evidence`, `evidence_id` and `source_text`, the excerpt
+        and the whole text it was drawn from. It needs a polign CLI whose
+        recall tool accepts with_sources."""
         if as_of is not None:
             as_of = _instant(as_of, "as_of")
         args = {"subject": subject, "predicate": predicate, "query": query,
-                "as_of": as_of, "min_confidence": min_confidence, "limit": limit}
-        return [Belief(**b) for b in self._tool("recall", {k: v for k, v in args.items() if v is not None}) or []]
+                "as_of": as_of, "min_confidence": min_confidence, "limit": limit,
+                "with_sources": True if with_sources else None}
+        return [_belief(b) for b in self._tool("recall", {k: v for k, v in args.items() if v is not None}) or []]
 
     def forget(self, subject: str, predicate: str, value: Any = _MISSING, *, all: bool = False) -> int:
         if all == (value is not _MISSING) or value is None:
@@ -474,7 +492,7 @@ class Client:
         return self._tool("forget", args)["withdrawn"]
 
     def history(self, subject: str, predicate: str) -> list[Event]:
-        return [Event(**e) for e in self._tool("memory_history", {"subject": subject, "predicate": predicate}) or []]
+        return [Event(**_known(Event, e)) for e in self._tool("memory_history", {"subject": subject, "predicate": predicate}) or []]
 
     def predicates(self) -> list[dict[str, Any]]:
         return self._tool("list_predicates", {})

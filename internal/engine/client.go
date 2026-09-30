@@ -114,6 +114,11 @@ type RememberRequest struct {
 	// predicate is history: it answers as_of queries for its time and does
 	// not replace what the later one says.
 	ObservedAt time.Time
+	// Evidence is the exact excerpt the statement was drawn from, at most
+	// MaxEvidenceBytes, and EvidenceID the event holding the whole text.
+	// RememberText sets both; a caller recording a quote may set Evidence.
+	Evidence   string
+	EvidenceID string
 }
 
 // ForgetRequest selects exactly one typed Value or All=true. False and numeric
@@ -139,7 +144,8 @@ func (c *Client) Remember(ctx context.Context, q RememberRequest) (RememberResul
 	if kind == "" {
 		kind = "fact"
 	}
-	return s.remember(kind, q.Subject, q.Predicate, q.Value, confidence, q.Source, q.ObservedAt)
+	return s.remember(kind, q.Subject, q.Predicate, q.Value, confidence, q.Source,
+		provenance{observedAt: q.ObservedAt, evidence: q.Evidence, evidenceID: q.EvidenceID})
 }
 
 // Forget appends a targeted or blanket retraction.
@@ -308,6 +314,68 @@ func (b requestBackend) List(collection string, f map[string]any, limit int) ([]
 		return nil, 0, err
 	}
 	return rows, total, nil
+}
+
+// GetBackend is an optional Backend capability: reading records by id. It
+// is how a caller follows a belief's EvidenceID to the text it came from.
+// Unknown ids are omitted from the result, not reported as errors.
+type GetBackend interface {
+	Get(ctx context.Context, collection string, ids []string) ([]StoredVector, error)
+}
+
+// ErrGetUnsupported reports a backend that cannot read records by id.
+var ErrGetUnsupported = errors.New("recall: this backend cannot read events by id")
+
+// MaxGetEvents bounds one Events call.
+const MaxGetEvents = 1000
+
+// Events reads events by id, in the order asked, skipping ids that are not
+// stored. It is how a caller reads the text behind a belief's EvidenceID.
+func (c *Client) Events(ctx context.Context, ids []string) ([]Event, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("recall: context must not be nil")
+	}
+	var want []string
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if id = strings.TrimSpace(id); id != "" && !seen[id] {
+			seen[id] = true
+			want = append(want, id)
+		}
+	}
+	if len(want) == 0 {
+		return []Event{}, nil
+	}
+	if len(want) > MaxGetEvents {
+		return nil, fmt.Errorf("recall: at most %d events per call, got %d", MaxGetEvents, len(want))
+	}
+	g, ok := c.backend.(GetBackend)
+	if !ok {
+		return nil, ErrGetUnsupported
+	}
+	rows, err := g.Get(ctx, c.collection, want)
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err != nil {
+		return nil, err
+	}
+	s := &Store{collection: c.collection, registry: c.registry}
+	byID := make(map[string]Event, len(rows))
+	for _, r := range rows {
+		e, err := s.decodeEvent(r.ID, r.Metadata)
+		if err != nil {
+			return nil, err
+		}
+		byID[e.ID] = e
+	}
+	out := make([]Event, 0, len(byID))
+	for _, id := range want {
+		if e, ok := byID[id]; ok {
+			out = append(out, e)
+		}
+	}
+	return out, nil
 }
 
 // textFirstFor puts lexical hits ahead of vector hits when the vectors are
