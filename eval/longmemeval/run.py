@@ -13,6 +13,7 @@ Methods:
   bm25-session  top-k sessions by BM25 over session text
   bm25-turn     top-k rounds (a user turn and the reply after it) by BM25
   recall-notes  Recall as a note store; see recall_method.py
+  recall-typed  Recall over typed statements from an extractor model
 """
 from __future__ import annotations
 
@@ -27,7 +28,7 @@ from typing import Any
 import lme
 from bm25 import BM25
 
-METHODS = ("full", "oracle", "bm25-session", "bm25-turn", "recall-notes")
+METHODS = ("full", "oracle", "bm25-session", "bm25-turn", "recall-notes", "recall-typed")
 
 
 def rounds(turns: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
@@ -73,6 +74,7 @@ def main() -> None:
     ap.add_argument("--method", choices=METHODS, required=True)
     ap.add_argument("--reader", default="gpt-4o-2024-08-06", help="provider:model; bare name = OpenAI")
     ap.add_argument("--k", type=int, default=10, help="chunks or beliefs passed to the reader")
+    ap.add_argument("--extractor", default="gpt-4o-mini-2024-07-18", help="recall-typed extraction model")
     ap.add_argument("--cot", action="store_true", help="upstream's step-by-step reader prompt")
     ap.add_argument("--max-tokens", type=int, help="reader output budget (upstream: 500, or 800 with --cot)")
     ap.add_argument("--context", type=int, default=128000,
@@ -104,11 +106,11 @@ def main() -> None:
         stats: dict[str, Any] = {}
         if args.method.startswith("recall-"):
             import recall_method
-            chunks, retrieved, stats = recall_method.context(entry, args.method, args.k, rounds, out)
+            chunks, retrieved, stats = recall_method.context(entry, args.method, args.k, rounds, out, args.extractor)
         else:
             chunks, retrieved = context(entry, args.method, args.k)
         history, history_tokens = lme.truncate_history(lme.format_history(chunks), history_budget)
-        prompt = lme.reader_prompt(history, entry, args.cot)
+        prompt = lme.reader_prompt(history, entry, args.cot, facts=args.method == "recall-typed")
         hyp = "" if args.dry_run else lme.complete(args.reader, prompt, args.max_tokens)
         return {"question_id": entry["question_id"], "hypothesis": hyp,
                 "retrieved_session_ids": retrieved, "history_tokens": history_tokens,
@@ -116,12 +118,20 @@ def main() -> None:
 
     with ThreadPoolExecutor(args.workers) as pool:
         futures = [pool.submit(one, e) for e in todo]
+        failed = 0
         for n, f in enumerate(as_completed(futures), 1):
-            row = f.result()
+            try:
+                row = f.result()
+            except Exception as exc:  # one bad question must not lose the rest; rerun resumes it
+                failed += 1
+                print(f"  question failed: {type(exc).__name__}: {str(exc)[:200]}", flush=True)
+                continue
             with lock:
                 lme.append_jsonl(hyp_path, row)
             if n % 10 == 0 or n == len(todo):
                 print(f"  {n}/{len(todo)}", flush=True)
+    if failed:
+        raise SystemExit(f"{args.run}: {failed} questions failed; rerun the same command to retry them")
 
 
 if __name__ == "__main__":

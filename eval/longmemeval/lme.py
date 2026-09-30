@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 import random
+import re
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -22,6 +23,18 @@ DATA = HERE / "data"
 READER_PROMPT = (
     "I will give you several history chats between you and a user. Please answer the question "
     "based on the relevant chat history.\n\n\nHistory Chats:\n\n{}\n\nCurrent Date: {}\nQuestion: {}\nAnswer:"
+)
+# Upstream's reader prompt for extracted facts (merge_key_expansion_into_value
+# = replace), used when the reader sees memory beliefs instead of chat turns.
+READER_PROMPT_FACTS = (
+    "I will give you several facts extracted from history chats between you and a user. Please answer the "
+    "question based on the relevant facts.\n\n\nHistory Chats:\n\n{}\n\nCurrent Date: {}\nQuestion: {}\nAnswer:"
+)
+READER_PROMPT_FACTS_COT = (
+    "I will give you several facts extracted from history chats between you and a user. Please answer the "
+    "question based on the relevant facts. Answer the question step by step: first extract all the relevant "
+    "information, and then reason over the information to get the answer.\n\n\nHistory Chats:\n\n{}\n\n"
+    "Current Date: {}\nQuestion: {}\nAnswer (step by step):"
 )
 READER_PROMPT_COT = (
     "I will give you several history chats between you and a user. Please answer the question "
@@ -97,27 +110,33 @@ def truncate_history(history: str, max_tokens: int) -> tuple[str, int]:
     return enc.decode(tokens[:max_tokens]), len(tokens)
 
 
-def reader_prompt(history: str, entry: dict[str, Any], cot: bool) -> str:
-    template = READER_PROMPT_COT if cot else READER_PROMPT
+def reader_prompt(history: str, entry: dict[str, Any], cot: bool, facts: bool = False) -> str:
+    if facts:
+        template = READER_PROMPT_FACTS_COT if cot else READER_PROMPT_FACTS
+    else:
+        template = READER_PROMPT_COT if cot else READER_PROMPT
     return template.format(history, entry["question_date"], entry["question"])
 
 
 _clients: dict[str, Any] = {}
 
 
-def complete(model: str, prompt: str, max_tokens: int) -> str:
+def complete(model: str, prompt: str, max_tokens: int, json_mode: bool = False) -> str:
     """One deterministic completion. `model` is "provider:name"; a bare name
     means OpenAI, which is what upstream uses for both reader and judge."""
     provider, _, name = model.partition(":") if ":" in model else ("openai", "", model)
-    for attempt in range(8):
+    # Rate limits are retried for as long as the API asks, up to about an
+    # hour of waiting; other errors get eight attempts.
+    for attempt in range(200):
         try:
             if provider == "openai":
                 if "openai" not in _clients:
                     from openai import OpenAI
                     _clients["openai"] = OpenAI()
+                extra = {"response_format": {"type": "json_object"}} if json_mode else {}
                 r = _clients["openai"].chat.completions.create(
                     model=name, messages=[{"role": "user", "content": prompt}],
-                    n=1, temperature=0, max_tokens=max_tokens)
+                    n=1, temperature=0, max_tokens=max_tokens, **extra)
                 return (r.choices[0].message.content or "").strip()
             if provider == "anthropic":
                 if "anthropic" not in _clients:
@@ -131,12 +150,23 @@ def complete(model: str, prompt: str, max_tokens: int) -> str:
         except SystemExit:
             raise
         except Exception as exc:  # rate limits and transient API errors
-            if attempt == 7:
+            message = str(exc)
+            # A request larger than the per-minute token limit can never
+            # succeed, and a spent quota will not refill by waiting.
+            if "Request too large" in message or "insufficient_quota" in message:
                 raise
-            wait = min(60, 2 ** attempt) + random.random()
-            print(f"  {model}: {type(exc).__name__}: {exc}; retrying in {wait:.0f}s", flush=True)
+            rate_limited = "rate_limit" in message or "429" in message
+            if attempt >= 7 and not rate_limited:
+                raise
+            hint = re.search(r"try again in ([\d.]+)(ms|s)", message)
+            if hint:
+                wait = float(hint.group(1)) / (1000 if hint.group(2) == "ms" else 1)
+            else:
+                wait = min(60, 2 ** min(attempt, 6))
+            wait += random.random() * 2
+            print(f"  {model}: {type(exc).__name__}; retrying in {wait:.0f}s", flush=True)
             time.sleep(wait)
-    raise AssertionError("unreachable")
+    raise RuntimeError(f"{model}: still rate limited after 200 attempts")
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:

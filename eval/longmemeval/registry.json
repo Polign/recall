@@ -1,0 +1,14 @@
+{
+  "status": {"cardinality": "single", "value_type": "string", "description": "The subject's current state, level, stage, or choice, such as a membership tier, where a plan stands, or which option was picked. A new status replaces the old one."},
+  "count": {"cardinality": "single", "value_type": "string", "description": "The subject's current running total or amount, with its unit, such as '27 species' or '220 pages read'. A new count replaces the old one."},
+  "plan": {"cardinality": "single", "value_type": "string", "description": "What the user currently intends to do about the subject. A new plan replaces the old one."},
+  "location": {"cardinality": "single", "value_type": "string", "description": "Where the subject is, lives, or takes place."},
+  "relationship": {"cardinality": "single", "value_type": "string", "description": "Who a person is to the user, such as 'sister', 'coworker', or 'real estate agent'."},
+  "date": {"cardinality": "single", "value_type": "string", "description": "The calendar date of a one-off subject such as an anniversary, a deadline, or a scheduled event, written YYYY/MM/DD when known."},
+  "duration": {"cardinality": "single", "value_type": "string", "description": "How long the subject takes or took, such as '45 minutes each way' or '25 hours'."},
+  "cost": {"cardinality": "single", "value_type": "string", "description": "What the subject cost or is worth, with currency."},
+  "event": {"cardinality": "multi", "value_type": "string", "description": "Something that happened involving the subject, starting with its date as YYYY/MM/DD resolved from the session date, then what happened, such as '2023/02/15: visited The Art Cube and saw work by James Parker'."},
+  "preference": {"cardinality": "multi", "value_type": "string", "description": "Something the user likes, dislikes, wants, or avoids about the subject, in the user's own terms."},
+  "detail": {"cardinality": "multi", "value_type": "string", "description": "Any other lasting fact about the subject that the user stated."},
+  "assistant_said": {"cardinality": "multi", "value_type": "string", "description": "A specific fact, figure, list item, or recommendation the assistant gave about the subject, recorded so the user can ask about it later."}
+}

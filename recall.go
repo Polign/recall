@@ -170,6 +170,21 @@ func DefaultRegistry() Registry {
 // LexicalEmbedder is a dependency-free signed feature-hashing fallback. It
 // retrieves overlapping words, not semantic synonyms. Use a dedicated collection
 // for this versioned 256-dimensional space; never mix it with model embeddings.
+// TextSearchBackend is an optional Backend capability: a lexical (BM25)
+// search over the TextField metadata key of each event. When the backend has
+// it, semantic recall fuses it with the vector search.
+type TextSearchBackend = engine.TextSearchBackend
+
+// TextSearcher is the VectorDB form of TextSearchBackend, for NewStore.
+type TextSearcher = engine.TextSearcher
+
+// ErrTextSearchUnsupported is what a text search returns when the collection
+// has no lexical index yet; recall then uses the vector search alone.
+var ErrTextSearchUnsupported = engine.ErrTextSearchUnsupported
+
+// TextField is the metadata key that holds each event's searchable text.
+const TextField = engine.TextField
+
 type LexicalEmbedder = engine.LexicalEmbedder
 
 const LexicalSpace = engine.LexicalSpace

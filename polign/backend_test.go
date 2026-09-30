@@ -255,3 +255,42 @@ func TestInvalidConfigurationAndLimits(t *testing.T) {
 		t.Error("nil context accepted")
 	}
 }
+
+func TestSearchTextWireContractAndMissingIndex(t *testing.T) {
+	status, message := http.StatusOK, ""
+	b := newBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if r.URL.Path != "/v1/collections/memories/query" || body["text"] != "apex legends" || body["values"] != nil || body["typed_metadata"] != true {
+			t.Errorf("text search = %s %+v", r.URL, body)
+		}
+		if status != http.StatusOK {
+			w.WriteHeader(status)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": message})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"hits": []any{map[string]any{"id": "e1", "score": 6.4, "metadata": map[string]any{"text": "user note apex legends"}}}})
+	})
+	hits, err := b.SearchText(t.Context(), "memories", "apex legends", 5, nil)
+	if err != nil || len(hits) != 1 || hits[0].ID != "e1" {
+		t.Fatalf("text search = %+v, %v", hits, err)
+	}
+	for _, tc := range []struct {
+		status      int
+		message     string
+		unsupported bool
+	}{
+		{http.StatusNotFound, `not found: no segments for collection "memories" (segindex: no index published)`, true},
+		{http.StatusBadRequest, "invalid argument: cold queries require a configured segment store", true},
+		{http.StatusNotFound, "not found: collection", false},
+		{http.StatusInternalServerError, "boom", false},
+	} {
+		status, message = tc.status, tc.message
+		_, err := b.SearchText(t.Context(), "memories", "apex legends", 5, nil)
+		if got := errors.Is(err, recall.ErrTextSearchUnsupported); got != tc.unsupported || err == nil {
+			t.Errorf("%d %q: err = %v, unsupported = %v, want %v", tc.status, tc.message, err, got, tc.unsupported)
+		}
+	}
+}

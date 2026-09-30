@@ -122,6 +122,15 @@ own events the search reached, so a query about one note does not bring back
 unrelated notes. A query that names both subject and predicate returns every
 value of that pair, whatever the text.
 
+When the backend also offers a lexical search (`TextSearchBackend`, which the
+Polign backend implements), semantic recall runs it beside the vector search.
+With the built-in lexical embedder the text ranking leads, followed by vector
+hits it lacks; with a model embedder the two are fused by reciprocal rank.
+Polign indexes text as it persists segments, so a statement written in the
+last few seconds to a minute is reached only by the vector search until the
+index catches up, and a collection with nothing persisted yet uses the vector
+search alone.
+
 ```go
 // Every event behind a belief, oldest first: the audit trail.
 events, err := store.History("user", "prefers_editor")

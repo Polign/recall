@@ -90,6 +90,9 @@ func (e Event) Metadata() map[string]any {
 	if e.Value != nil {
 		md["value"] = e.Value
 	}
+	// The searchable text, for a database that indexes one metadata field
+	// lexically. Decoding ignores it: the event's fields are the record.
+	md[TextField] = e.Text()
 	return md
 }
 

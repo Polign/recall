@@ -173,6 +173,53 @@ func (b *Backend) Search(ctx context.Context, collection string, values []float3
 	return *result.Hits, nil
 }
 
+// SearchText runs Polign's BM25 search over each event's text field. Polign
+// indexes text as it persists segments, so a collection with nothing persisted
+// yet, or a server without a segment store, has no text index; both come back
+// as recall.ErrTextSearchUnsupported and Recall falls back to vector search.
+// Text written since the last persist is not in the index either, which is
+// why Recall keeps the vector search beside this one.
+func (b *Backend) SearchText(ctx context.Context, collection, text string, k int, filter map[string]any) ([]recall.Hit, error) {
+	path, err := collectionPath(collection)
+	if err != nil {
+		return nil, err
+	}
+	if k <= 0 || k > 10000 {
+		return nil, fmt.Errorf("polign: search limit must be in [1, 10000]")
+	}
+	if strings.TrimSpace(text) == "" {
+		return nil, recall.ErrTextSearchUnsupported
+	}
+	var result struct {
+		Hits *[]recall.Hit `json:"hits"`
+	}
+	err = b.do(ctx, http.MethodPost, path+"/query", map[string]any{"text": text, "k": k, "filter": filter, "typed_metadata": true}, &result)
+	var status *StatusError
+	if errors.As(err, &status) && textIndexMissing(status) {
+		return nil, fmt.Errorf("%w: %s", recall.ErrTextSearchUnsupported, status.Message)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if result.Hits == nil || len(*result.Hits) > k {
+		return nil, fmt.Errorf("polign: invalid search response")
+	}
+	return *result.Hits, nil
+}
+
+// textIndexMissing recognizes the two ways Polign reports that it has no text
+// index to search: nothing persisted for the collection yet (404), or no
+// segment store on the server (400).
+func textIndexMissing(e *StatusError) bool {
+	switch e.StatusCode {
+	case http.StatusNotFound:
+		return strings.Contains(e.Message, "no segments")
+	case http.StatusBadRequest:
+		return strings.Contains(e.Message, "require a configured segment store")
+	}
+	return false
+}
+
 type leaseGrant struct {
 	Epoch     uint64    `json:"epoch"`
 	Holder    string    `json:"holder"`

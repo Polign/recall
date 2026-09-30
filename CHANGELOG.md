@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Added
+
+- Semantic recall uses the backend's lexical (BM25) search when it has one,
+  through the optional `TextSearchBackend` (or `TextSearcher` for `NewStore`).
+  The Polign backend implements it with Polign's segment text index. With the
+  built-in lexical embedder, the text ranking leads and vector hits it lacks
+  follow; with a model embedder the two rankings are fused evenly. On a
+  LongMemEval-S subset, recall over stored conversation turns found an answer
+  session in its top ten for 98% of questions, up from 62% with the hashed
+  vectors alone.
+- Every event stores its searchable text under the `text` metadata key
+  (`TextField`). Events written before this release have none, so only the
+  vector search reaches them.
+
 ### Fixed
 
 - Semantic recall ranks beliefs by the query. It used to rank subject and

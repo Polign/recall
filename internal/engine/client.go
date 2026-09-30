@@ -251,7 +251,7 @@ func (c *Client) forContext(ctx context.Context) (*Store, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &Store{db: requestBackend{ctx: ctx, backend: c.backend}, collection: c.collection, registry: c.registry, now: time.Now, materialized: c.materialized,
+	return &Store{db: requestBackend{ctx: ctx, backend: c.backend}, collection: c.collection, registry: c.registry, now: time.Now, materialized: c.materialized, textFirst: textFirstFor(c.embedder),
 		embed: func(text string) ([]float32, error) {
 			if err := ctx.Err(); err != nil {
 				return nil, err
@@ -303,6 +303,46 @@ func (b requestBackend) List(collection string, f map[string]any, limit int) ([]
 	}
 	return rows, total, nil
 }
+
+// textFirstFor puts lexical hits ahead of vector hits when the vectors are
+// themselves only hashed words. Fusing the two rewards hits both searches
+// found, and two word-overlap rankings mostly agree on filler that shares
+// common words with the query; on LongMemEval-S, recall over the conversation
+// found an answer session in its top ten for 85% of questions fused (text
+// counted twice) against 98% with the text ranking first. A model embedder
+// adds meaning that BM25 lacks, so its ranking is fused evenly.
+func textFirstFor(e Embedder) bool {
+	switch e.(type) {
+	case LexicalEmbedder, *LexicalEmbedder:
+		return true
+	}
+	return false
+}
+
+// TextSearchBackend is an optional Backend capability, the context-aware form
+// of TextSearcher.
+type TextSearchBackend interface {
+	SearchText(ctx context.Context, collection, text string, k int, filter map[string]any) ([]Hit, error)
+}
+
+func (b requestBackend) SearchText(collection, text string, k int, f map[string]any) ([]Hit, error) {
+	ts, ok := b.backend.(TextSearchBackend)
+	if !ok {
+		return nil, ErrTextSearchUnsupported
+	}
+	if err := b.ctx.Err(); err != nil {
+		return nil, err
+	}
+	hits, err := ts.SearchText(b.ctx, collection, text, k, f)
+	if err == nil {
+		err = b.ctx.Err()
+	}
+	if err != nil {
+		return nil, err
+	}
+	return hits, nil
+}
+
 func (b requestBackend) Search(collection string, v []float32, k int, f map[string]any) ([]Hit, error) {
 	if err := b.ctx.Err(); err != nil {
 		return nil, err

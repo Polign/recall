@@ -35,6 +35,23 @@ type VectorDB interface {
 	Search(collection string, values []float32, k int, filter map[string]any) ([]Hit, error)
 }
 
+// TextSearcher is an optional VectorDB capability: a lexical (BM25) search
+// over each event's text metadata field. Semantic recall uses it beside the
+// vector search when the database offers it, because a hashed lexical vector
+// ranks words far worse than an inverted index does.
+type TextSearcher interface {
+	// SearchText returns ErrTextSearchUnsupported when this collection has no
+	// text index to search yet; recall then uses the vector search alone.
+	SearchText(collection, text string, k int, filter map[string]any) ([]Hit, error)
+}
+
+// ErrTextSearchUnsupported reports that a lexical search is not available for
+// a collection, such as before its first index is published.
+var ErrTextSearchUnsupported = errors.New("recall: text search unsupported")
+
+// TextField is the metadata key that holds an event's searchable text.
+const TextField = "text"
+
 // MaxHistoryEvents bounds a complete subject-and-predicate history. Histories
 // beyond this bound fail explicitly; a partial fold could revive a retraction.
 const MaxHistoryEvents = 10000
@@ -58,6 +75,9 @@ type Store struct {
 	now          func() time.Time
 	materialized *Materialization
 	registryErr  error
+	// textFirst ranks every lexical hit ahead of the vector hits instead of
+	// fusing the two rankings; see textFirstFor.
+	textFirst bool
 }
 
 // NewStore returns a store over one collection.
@@ -595,7 +615,9 @@ func (s *Store) append(e Event) error {
 	return nil
 }
 
-// searchEvents runs a semantic search over the event log.
+// searchEvents runs a semantic search over the event log: the vector search,
+// fused with a lexical search when the database has one. The vector search
+// stays in because it also reaches events too new for the text index.
 func (s *Store) searchEvents(query string, filter map[string]any, limit int) ([]Event, error) {
 	values, err := s.embed(query)
 	if err != nil {
@@ -604,6 +626,16 @@ func (s *Store) searchEvents(query string, filter map[string]any, limit int) ([]
 	hits, err := s.db.Search(s.collection, values, limit, filter)
 	if err != nil {
 		return nil, err
+	}
+	if ts, ok := s.db.(TextSearcher); ok {
+		text, err := ts.SearchText(s.collection, query, limit, filter)
+		switch {
+		case errors.Is(err, ErrTextSearchUnsupported):
+		case err != nil:
+			return nil, err
+		default:
+			hits = fuseHits(hits, text, s.textFirst, limit)
+		}
 	}
 	out := make([]Event, 0, len(hits))
 	for _, h := range hits {
@@ -614,6 +646,49 @@ func (s *Store) searchEvents(query string, filter map[string]any, limit int) ([]
 		out = append(out, e)
 	}
 	return out, nil
+}
+
+// rrfK is the reciprocal rank fusion constant, the usual 60.
+const rrfK = 60
+
+// fuseHits merges a vector and a lexical ranking and keeps the best limit.
+// Fusion is reciprocal rank fusion, which rewards a hit both rankings found.
+// With textFirst the lexical ranking leads and the vector hits it lacks follow
+// in their own order: those are mostly events written since the text index
+// last caught up, which only the vector search can reach.
+func fuseHits(vector, text []Hit, textFirst bool, limit int) []Hit {
+	byID := map[string]Hit{}
+	var order []string
+	if textFirst {
+		for _, hits := range [][]Hit{text, vector} {
+			for _, h := range hits {
+				if _, seen := byID[h.ID]; !seen {
+					byID[h.ID] = h
+					order = append(order, h.ID)
+				}
+			}
+		}
+	} else {
+		score := map[string]float64{}
+		for _, hits := range [][]Hit{vector, text} {
+			for rank, h := range hits {
+				if _, seen := byID[h.ID]; !seen {
+					byID[h.ID] = h
+					order = append(order, h.ID)
+				}
+				score[h.ID] += 1 / float64(rrfK+rank+1)
+			}
+		}
+		sort.SliceStable(order, func(i, j int) bool { return score[order[i]] > score[order[j]] })
+	}
+	if len(order) > limit {
+		order = order[:limit]
+	}
+	out := make([]Hit, len(order))
+	for i, id := range order {
+		out[i] = byID[id]
+	}
+	return out
 }
 
 // completeEvents refuses to fold a truncated log. One extra row detects an
