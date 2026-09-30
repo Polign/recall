@@ -2,11 +2,12 @@
 
 ## [Unreleased]
 
-### Added
+## Python client 0.5.0 - 2026-09-29
 
-- Python client: `remember` takes `observed_at` (an RFC3339 string or an
-  aware `datetime`). It needs a `polign` CLI whose MCP `remember` tool accepts
-  `observed_at`.
+- `remember` takes `observed_at` (an RFC3339 string or an aware `datetime`)
+  to record statements made earlier, such as an imported conversation.
+- Requires `polign_db` 0.9.0 or later, the first whose `remember` tool
+  accepts `observed_at` and whose recall ranks by the query with BM25.
 
 ## [0.7.0] - 2026-09-29
 
