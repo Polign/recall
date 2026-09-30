@@ -108,6 +108,12 @@ type RememberRequest struct {
 	Kind       string
 	Confidence *float64
 	Source     string
+	// ObservedAt is when the statement was made, for statements recorded
+	// after the fact, such as an imported conversation. Zero means now. A
+	// statement observed before a later one for the same subject and
+	// predicate is history: it answers as_of queries for its time and does
+	// not replace what the later one says.
+	ObservedAt time.Time
 }
 
 // ForgetRequest selects exactly one typed Value or All=true. False and numeric
@@ -133,7 +139,7 @@ func (c *Client) Remember(ctx context.Context, q RememberRequest) (RememberResul
 	if kind == "" {
 		kind = "fact"
 	}
-	return s.remember(kind, q.Subject, q.Predicate, q.Value, confidence, q.Source)
+	return s.remember(kind, q.Subject, q.Predicate, q.Value, confidence, q.Source, q.ObservedAt)
 }
 
 // Forget appends a targeted or blanket retraction.

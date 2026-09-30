@@ -185,6 +185,10 @@ var ErrTextSearchUnsupported = engine.ErrTextSearchUnsupported
 // TextField is the metadata key that holds each event's searchable text.
 const TextField = engine.TextField
 
+// MaxObservationSkew is how far past the writer's clock
+// RememberRequest.ObservedAt may be before Remember refuses it.
+const MaxObservationSkew = engine.MaxObservationSkew
+
 type LexicalEmbedder = engine.LexicalEmbedder
 
 const LexicalSpace = engine.LexicalSpace

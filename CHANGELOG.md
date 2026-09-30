@@ -12,6 +12,12 @@
   LongMemEval-S subset, recall over stored conversation turns found an answer
   session in its top ten for 98% of questions, up from 62% with the hashed
   vectors alone.
+- `RememberRequest.ObservedAt` and `Client.RememberTextAt` record statements
+  made earlier, such as an imported conversation. Observation time decides
+  what holds, so statements written out of order still supersede in the order
+  they were made, and `AsOf` answers for their period. Times more than a
+  minute in the future are refused. The Python client's `remember` takes
+  `observed_at` (an RFC3339 string or an aware `datetime`).
 - Every event stores its searchable text under the `text` metadata key
   (`TextField`). Events written before this release have none, so only the
   vector search reaches them.

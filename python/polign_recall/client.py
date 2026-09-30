@@ -209,6 +209,16 @@ class ResumeContext:
         return cls(**known)
 
 
+def _instant(value: str | datetime, name: str) -> str:
+    """An instant for the server: a timezone-aware datetime, or a string the
+    server parses as RFC3339."""
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            raise ValueError(f"{name} datetime must include a timezone")
+        return value.isoformat()
+    return value
+
+
 def _lease_error(exc: RecallError) -> RecallError:
     """Give lease failures their own code, so a caller can tell "someone else
     is running this agent" from a broken call."""
@@ -419,13 +429,22 @@ class Client:
                  value: Any = _MISSING, *, text: str | None = None,
                  statements: Sequence[Mapping[str, Any]] | None = None,
                  kind: str | None = None, confidence: float | None = None,
-                 source: str | None = None) -> RememberResult | ExtractionResult:
+                 source: str | None = None,
+                 observed_at: str | datetime | None = None) -> RememberResult | ExtractionResult:
+        """Record a typed statement, or statements proposed from text.
+
+        `observed_at` dates a statement made earlier, such as a line of an
+        imported conversation; omitted means now. A statement dated before a
+        later one for the same subject and predicate is kept as history and
+        does not replace it. The server refuses times in the future.
+        """
+        dated = {"observed_at": _instant(observed_at, "observed_at")} if observed_at is not None else {}
         if text is not None:
             if any(x is not None for x in (subject, predicate, kind, confidence, source)) or value is not _MISSING:
                 raise ValueError("text mode cannot be combined with typed fields")
             if statements is None:
                 raise ValueError("text mode requires statements proposed by your agent")
-            data = self._tool("remember", {"text": text, "statements": list(statements)})
+            data = self._tool("remember", {"text": text, "statements": list(statements), **dated})
             return ExtractionResult(tuple(data.get("proposals") or []),
                                     tuple(RememberResult.decode(r) for r in data["results"]),
                                     tuple(data.get("unfiled") or []))
@@ -433,17 +452,15 @@ class Client:
             raise ValueError("statements requires original text")
         if subject is None or predicate is None or value is _MISSING:
             raise ValueError("typed remember requires subject, predicate, and value")
-        args = {"subject": subject, "predicate": predicate, "value": value}
+        args = {"subject": subject, "predicate": predicate, "value": value, **dated}
         args.update({k: v for k, v in {"kind": kind, "confidence": confidence, "source": source}.items() if v is not None})
         return RememberResult.decode(self._tool("remember", args))
 
     def recall(self, subject: str | None = None, predicate: str | None = None, *,
                query: str | None = None, as_of: str | datetime | None = None,
                min_confidence: float | None = None, limit: int | None = None) -> list[Belief]:
-        if isinstance(as_of, datetime):
-            if as_of.tzinfo is None:
-                raise ValueError("as_of datetime must include a timezone")
-            as_of = as_of.isoformat()
+        if as_of is not None:
+            as_of = _instant(as_of, "as_of")
         args = {"subject": subject, "predicate": predicate, "query": query,
                 "as_of": as_of, "min_confidence": min_confidence, "limit": limit}
         return [Belief(**b) for b in self._tool("recall", {k: v for k, v in args.items() if v is not None}) or []]

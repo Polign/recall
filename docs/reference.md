@@ -171,6 +171,16 @@ value does not clear the pair. Remember defaults to kind `fact`, source
 `user_stated`, and confidence 1. Set its optional confidence pointer to record
 an explicit zero. Exact reads, history, and exports work without an embedder.
 
+`RememberRequest.ObservedAt` records a statement made earlier, such as a line
+from an imported conversation; zero means now. The statement is judged at its
+own time: one dated before a later statement for the same subject and
+predicate is kept as history, answers `AsOf` queries for its period, and does
+not replace what the later one says. Remember refuses a time more than
+`MaxObservationSkew` (one minute) past the writer's clock, because a statement
+dated in the future would stay hidden from every query about the present.
+`RememberTextAt` does the same for text mode, stamping every statement and note
+it writes. Forget always records its retraction after everything it withdraws.
+
 Client configuration is validated and its registry is copied. Both Client and
 legacy Store return a registry copy, so callers cannot mutate their configuration
 through `Registry()`. Backends and embedders must support concurrent calls and

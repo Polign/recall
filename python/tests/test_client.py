@@ -59,6 +59,20 @@ class TransportTests(unittest.TestCase):
         with self.assertRaises(RecallError):
             memory.predicates()
 
+    def test_observed_at_is_sent_as_an_instant(self):
+        from datetime import datetime, timezone
+        with Client(command=self.command) as memory:
+            sent = []
+            real = memory._tool
+            memory._tool = lambda name, args: (sent.append(args), real(name, args))[1]
+            memory.remember("user", "prefers_editor", "vim", observed_at=datetime(2023, 3, 1, 9, tzinfo=timezone.utc))
+            memory.remember("user", "prefers_editor", "vim", observed_at="2023-03-01T09:00:00Z")
+            memory.remember("user", "prefers_editor", "vim")
+            self.assertEqual([a.get("observed_at") for a in sent],
+                             ["2023-03-01T09:00:00+00:00", "2023-03-01T09:00:00Z", None])
+            with self.assertRaises(ValueError):
+                memory.remember("user", "prefers_editor", "vim", observed_at=datetime(2023, 3, 1))
+
     def test_partial_results_are_preserved(self):
         with Client(command=self.command) as memory:
             with self.assertRaises(RecallError) as failure:
@@ -94,6 +108,14 @@ class IntegrationTests(unittest.TestCase):
                 memory.remember(text="valid text", statements=[{
                     "subject": subject, "predicate": "name", "value": "made up", "evidence": "fabricated"
                 }])
+            # An imported conversation, written out of order: the date decides.
+            dated = subject + "-dated"
+            memory.remember(text="I use emacs now.", statements=[{
+                "subject": dated, "predicate": "prefers_editor", "value": "emacs", "evidence": "I use emacs now."
+            }], observed_at="2023-05-01T09:00:00Z")
+            memory.remember(dated, "prefers_editor", "vim", observed_at="2023-03-01T09:00:00Z")
+            self.assertEqual(memory.recall(dated, "prefers_editor")[0].value, "emacs")
+            self.assertEqual(memory.recall(dated, "prefers_editor", as_of="2023-04-01T00:00:00Z")[0].value, "vim")
         with self.connect() as memory:
             self.assertEqual(memory.recall(subject, "prefers_editor")[0].value, "neovim")
             self.assertEqual(memory.forget(subject, "prefers_editor", "neovim"), 1)

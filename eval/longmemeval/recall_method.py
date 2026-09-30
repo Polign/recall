@@ -10,11 +10,9 @@ returns.
                 over registry.json (see extract.py); the reader sees beliefs,
                 with the values a single-valued belief replaced.
 
-Two stopgaps until remember accepts an observation time:
-  - observed_at is the wall clock at ingest, so recall() is called without
-    as_of (the question dates are in 2023 and would hide every event).
-  - The reader is shown each belief's session date from the ingest log, which
-    is the date an observed_at override would have stored.
+Every write carries its session date as observed_at, and recall() is asked
+as_of the question date, so supersession and "when" come from Recall itself.
+The reader sees each belief's observed_at in the dataset's date format.
 """
 from __future__ import annotations
 
@@ -38,6 +36,20 @@ if os.environ.get("LME_POLIGN_BIN"):
 MAX_TEXT_BYTES = 32768  # remember's text limit, in UTF-8 bytes
 
 
+def instant(date: str) -> str:
+    """A LongMemEval date, "2023/05/20 (Sat) 02:21", as RFC3339 UTC."""
+    day, _, clock = date.partition(" (")
+    clock = clock.split(") ")[-1] if ") " in clock else "00:00"
+    return f"{day.replace('/', '-')}T{clock}:00Z"
+
+
+def dataset_date(observed_at: str) -> str:
+    """An RFC3339 instant back in the dataset's date format."""
+    from datetime import datetime
+    t = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+    return t.strftime("%Y/%m/%d (%a) %H:%M")
+
+
 def render(turns: list[dict[str, Any]]) -> str:
     text = "\n\n".join(f"{t['role']}: {t['content'].strip()}" for t in turns)
     return text.encode()[:MAX_TEXT_BYTES].decode(errors="ignore")
@@ -52,7 +64,7 @@ def ingest_notes(client: Any, entry: dict[str, Any], rounds) -> list[dict[str, A
             text = render(r)
             if not text.strip():
                 continue
-            result = client.remember(text=text, statements=[])
+            result = client.remember(text=text, statements=[], observed_at=instant(date))
             for rr in result.results:
                 log.append({"event_id": rr.stored.event_id, "session_id": sid, "date": date,
                             "predicate": rr.stored.predicate, "probe": str(rr.stored.value)})
@@ -120,7 +132,7 @@ def ingest_typed(client: Any, entry: dict[str, Any], rounds, extractor: str, sta
                 if st["subject"] not in subjects:
                     subjects.append(st["subject"])
             for j in range(0, len(valid), 32):  # remember takes 32 statements per call
-                result = client.remember(text=text, statements=valid[j:j + 32])
+                result = client.remember(text=text, statements=valid[j:j + 32], observed_at=instant(date))
                 for rr in result.results:
                     log.append({"event_id": rr.stored.event_id, "session_id": sid, "date": date,
                                 "predicate": rr.stored.predicate,
@@ -158,7 +170,7 @@ def wait_for_text_index(store: Path, event_id: str, probe: str, timeout: float =
     return -1.0
 
 
-def describe(b: Any, where: dict[str, dict], client: Any, reg: dict[str, Any]) -> str:
+def describe(b: Any, client: Any, reg: dict[str, Any]) -> str:
     """One belief as the reader sees it. A single-valued belief also lists the
     values it replaced, which is what "what was it before" questions need."""
     if b.predicate == "note":
@@ -169,7 +181,7 @@ def describe(b: Any, where: dict[str, dict], client: Any, reg: dict[str, Any]) -
                    if not e.retraction and e.id != b.event_id and e.value is not None]
         if earlier:
             line += " (earlier: " + "; ".join(
-                f"{e.value} as of {where.get(e.id, {}).get('date', '?')}" for e in earlier[-3:]) + ")"
+                f"{e.value} as of {dataset_date(e.observed_at)}" for e in earlier[-3:]) + ")"
     return line
 
 
@@ -199,14 +211,14 @@ def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
                 stats["index_wait_s"] = wait_for_text_index(store, log[-1]["event_id"], log[-1]["probe"])
 
             t1 = time.monotonic()
-            beliefs = client.recall(query=entry["question"], limit=k)
+            beliefs = client.recall(query=entry["question"], limit=k, as_of=instant(entry["question_date"]))
             recall_ms = (time.monotonic() - t1) * 1000
 
             where = {r["event_id"]: r for r in log}
             chunks, order = [], []
             for b in beliefs:
                 src = where.get(b.event_id, {})
-                chunks.append((src.get("date", ""), [{"role": "memory", "content": describe(b, where, client, reg)}]))
+                chunks.append((dataset_date(b.observed_at), [{"role": "memory", "content": describe(b, client, reg)}]))
                 sid = src.get("session_id")
                 if sid and sid not in order:
                     order.append(sid)

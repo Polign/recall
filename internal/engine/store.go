@@ -130,11 +130,25 @@ func (s *Store) Remember(kind, subject, predicate string, value any, confidence 
 	if confidence == 0 {
 		confidence = 1
 	}
-	return s.remember(kind, subject, predicate, value, confidence, source)
+	return s.remember(kind, subject, predicate, value, confidence, source, time.Time{})
 }
 
-func (s *Store) remember(kind, subject, predicate string, value any, confidence float64, source string) (RememberResult, error) {
+// MaxObservationSkew is how far past the writer's clock an observation time
+// may be. A statement observed in the future would stay hidden from every
+// query about the present until its time came, so a later one is refused.
+const MaxObservationSkew = time.Minute
+
+func (s *Store) remember(kind, subject, predicate string, value any, confidence float64, source string, observedAt time.Time) (RememberResult, error) {
 	var zero RememberResult
+
+	now := s.now()
+	if !observedAt.IsZero() {
+		if observedAt.After(now.Add(MaxObservationSkew)) {
+			return zero, fmt.Errorf("observed_at %s is in the future; a statement can only be recorded as made now or earlier",
+				observedAt.UTC().Format(time.RFC3339))
+		}
+		now = observedAt
+	}
 
 	if !validKinds[kind] {
 		return zero, fmt.Errorf(`kind must be "fact" or "preference", got %q`, kind)
@@ -175,7 +189,7 @@ func (s *Store) remember(kind, subject, predicate string, value any, confidence 
 	// acceptance order, decides what is believed, so a statement observed
 	// earlier stays earlier: TestObservationTimeOverridesWriteAcceptanceOrder
 	// pins that, and Superseded below is only meaningful at this same ceiling.
-	now := disambiguateInstant(events, s.now())
+	now = disambiguateInstant(events, now)
 	held := Fold(events, spec.Cardinal(), now)
 
 	// Idempotence lives here rather than in the id: stating what is already

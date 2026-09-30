@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Proposal is an untrusted model suggestion, never a belief until Remember
@@ -46,6 +47,13 @@ const noteConfidence = 0.5
 // text, once per subject. A malformed proposal for a registered predicate
 // still fails the batch, because the caller can correct it.
 func (c *Client) RememberText(ctx context.Context, text string, extractor Extractor) (ExtractionResult, error) {
+	return c.RememberTextAt(ctx, text, extractor, time.Time{})
+}
+
+// RememberTextAt is RememberText for text that was said at observedAt, such as
+// an imported conversation. Every statement and note it writes carries that
+// time; zero means now. See RememberRequest.ObservedAt.
+func (c *Client) RememberTextAt(ctx context.Context, text string, extractor Extractor, observedAt time.Time) (ExtractionResult, error) {
 	out := ExtractionResult{Results: []RememberResult{}}
 	if ctx == nil {
 		return out, fmt.Errorf("recall: context is required")
@@ -100,7 +108,7 @@ func (c *Client) RememberText(ctx context.Context, text string, extractor Extrac
 			kind = "preference"
 		}
 		confidence := 0.8
-		r, err := c.Remember(ctx, RememberRequest{Subject: p.Subject, Predicate: p.Predicate, Value: p.Value, Kind: kind, Source: "agent_inferred", Confidence: &confidence})
+		r, err := c.Remember(ctx, RememberRequest{Subject: p.Subject, Predicate: p.Predicate, Value: p.Value, Kind: kind, Source: "agent_inferred", Confidence: &confidence, ObservedAt: observedAt})
 		if err != nil {
 			return out, fmt.Errorf("recall: proposal %d failed after %d completed writes: %w", i, len(out.Results), err)
 		}
@@ -108,7 +116,7 @@ func (c *Client) RememberText(ctx context.Context, text string, extractor Extrac
 	}
 	for _, subject := range noteSubjects {
 		confidence := noteConfidence
-		r, err := c.Remember(ctx, RememberRequest{Subject: subject, Predicate: NotePredicate, Value: text, Source: "agent_inferred", Confidence: &confidence})
+		r, err := c.Remember(ctx, RememberRequest{Subject: subject, Predicate: NotePredicate, Value: text, Source: "agent_inferred", Confidence: &confidence, ObservedAt: observedAt})
 		if err != nil {
 			return out, fmt.Errorf("recall: note for %q failed after %d completed writes: %w", subject, len(out.Results), err)
 		}
