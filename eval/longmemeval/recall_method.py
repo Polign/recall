@@ -9,6 +9,9 @@ returns.
   recall-typed  an extractor model turns each session into typed statements
                 over registry.json (see extract.py); the reader sees beliefs,
                 with the values a single-valued belief replaced.
+  recall-linked recall-typed plus every round kept whole as a note, with each
+                statement written from the round it quotes; the reader sees
+                each fact with its source round, and matching rounds directly.
 
 Every write carries its session date as observed_at, and recall() is asked
 as_of the question date, so supersession and "when" come from Recall itself.
@@ -103,10 +106,15 @@ def exact_evidence(evidence: str, text: str) -> str | None:
     return m.group(0) if m else None
 
 
-def ingest_typed(client: Any, entry: dict[str, Any], rounds, extractor: str, stats: dict) -> list[dict[str, Any]]:
+def ingest_typed(client: Any, entry: dict[str, Any], rounds, extractor: str, stats: dict,
+                 link: bool = False) -> list[dict[str, Any]]:
     """Extracts typed statements from each session in date order and writes
     them with remember(text, statements). Statements whose evidence is not an
-    exact excerpt are dropped here rather than failing the whole batch."""
+    exact excerpt are dropped here rather than failing the whole batch.
+
+    With link, every round is first kept whole as a note (the episode), and
+    each statement is written with the round its evidence quotes as its text,
+    so the log records which episode a fact came from."""
     import extract
 
     reg = extract.registry()
@@ -114,6 +122,17 @@ def ingest_typed(client: Any, entry: dict[str, Any], rounds, extractor: str, sta
     subjects: list[str] = []
     log = []
     for sid, date, turns in lme.sessions(entry):
+        episodes: list[tuple[str, str]] = []  # (round text, episode event id)
+        if link:
+            for r in rounds(turns):
+                text = render(r)
+                if not text.strip():
+                    continue
+                result = client.remember(text=text, statements=[], observed_at=instant(date))
+                for rr in result.results:
+                    episodes.append((text, rr.stored.event_id))
+                    log.append({"event_id": rr.stored.event_id, "session_id": sid, "date": date,
+                                "predicate": "note", "probe": str(rr.stored.value), "source": text})
         for i, text in enumerate(chunks_of(turns, rounds)):
             key = f"{sid}#{i}"
             statements = cache.get(key)
@@ -131,12 +150,26 @@ def ingest_typed(client: Any, entry: dict[str, Any], rounds, extractor: str, sta
             for st in valid:
                 if st["subject"] not in subjects:
                     subjects.append(st["subject"])
-            for j in range(0, len(valid), 32):  # remember takes 32 statements per call
-                result = client.remember(text=text, statements=valid[j:j + 32], observed_at=instant(date))
-                for rr in result.results:
-                    log.append({"event_id": rr.stored.event_id, "session_id": sid, "date": date,
-                                "predicate": rr.stored.predicate,
-                                "probe": f"{rr.stored.subject} {rr.stored.predicate} {rr.stored.value}"})
+            groups: list[tuple[str, str, list]] = []  # (text written with, episode id, statements)
+            if link:
+                by_episode: dict[str, list] = {}
+                for st in valid:
+                    home = next((ep for ep in episodes if st["evidence"] in ep[0]), None)
+                    if home is None:  # the quote spans two rounds
+                        stats["cross_round"] += 1
+                        continue
+                    by_episode.setdefault(home[1], []).append(st)
+                groups = [(next(t for t, e in episodes if e == eid), eid, sts) for eid, sts in by_episode.items()]
+            else:
+                groups = [(text, "", valid)]
+            for body, episode, sts in groups:
+                for j in range(0, len(sts), 32):  # remember takes 32 statements per call
+                    result = client.remember(text=body, statements=sts[j:j + 32], observed_at=instant(date))
+                    for rr in result.results:
+                        log.append({"event_id": rr.stored.event_id, "session_id": sid, "date": date,
+                                    "predicate": rr.stored.predicate,
+                                    "probe": f"{rr.stored.subject} {rr.stored.predicate} {rr.stored.value}",
+                                    **({"source": body, "episode": episode} if link else {})})
     stats["subjects"] = len(subjects)
     return log
 
@@ -189,10 +222,10 @@ def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
             extractor: str = "") -> tuple[list, list[str], dict]:
     from polign_recall.client import Client
 
-    stats: dict[str, Any] = {"proposed": 0, "bad_evidence": 0, "unregistered": 0}
+    stats: dict[str, Any] = {"proposed": 0, "bad_evidence": 0, "unregistered": 0, "cross_round": 0}
     env = {}
     reg: dict[str, Any] = {}
-    if method == "recall-typed":
+    if method in ("recall-typed", "recall-linked"):
         import extract
         env["POLIGN_PREDICATES"] = str(extract.REGISTRY_PATH)
         reg = extract.registry()
@@ -202,8 +235,8 @@ def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
             t0 = time.monotonic()
             if method == "recall-notes":
                 log = ingest_notes(client, entry, rounds)
-            elif method == "recall-typed":
-                log = ingest_typed(client, entry, rounds, extractor, stats)
+            elif method in ("recall-typed", "recall-linked"):
+                log = ingest_typed(client, entry, rounds, extractor, stats, link=method == "recall-linked")
             else:
                 raise SystemExit(f"unknown recall method {method!r}")
             ingest_s = time.monotonic() - t0
@@ -216,9 +249,20 @@ def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
 
             where = {r["event_id"]: r for r in log}
             chunks, order = [], []
+            shown: set[str] = set()  # source rounds already in the context
             for b in beliefs:
                 src = where.get(b.event_id, {})
-                chunks.append((dataset_date(b.observed_at), [{"role": "memory", "content": describe(b, client, reg)}]))
+                content = describe(b, client, reg)
+                if method == "recall-linked":
+                    source = src.get("source", "")
+                    if b.predicate == "note":
+                        if content in shown:
+                            continue
+                        shown.add(content)
+                    elif source and source not in shown:
+                        shown.add(source)
+                        content = f"{content}\nsource conversation:\n{source}"
+                chunks.append((dataset_date(b.observed_at), [{"role": "memory", "content": content}]))
                 sid = src.get("session_id")
                 if sid and sid not in order:
                     order.append(sid)

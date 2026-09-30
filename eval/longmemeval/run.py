@@ -14,6 +14,7 @@ Methods:
   bm25-turn     top-k rounds (a user turn and the reply after it) by BM25
   recall-notes  Recall as a note store; see recall_method.py
   recall-typed  Recall over typed statements from an extractor model
+  recall-linked recall-typed with each fact linked to its source round
 """
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ from typing import Any
 import lme
 from bm25 import BM25
 
-METHODS = ("full", "oracle", "bm25-session", "bm25-turn", "recall-notes", "recall-typed")
+METHODS = ("full", "oracle", "bm25-session", "bm25-turn", "recall-notes", "recall-typed", "recall-linked")
 
 
 def rounds(turns: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
@@ -110,7 +111,8 @@ def main() -> None:
         else:
             chunks, retrieved = context(entry, args.method, args.k)
         history, history_tokens = lme.truncate_history(lme.format_history(chunks), history_budget)
-        prompt = lme.reader_prompt(history, entry, args.cot, facts=args.method == "recall-typed")
+        prompt = lme.reader_prompt(history, entry, args.cot, facts=args.method == "recall-typed",
+                                   merge=args.method == "recall-linked")
         hyp = "" if args.dry_run else lme.complete(args.reader, prompt, args.max_tokens)
         return {"question_id": entry["question_id"], "hypothesis": hyp,
                 "retrieved_session_ids": retrieved, "history_tokens": history_tokens,

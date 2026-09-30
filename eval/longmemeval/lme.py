@@ -36,6 +36,21 @@ READER_PROMPT_FACTS_COT = (
     "information, and then reason over the information to get the answer.\n\n\nHistory Chats:\n\n{}\n\n"
     "Current Date: {}\nQuestion: {}\nAnswer (step by step):"
 )
+# Upstream's reader prompt for chat history plus extracted facts
+# (merge_key_expansion_into_value = merge), used when the reader sees memory
+# facts together with the conversation they came from.
+READER_PROMPT_MERGE = (
+    "I will give you several history chats between you and a user, as well as the relevant user facts "
+    "extracted from the chat history. Please answer the question based on the relevant chat history and the "
+    "user facts\n\n\nHistory Chats:\n\n{}\n\nCurrent Date: {}\nQuestion: {}\nAnswer:"
+)
+READER_PROMPT_MERGE_COT = (
+    "I will give you several history chats between you and a user, as well as the relevant user facts "
+    "extracted from the chat history. Please answer the question based on the relevant chat history and the "
+    "user facts. Answer the question step by step: first extract all the relevant information, and then "
+    "reason over the information to get the answer.\n\n\nHistory Chats:\n\n{}\n\nCurrent Date: {}\n"
+    "Question: {}\nAnswer (step by step):"
+)
 READER_PROMPT_COT = (
     "I will give you several history chats between you and a user. Please answer the question "
     "based on the relevant chat history. Answer the question step by step: first extract all the "
@@ -110,8 +125,11 @@ def truncate_history(history: str, max_tokens: int) -> tuple[str, int]:
     return enc.decode(tokens[:max_tokens]), len(tokens)
 
 
-def reader_prompt(history: str, entry: dict[str, Any], cot: bool, facts: bool = False) -> str:
-    if facts:
+def reader_prompt(history: str, entry: dict[str, Any], cot: bool, facts: bool = False,
+                  merge: bool = False) -> str:
+    if merge:
+        template = READER_PROMPT_MERGE_COT if cot else READER_PROMPT_MERGE
+    elif facts:
         template = READER_PROMPT_FACTS_COT if cot else READER_PROMPT_FACTS
     else:
         template = READER_PROMPT_COT if cot else READER_PROMPT
