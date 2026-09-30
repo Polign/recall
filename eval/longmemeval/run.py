@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -88,7 +89,8 @@ def main() -> None:
     entries = lme.sample(lme.load(args.data), args.limit)
     out = lme.run_dir(args.run)
     manifest = {**vars(args), "data_sha256": lme.file_sha256(lme.DATA / args.data),
-                "questions": len(entries), "argv": sys.argv}
+                "questions": len(entries), "argv": sys.argv,
+                "polign_bin": os.environ.get("LME_POLIGN_BIN", "wheel")}
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
     hyp_path = out / "hyp.jsonl"

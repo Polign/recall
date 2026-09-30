@@ -3,6 +3,7 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -323,27 +324,56 @@ func (s *Store) Recall(q Query) ([]Belief, error) {
 		return s.recallExact(q, limit, asOf)
 	}
 
-	pairs, err := s.candidatePairs(q, limit)
+	candidates, err := s.candidatePairs(q, limit)
 	if err != nil {
 		return nil, err
 	}
 
-	var out ranked
-	for _, p := range pairs {
-		beliefs, err := s.pairBeliefs(p, asOf)
+	var hits []hit
+	for _, c := range candidates {
+		beliefs, err := s.pairBeliefs(c.pair, asOf)
 		if err != nil {
 			return nil, err
 		}
+		multi := s.cardinality(c.pair.predicate) == Multi
 		for _, b := range beliefs {
 			if !matchesBelief(b, q) {
 				continue
 			}
-			if out.add(b) >= limit {
-				return out.beliefs(), nil
+			rank := c.rank
+			if c.values != nil && multi {
+				// A multi-valued pair holds values that have nothing to do
+				// with each other, so each one answers the query only when
+				// its own event matched. Returning the rest in fold order is
+				// how a query for one note came back with the oldest ten.
+				r, ok := c.values[ValueKey(b.Value)]
+				if !ok {
+					continue
+				}
+				rank = r
 			}
+			// A single-valued pair ranks by its best-matching event: a hit on
+			// a superseded value still means the question is about this pair,
+			// and the answer is the value that holds now.
+			hits = append(hits, hit{b, rank})
+		}
+	}
+	sort.SliceStable(hits, func(i, j int) bool { return hits[i].rank < hits[j].rank })
+
+	var out ranked
+	for _, h := range hits {
+		if out.add(h.belief) >= limit {
+			break
 		}
 	}
 	return out.beliefs(), nil
+}
+
+// hit is one belief a semantic query found, with the search rank of the event
+// that earned it.
+type hit struct {
+	belief Belief
+	rank   int
 }
 
 // ranked collects one page of beliefs and returns typed beliefs ahead of
@@ -452,9 +482,19 @@ type pair struct{ subject, predicate string }
 // candidatePairs selects an explicitly requested pair or semantic candidates.
 // Broad exact queries use recallExact to keep discovering past withdrawn or
 // filtered pairs. Semantic candidates are approximate and folded afterwards.
-func (s *Store) candidatePairs(q Query, limit int) ([]pair, error) {
+// candidate is a pair a semantic query reached, with the search rank of its
+// best event and, per value, the rank of the best event asserting it.
+type candidate struct {
+	pair pair
+	rank int
+	// values is nil when the query named the pair outright, which asks for
+	// all of it rather than for the values the search happened to match.
+	values map[string]int
+}
+
+func (s *Store) candidatePairs(q Query, limit int) ([]candidate, error) {
 	if q.Subject != "" && q.Predicate != "" {
-		return []pair{{normalizeSubject(q.Subject), strings.TrimSpace(q.Predicate)}}, nil
+		return []candidate{{pair: pair{normalizeSubject(q.Subject), strings.TrimSpace(q.Predicate)}}}, nil
 	}
 
 	filter := candidateFilter(q)
@@ -471,7 +511,35 @@ func (s *Store) candidatePairs(q Query, limit int) ([]pair, error) {
 	if err != nil {
 		return nil, err
 	}
-	return dedupePairs(events), nil
+	return rankCandidates(events), nil
+}
+
+// rankCandidates groups search hits by pair, first hit first, and keeps the
+// rank of each pair's best event and of the best event asserting each value.
+// A retraction matching the query says the pair is relevant but asserts no
+// value, so it ranks the pair and nothing inside it.
+func rankCandidates(events []Event) []candidate {
+	index := map[pair]int{}
+	var out []candidate
+	for rank, e := range events {
+		p := pair{normalizeSubject(e.Subject), strings.TrimSpace(e.Predicate)}
+		if p.subject == "" || p.predicate == "" {
+			continue
+		}
+		i, seen := index[p]
+		if !seen {
+			i = len(out)
+			index[p] = i
+			out = append(out, candidate{pair: p, rank: rank, values: map[string]int{}})
+		}
+		if e.Retraction {
+			continue
+		}
+		if _, ok := out[i].values[ValueKey(e.Value)]; !ok {
+			out[i].values[ValueKey(e.Value)] = rank
+		}
+	}
+	return out
 }
 
 // dedupePairs keeps each pair once, in the order the events arrived, so that

@@ -3,6 +3,7 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,10 @@ type fakeDB struct {
 	// searchReversed serves hits oldest-last, to prove recall does not depend
 	// on a superseded event ranking low.
 	searchReversed bool
+	// bySimilarity ranks Search hits by dot product with the query vector,
+	// as a real index does. Without it Search serves arrival order, which
+	// cannot tell a relevant event from an old one.
+	bySimilarity bool
 }
 
 func newFakeDB() *fakeDB { return &fakeDB{records: map[string]StoredVector{}} }
@@ -70,9 +75,21 @@ func (f *fakeDB) List(_ string, filter map[string]any, limit int) ([]StoredVecto
 	return got, len(f.matching(filter, 0)), nil
 }
 
-func (f *fakeDB) Search(_ string, _ []float32, k int, filter map[string]any) ([]Hit, error) {
+func (f *fakeDB) Search(_ string, query []float32, k int, filter map[string]any) ([]Hit, error) {
+	recs := f.matching(filter, k)
+	if f.bySimilarity {
+		recs = f.matching(filter, 0)
+		dot := func(v []float32) (sum float32) {
+			for i := range min(len(v), len(query)) {
+				sum += v[i] * query[i]
+			}
+			return sum
+		}
+		sort.SliceStable(recs, func(i, j int) bool { return dot(recs[i].Values) > dot(recs[j].Values) })
+		recs = recs[:min(k, len(recs))]
+	}
 	out := []Hit{}
-	for _, rec := range f.matching(filter, k) {
+	for _, rec := range recs {
 		out = append(out, Hit{ID: rec.ID, Metadata: rec.Metadata})
 	}
 	return out, nil

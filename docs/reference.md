@@ -113,7 +113,16 @@ beliefs, err = store.Recall(recall.Query{
 // Semantic recall, folded like every other read, so a superseded statement
 // ranking top of the search still cannot come back as a live belief.
 beliefs, err = store.Recall(recall.Query{Text: "which editor do I use"})
+```
 
+Semantic recall returns beliefs in search order. A single-valued predicate
+answers with its current value, placed where its best-matching event ranked.
+A multi-valued predicate, including `note`, answers only with the values whose
+own events the search reached, so a query about one note does not bring back
+unrelated notes. A query that names both subject and predicate returns every
+value of that pair, whatever the text.
+
+```go
 // Every event behind a belief, oldest first: the audit trail.
 events, err := store.History("user", "prefers_editor")
 ```

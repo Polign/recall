@@ -16,6 +16,7 @@ Two stopgaps until remember accepts an observation time:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import tempfile
 import time
@@ -23,6 +24,12 @@ from pathlib import Path
 from typing import Any
 
 import lme
+
+# LME_POLIGN_BIN runs a locally built polign CLI instead of the one the
+# polign_db wheel installed, to measure an engine change before it ships.
+if os.environ.get("LME_POLIGN_BIN"):
+    from polign_recall import client as _client
+    _client.polign_bin = lambda: os.environ["LME_POLIGN_BIN"]
 
 MAX_TEXT_BYTES = 32768  # remember's text limit, in UTF-8 bytes
 

@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Semantic recall ranks beliefs by the query. It used to rank subject and
+  predicate pairs, then return each pair's values in the order they were
+  written, so a query that reached a multi-valued pair came back with that
+  pair's oldest values whatever it asked. Every note shares one pair, which
+  made `recall(query=...)` over notes return the same oldest notes for any
+  question. A multi-valued pair now returns only the values whose own events
+  the search matched, best first. A single-valued pair still answers with its
+  current value, ranked by its best-matching event. Naming both subject and
+  predicate still returns the whole pair.
+
 ## [0.6.1] - 2026-09-26
 
 ### Added
