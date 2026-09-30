@@ -4,6 +4,14 @@
 
 ### Added
 
+- Python client: `remember` takes `observed_at` (an RFC3339 string or an
+  aware `datetime`). It needs a `polign` CLI whose MCP `remember` tool accepts
+  `observed_at`.
+
+## [0.7.0] - 2026-09-29
+
+### Added
+
 - Semantic recall uses the backend's lexical (BM25) search when it has one,
   through the optional `TextSearchBackend` (or `TextSearcher` for `NewStore`).
   The Polign backend implements it with Polign's segment text index. With the
@@ -16,8 +24,7 @@
   made earlier, such as an imported conversation. Observation time decides
   what holds, so statements written out of order still supersede in the order
   they were made, and `AsOf` answers for their period. Times more than a
-  minute in the future are refused. The Python client's `remember` takes
-  `observed_at` (an RFC3339 string or an aware `datetime`).
+  minute in the future are refused.
 - Every event stores its searchable text under the `text` metadata key
   (`TextField`). Events written before this release have none, so only the
   vector search reaches them.
