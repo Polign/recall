@@ -36,7 +36,8 @@ if os.environ.get("LME_POLIGN_BIN"):
     from polign_recall import client as _client
     _client.polign_bin = lambda: os.environ["LME_POLIGN_BIN"]
 
-MAX_TEXT_BYTES = 32768  # remember's text limit, in UTF-8 bytes
+MAX_TEXT_BYTES = 32768
+MAX_EVIDENCE_BYTES = 2048  # recall.MaxEvidenceBytes  # remember's text limit, in UTF-8 bytes
 
 
 def instant(date: str) -> str:
@@ -148,8 +149,12 @@ def ingest_typed(client: Any, entry: dict[str, Any], rounds, extractor: str, sta
             valid = []
             for st in statements:
                 span = exact_evidence(st["evidence"], text)
-                if span is not None:
-                    valid.append({**st, "evidence": span})
+                if span is None:
+                    continue
+                if len(span.strip().encode()) > MAX_EVIDENCE_BYTES:  # Recall refuses a longer excerpt
+                    stats["long_evidence"] += 1
+                    continue
+                valid.append({**st, "evidence": span})
             stats["proposed"] += len(statements)
             stats["bad_evidence"] += len(statements) - len(valid)
             stats["unregistered"] += sum(st["predicate"] not in reg for st in valid)
@@ -216,11 +221,20 @@ def describe(b: Any, client: Any, reg: dict[str, Any]) -> str:
     return line
 
 
+def stop_local_server(store: Path) -> None:
+    """Stops the polign-server the client started for this store. The client
+    leaves it running on purpose, so other processes can share the directory;
+    one question's store is never shared, and a server left behind per
+    question exhausts the machine within a few hundred questions."""
+    import subprocess
+    subprocess.run(["pkill", "-f", f"fs:{store}/data"], check=False)
+
+
 def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
-            extractor: str = "") -> tuple[list, list[str], dict]:
+            extractor: str = "", as_of: str = "question") -> tuple[list, list[str], dict]:
     from polign_recall.client import Client
 
-    stats: dict[str, Any] = {"proposed": 0, "bad_evidence": 0, "unregistered": 0, "cross_round": 0}
+    stats: dict[str, Any] = {"proposed": 0, "bad_evidence": 0, "unregistered": 0, "cross_round": 0, "long_evidence": 0}
     env = {}
     reg: dict[str, Any] = {}
     if method in ("recall-typed", "recall-linked"):
@@ -242,7 +256,12 @@ def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
                 stats["index_wait_s"] = wait_for_text_index(store, log[-1]["event_id"], log[-1]["probe"])
 
             t1 = time.monotonic()
-            beliefs = client.recall(query=entry["question"], limit=k, as_of=instant(entry["question_date"]),
+            # as_of="question" asks what was known on the question date, so a
+            # session dated after it is not seen; "none" sees all history, as
+            # the upstream baselines do (44 questions have an answer session
+            # dated after the question).
+            when = instant(entry["question_date"]) if as_of == "question" else None
+            beliefs = client.recall(query=entry["question"], limit=k, as_of=when,
                                     with_sources=method == "recall-linked")
             recall_ms = (time.monotonic() - t1) * 1000
 
@@ -266,6 +285,7 @@ def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
                 if sid and sid not in order:
                     order.append(sid)
     finally:
+        stop_local_server(store)
         shutil.rmtree(store, ignore_errors=True)
 
     (cache_dir / f"{entry['question_id']}.ingest.jsonl").write_text("".join(json.dumps(r) + "\n" for r in log))

@@ -1,5 +1,6 @@
-// resume shows an agent surviving a crash without a snapshot. Each run
-// resumes the agent, prints the briefing it would hand the model, then works
+// resume shows an agent surviving a crash by resuming from its records, not from
+// a process snapshot. Each run resumes the agent, prints the briefing it would
+// hand the model, then works
 // through a fixed task, recording its turns and working state as it goes.
 // Pass -crash-at to kill the process mid-task without releasing its lease;
 // the next run waits out the lease and continues from the last note.

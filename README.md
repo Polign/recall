@@ -1,15 +1,19 @@
-# Recall
+# Polign Recall
 
-**Shared, typed memory for agents, and a way to resume them without snapshots.**
+**Agents remember things that stop being true.**
 
-Recall lets agents share facts, preferences, and project context across processes
-and sessions. One agent can record a preference, another can update it, and both
-can read the current value and its history.
+Polign Recall gives agents typed memory with explicit correction rules and
+queryable history. When a fact changes, the new value replaces the old one by a
+rule, not by a model's judgment. The old value stays on record, so you can ask
+what an agent believed at any earlier moment and see why the answer changed.
 
-An agent can also keep notes on its own work: its goal, plan, progress, and
-where its work lives. When the process crashes or moves to another machine, the
-next one [resumes from those records](#resuming-an-agent) instead of starting
-over or restoring a container snapshot.
+Agents share that memory across processes and sessions. One agent can record a
+preference, another can correct it, and both read the same current value and
+the same history.
+
+Recall can also [resume an agent from its records](#resuming-an-agent), not from
+a process or container snapshot, when the process crashes or moves to another
+machine.
 
 Use it through **Go**, **Python**, or **MCP**, with
 [Polign](https://github.com/Polign/polign) as the storage backend. Go applications
@@ -52,20 +56,27 @@ with Client(local_dir="./recall-data") as memory:
 PY
 ```
 
-Run a second process in the same terminal. It reads the saved preference and
-the earlier statements:
+Run a second process in the same terminal. It reads the current preference,
+the full history, and what was believed before the correction:
 
 ```sh
 python - <<'PY'
 from polign_recall import Client
 
 with Client(local_dir="./recall-data") as memory:
-    current = memory.recall("user", "prefers_editor")
-    print(current[0].value)  # neovim
-    print([event.value for event in memory.history("user", "prefers_editor")])
-    # In a fresh directory: ['vim', 'neovim']
+    print(memory.recall("user", "prefers_editor")[0].value)  # neovim
+
+    events = memory.history("user", "prefers_editor")
+    print([event.value for event in events])  # ['vim', 'neovim'] in a fresh directory
+
+    # Ask what was believed at the moment of the first statement.
+    before = memory.recall("user", "prefers_editor", as_of=events[0].observed_at)
+    print(before[0].value)  # vim
 PY
 ```
+
+The correction did not erase `vim`. It is still there to read, which is how you
+answer "what did the agent believe yesterday, and when did that change?"
 
 The first client to open `./recall-data` starts a local `polign-server` for it
 in the background, and later clients share it. The memories stay in that
@@ -77,7 +88,7 @@ To share memory between machines, run `polign-server` yourself (requires
 `local_dir` out, and set `POLIGN_URL`, `POLIGN_COLLECTION`, and
 `POLIGN_API_KEY` when authentication is required.
 
-For examples covering historical reads and forgetting, see the
+For examples covering forgetting as well, see the
 [Python session example](examples/python/sessions.py) or
 [Go session example](examples/sessions).
 
@@ -113,7 +124,8 @@ instead of being dropped. Once you add a predicate for that kind of fact,
 ## Resuming an agent
 
 `Resume` gives an agent back the context it should start from, built from what
-it wrote down while it worked:
+it wrote down while it worked. The new process resumes from records, not from a
+process or container snapshot:
 
 - **Working state**: its goal, plan, progress, focus, and open questions.
 - **Pointers** to where its work lives, such as a git branch or an object key.

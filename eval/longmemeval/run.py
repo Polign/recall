@@ -75,6 +75,8 @@ def main() -> None:
     ap.add_argument("--method", choices=METHODS, required=True)
     ap.add_argument("--reader", default="gpt-4o-2024-08-06", help="provider:model; bare name = OpenAI")
     ap.add_argument("--k", type=int, default=10, help="chunks or beliefs passed to the reader")
+    ap.add_argument("--as-of", choices=("question", "none"), default="question",
+                    help="recall methods: answer as of the question date, or over all history as the baselines do")
     ap.add_argument("--extractor", default="gpt-4o-mini-2024-07-18", help="recall-typed extraction model")
     ap.add_argument("--cot", action="store_true", help="upstream's step-by-step reader prompt")
     ap.add_argument("--max-tokens", type=int, help="reader output budget (upstream: 500, or 800 with --cot)")
@@ -107,7 +109,7 @@ def main() -> None:
         stats: dict[str, Any] = {}
         if args.method.startswith("recall-"):
             import recall_method
-            chunks, retrieved, stats = recall_method.context(entry, args.method, args.k, rounds, out, args.extractor)
+            chunks, retrieved, stats = recall_method.context(entry, args.method, args.k, rounds, out, args.extractor, args.as_of)
         else:
             chunks, retrieved = context(entry, args.method, args.k)
         history, history_tokens = lme.truncate_history(lme.format_history(chunks), history_budget)
