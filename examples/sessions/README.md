@@ -29,7 +29,6 @@ that credential on every request. `-collection` and `-subject` select the data.
 For a server restart demonstration, run Polign with durable storage, for example
 `go run ./cmd/server -store fs:/tmp/recall-server` from the polign_db repository.
 After `seed`, stop and restart that server using the same store, then run
-`inspect`. Cold persistence and restart require a server containing
-[polign_db #99](https://github.com/Polign/polign_db/pull/99); v0.6.3 predates that
-support. This example uses the new Client API from this source checkout, pending
+`inspect`. Cold persistence and restart require Polign v0.6.4 or later; v0.6.3
+predates that support. This example uses the new Client API from this source checkout, pending
 its feature release.

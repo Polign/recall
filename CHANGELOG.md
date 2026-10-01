@@ -246,7 +246,7 @@ rather than answering from it, and now names which version moved.
 - Python client `polign-recall` v0.1.0 over the existing MCP stdio transport,
   with typed results, timeout handling, and no automatic write retries.
 - Claude Code Recall plugin v0.1.0 in `Polign/polign`, using the memory-only
-  MCP surface in Polign v0.6.4. That server release also contains #99's complete
+  MCP surface in Polign v0.6.4. That server release also contains complete
   cold-history support.
 
 The Go library's prior v0.1.0, v0.2.0, and v0.2.1 tags are preserved. Python and

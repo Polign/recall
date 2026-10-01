@@ -230,8 +230,7 @@ automatically retried.
 The [session example](../examples/sessions) runs remember, correction, as-of reads,
 and forgetting in separate processes, with instructions for a server restart.
 It uses fixture vectors for exact reads and needs no embedding service. Cold
-persistence and restart require Polign v0.6.4+, containing
-[polign_db #99](https://github.com/Polign/polign_db/pull/99). The v0.6.3 server
+persistence and restart require Polign v0.6.4 or later. The v0.6.3 server
 predates that support.
 
 ## Resuming an agent
