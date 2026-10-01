@@ -391,11 +391,144 @@ encoding, and the limits of replay and retries.
 }
 ```
 
-`cardinality` is `single` or `multi`. `value_type` is `string`, `number`, or
-`boolean`, and values are stored with that type, so a number compares
-numerically in a filter instead of lexically.
+`cardinality` is `single` or `multi`. `value_type` is one of the types below,
+and values are stored with that type, so a number compares numerically in a
+filter instead of lexically.
 
 `Registry.PromptTable()` renders the registry for an agent's system prompt.
+
+### Value types
+
+| `value_type` | A value is | Stored as |
+| --- | --- | --- |
+| `string` | Any text. This is the default. | The text |
+| `number` | A number | A number |
+| `boolean` | `true` or `false` | A boolean |
+| `enum` | One of the values listed in `allowed` | The spelling `allowed` gives it |
+| `date` | A day such as `2026-10-01`, or an RFC3339 time | The day as written, or the time in UTC |
+| `ref` | The name of another subject | The name, lowercased like a subject |
+
+```json
+{
+  "deal_stage": {
+    "cardinality": "single",
+    "value_type": "enum",
+    "allowed": ["lead", "qualified", "won", "lost"],
+    "description": "Where the deal stands"
+  },
+  "close_date": {"cardinality": "single", "value_type": "date", "description": "When the deal should close"},
+  "works_at": {"cardinality": "single", "value_type": "ref", "description": "Account the contact works at"}
+}
+```
+
+A wrong value is refused with an error that says what is expected. For an enum
+the error lists the allowed values, so the agent can correct its own call.
+
+Date values can be filtered by range with `Query.ValueAfter` and
+`Query.ValueBefore`.
+
+### References between subjects
+
+A `ref` value is the name of another subject. That makes memories link to each
+other: `lee works_at acme` points at the subject `acme`, which has memories of
+its own. You can read a link from either end.
+
+```go
+// Who points at acme? Every current ref whose value is "acme".
+people, err := client.Recall(ctx, recall.Query{RefersTo: "acme", Predicate: "works_at"})
+
+// What do we know about lee, and about what lee points at?
+beliefs, err := client.Recall(ctx, recall.Query{Subject: "lee", FollowRefs: true})
+```
+
+`RefersTo` is an exact read. Leave `Predicate` empty to search every `ref`
+predicate. It answers from the current fold, so when Lee moves to another
+company, Lee stops appearing under `acme`, and an `AsOf` read still shows where
+Lee worked before.
+
+`FollowRefs` adds what is believed about each subject a returned ref names. It
+goes one step and stays within `Limit`. Each belief it adds has `Via` set to the
+event of the ref that led to it. It does not follow the added beliefs further,
+so this is a way to read linked memories, not a graph traversal.
+
+### Starter registries
+
+`recall.StarterRegistry(name)` returns a ready-made registry for one kind of
+agent. Each one includes `note`, and each call returns an independent copy that
+you can add to or trim.
+
+| Name | Written for | Examples |
+| --- | --- | --- |
+| `coding` | Coding agents. This is `DefaultRegistry()`. | `prefers_editor`, `uses_technology`, `project_constraint` |
+| `support` | Support agents, one subject per customer | `plan`, `open_issue`, `sentiment`, `escalated_to` |
+| `sales` | Sales and CRM agents, with people and accounts as subjects | `works_at`, `deal_stage`, `close_date`, `objection` |
+| `voice` | Voice agents, such as LiveKit or Vapi | `callback_number`, `reason_for_calling`, `consent_to_record` |
+
+```go
+registry, err := recall.StarterRegistry(recall.StarterSupport)
+```
+
+The same registries are in [`registries/`](../registries) as JSON files, for
+tools that load a registry from a path.
+
+### Changing the registry
+
+A registry changes over time: predicates are added, renamed, and sometimes
+switched between single and multi. Recall records each change in the same log
+as the memories, so that old answers stay the same.
+
+Call `SyncRegistry` after you change the registry, for example at startup. It
+writes one event for each predicate whose definition differs from what the
+store has recorded, and nothing when they already match.
+
+```go
+recorded, err := client.SyncRegistry(ctx) // names of the predicates it recorded
+```
+
+What each kind of change does:
+
+| Change | How to make it | Effect |
+| --- | --- | --- |
+| Add a predicate | Add it to the registry | Writable at once |
+| Rename | Add the new name with the old name in `aliases`, and remove the old entry | Both names are one history. Old events answer under the new name, and a write to the old name is stored under the new one. |
+| Change cardinality | Change `cardinality` | Applies from the moment it is recorded. Earlier events keep the old rule. |
+| Widen or narrow an enum | Edit `allowed` | Applies to new writes. Values already stored stay readable and can be forgotten. |
+| Change the stored type, such as number to string | Not supported | `SyncRegistry` refuses it. Register a new predicate. |
+| Split one predicate into two | Not a registry change | Remember each fact again under the right predicate. Which half an old event belongs to is a decision about that event. |
+
+```json
+{
+  "favorite_editor": {
+    "cardinality": "single",
+    "value_type": "string",
+    "aliases": ["prefers_editor"],
+    "description": "the editor the user works in"
+  }
+}
+```
+
+A cardinality change does not rewrite the past. If `prefers_editor` was single
+on Tuesday and became multi on Wednesday, an `AsOf` read for Tuesday still
+returns the one editor that held then. A predicate that moves from single to
+multi keeps its current value and collects more. One that moves from multi to
+single keeps the values it holds until the next write replaces them.
+
+Once a change is recorded, every client is checked against it. A client whose
+registry gives a recorded predicate a different cardinality or value type, or
+still uses a name that has been renamed, gets `ErrRegistryMismatch` on reads
+and writes until its registry is corrected or it calls `SyncRegistry` itself.
+This stops two deployments from folding one log under different rules. A client
+checks the recorded registry at most every 30 seconds, so another client's
+change can take that long to be seen. A store that has never been synced
+behaves as before: the client's own registry is the only rule.
+
+A predicate that is recorded in the store but missing from a client's registry
+can be read by that client, under its recorded definition, but not written.
+
+`client.RegistryLog(ctx)` returns every recorded change, oldest first. The
+changes are stored as events about the subject `recall:registry`. Recall leaves
+them out of answers, and an audit bundle carries them in `registry_log` so a
+replay applies the same rules.
 
 ### Notes
 

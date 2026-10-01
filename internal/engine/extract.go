@@ -93,6 +93,8 @@ func (c *Client) RememberTextAt(ctx context.Context, text string, extractor Extr
 		if len(strings.TrimSpace(p.Evidence)) > MaxEvidenceBytes {
 			return out, fmt.Errorf("recall: proposal %d: evidence is longer than %d bytes; quote the part that supports the fact", i, MaxEvidenceBytes)
 		}
+		proposals[i].Predicate = c.registry.canonical(strings.TrimSpace(p.Predicate))
+		p = proposals[i]
 		spec, ok := c.registry[p.Predicate]
 		if !ok {
 			out.Unfiled = append(out.Unfiled, p)

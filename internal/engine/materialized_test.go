@@ -145,7 +145,7 @@ func TestMaterializationFutureEventsLateArrivalsAndTornHistory(t *testing.T) {
 
 func TestDefaultRegistryAndLexicalSpace(t *testing.T) {
 	r := DefaultRegistry()
-	if len(r) != 16 || r.Validate() != nil || r[NotePredicate] != notePredicate {
+	if len(r) != 16 || r.Validate() != nil || !reflect.DeepEqual(r[NotePredicate], notePredicate) {
 		t.Fatal("invalid defaults")
 	}
 	delete(r, "name")

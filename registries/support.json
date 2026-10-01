@@ -1,0 +1,88 @@
+{
+  "account_id": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Customer's account identifier"
+  },
+  "company": {
+    "cardinality": "single",
+    "value_type": "ref",
+    "description": "Organization the customer belongs to"
+  },
+  "contact_channel": {
+    "cardinality": "single",
+    "value_type": "enum",
+    "description": "How the customer wants to be contacted",
+    "allowed": [
+      "email",
+      "phone",
+      "chat",
+      "sms"
+    ]
+  },
+  "escalated_to": {
+    "cardinality": "single",
+    "value_type": "ref",
+    "description": "Person or team now handling the customer's case"
+  },
+  "name": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Name the customer uses"
+  },
+  "note": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "A statement worth keeping that no other predicate fits, in the words it was stated"
+  },
+  "open_issue": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "A problem the customer reported that is not resolved"
+  },
+  "plan": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Plan or tier the customer is on"
+  },
+  "preferred_language": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Language the customer wants to be answered in"
+  },
+  "promised": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "Something the customer was told would be done"
+  },
+  "renewal_date": {
+    "cardinality": "single",
+    "value_type": "date",
+    "description": "When the customer's plan renews"
+  },
+  "resolved_issue": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "A problem the customer reported that has been resolved"
+  },
+  "sentiment": {
+    "cardinality": "single",
+    "value_type": "enum",
+    "description": "How the customer feels about the service right now",
+    "allowed": [
+      "positive",
+      "neutral",
+      "frustrated"
+    ]
+  },
+  "timezone": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Customer's timezone"
+  },
+  "uses_product": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "Product or feature the customer uses"
+  }
+}

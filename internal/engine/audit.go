@@ -66,8 +66,12 @@ type AuditBundle struct {
 	Scope        AuditScope `json:"scope"`
 	AsOf         time.Time  `json:"as_of"`
 	Registry     Registry   `json:"registry"`
-	Events       []Event    `json:"events"`
-	Digest       string     `json:"digest"`
+	// RegistryLog holds the store's recorded registry changes, when it has
+	// any, so a replay folds each event under the cardinality in effect when
+	// it was observed. They are kept apart from Events, which Scope bounds.
+	RegistryLog []Event `json:"registry_log,omitempty"`
+	Events      []Event `json:"events"`
+	Digest      string  `json:"digest"`
 }
 
 // ExportAudit reads complete histories (at most MaxExport events), retaining
@@ -75,9 +79,18 @@ type AuditBundle struct {
 // reads. Completeness is subject to the backend's listing consistency; this
 // does not acquire a cross-writer snapshot.
 func (s *Store) ExportAudit(q AuditRequest) (AuditBundle, error) {
+	if s.registryErr != nil {
+		return AuditBundle{}, s.registryErr
+	}
+	sc, err := s.view()
+	if err != nil {
+		return AuditBundle{}, err
+	}
+	// The bundle carries every predicate its events can be read under, which
+	// includes any the store's log defines and this client's registry omits.
 	b := AuditBundle{Version: AuditVersion, EventVersion: EventVersion, FoldVersion: FoldVersion,
-		Scope: AuditScope{Subject: normalizeSubject(q.Scope.Subject), Predicate: strings.TrimSpace(q.Scope.Predicate)},
-		AsOf:  q.AsOf.UTC(), Registry: s.registry.Clone(),
+		Scope: AuditScope{Subject: normalizeSubject(q.Scope.Subject), Predicate: sc.canonical(strings.TrimSpace(q.Scope.Predicate))},
+		AsOf:  q.AsOf.UTC(), Registry: sc.bundleRegistry(), RegistryLog: sc.log,
 	}
 	if b.AsOf.IsZero() {
 		b.AsOf = s.now().UTC()
@@ -85,10 +98,15 @@ func (s *Store) ExportAudit(q AuditRequest) (AuditBundle, error) {
 	if err := b.validateHeader(); err != nil {
 		return AuditBundle{}, err
 	}
-	var err error
-	b.Events, err = s.ExportEvents(Export{Subject: b.Scope.Subject, Predicate: b.Scope.Predicate})
+	events, err := s.ExportEvents(Export{Subject: b.Scope.Subject, Predicate: b.Scope.Predicate})
 	if err != nil {
 		return AuditBundle{}, err
+	}
+	b.Events = make([]Event, 0, len(events))
+	for _, e := range events {
+		if !isRegistryPair(pair{e.Subject, e.Predicate}) {
+			b.Events = append(b.Events, e)
+		}
 	}
 	b.Digest, err = b.checksum()
 	if err != nil {
@@ -134,11 +152,14 @@ func (b AuditBundle) Replay() ([]Belief, error) {
 	if err := b.Verify(); err != nil {
 		return nil, err
 	}
-	type pair struct{ subject, predicate string }
+	sc, err := newSchema(b.Registry, b.RegistryLog, false)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidAudit, err)
+	}
 	groups := map[pair][]Event{}
 	for _, e := range b.Events {
 		e.ObservedAt = e.ObservedAt.UTC()
-		p := pair{normalizeSubject(e.Subject), strings.TrimSpace(e.Predicate)}
+		p := pair{normalizeSubject(e.Subject), sc.canonical(strings.TrimSpace(e.Predicate))}
 		groups[p] = append(groups[p], e)
 	}
 	keys := make([]pair, 0, len(groups))
@@ -153,7 +174,7 @@ func (b AuditBundle) Replay() ([]Belief, error) {
 	})
 	out := make([]Belief, 0)
 	for _, p := range keys {
-		out = append(out, Fold(groups[p], b.Registry[p.predicate].Cardinal(), b.AsOf)...)
+		out = append(out, sc.fold(p.predicate, groups[p], b.AsOf)...)
 	}
 	return out, nil
 }
@@ -220,15 +241,18 @@ func (b AuditBundle) checksum() (string, error) {
 		return "", fmt.Errorf("%w: %w", ErrInvalidAudit, err)
 	}
 	for _, e := range b.Events {
-		if b.Scope.Subject != "" && e.Subject != b.Scope.Subject || b.Scope.Predicate != "" && e.Predicate != b.Scope.Predicate {
+		// An event written under a former name belongs to the predicate that
+		// owns that name now.
+		owner := b.Registry.canonical(e.Predicate)
+		if b.Scope.Subject != "" && e.Subject != b.Scope.Subject || b.Scope.Predicate != "" && owner != b.Scope.Predicate {
 			return "", fmt.Errorf("%w: event %q is outside scope", ErrInvalidAudit, e.ID)
 		}
-		p, ok := b.Registry[e.Predicate]
+		p, ok := b.Registry[owner]
 		if !ok {
 			return "", fmt.Errorf("%w: event %q predicate is not in registry", ErrInvalidAudit, e.ID)
 		}
 		if e.Value != nil {
-			if _, err := normalizeValue(e.Predicate, p, e.Value); err != nil {
+			if err := checkStored(e.Predicate, p, e.Value); err != nil {
 				return "", fmt.Errorf("%w: event %q: %w", ErrInvalidAudit, e.ID, err)
 			}
 		}
@@ -238,6 +262,24 @@ func (b AuditBundle) checksum() (string, error) {
 	for _, name := range b.Registry.Names() {
 		p := b.Registry[name]
 		hashFields(h, name, p.Cardinality, p.ValueType, p.Description)
+		// Hashed only when present, so a bundle written before enums and
+		// aliases existed keeps the checksum it was given.
+		if len(p.Allowed) > 0 || len(p.Aliases) > 0 {
+			hashFields(h, "allowed", strconv.Itoa(len(p.Allowed)))
+			hashFields(h, p.Allowed...)
+			hashFields(h, "aliases", strconv.Itoa(len(p.Aliases)))
+			hashFields(h, sorted(p.Aliases)...)
+		}
+	}
+	if len(b.RegistryLog) > 0 {
+		if _, err := decodeRegistryLog(b.RegistryLog); err != nil {
+			return "", fmt.Errorf("%w: %w", ErrInvalidAudit, err)
+		}
+		logDigest, err := DigestV3(b.RegistryLog)
+		if err != nil {
+			return "", fmt.Errorf("%w: %w", ErrInvalidAudit, err)
+		}
+		hashFields(h, "registry-log", logDigest)
 	}
 	return "sha256:audit-v1:" + hex.EncodeToString(h.Sum(nil)), nil
 }

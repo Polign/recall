@@ -103,9 +103,13 @@ A memory has a **subject**, a **predicate**, and a **typed value**:
 | `recall-demo` | `uses_technology` | `Go` |
 
 The registry defines which predicates an application accepts, their value types,
-and whether they hold one value or several. Recall includes 15 predicates for
-preferences, identity, and project facts. You can
-[extend the registry](docs/reference.md#the-registry) for your application.
+and whether they hold one value or several. Recall includes
+[starter registries](docs/reference.md#starter-registries) for coding, support,
+sales, and voice agents. You can
+[extend the registry](docs/reference.md#the-registry) for your application, and
+[change it later](docs/reference.md#changing-the-registry) without changing what
+the agent remembered before. A value can be text, a number, a boolean, an enum,
+a date, or a [reference to another subject](docs/reference.md#references-between-subjects).
 
 For a single-valued predicate such as `prefers_editor`, a new assertion replaces
 the current value. A multi-valued predicate such as `uses_technology` can hold

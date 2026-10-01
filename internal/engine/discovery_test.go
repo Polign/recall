@@ -23,7 +23,8 @@ func (d *discoveryDB) List(collection string, f map[string]any, limit int) ([]St
 		if d.corrupt != nil {
 			rows, total = d.corrupt(len(d.widths), rows, total)
 		}
-	} else {
+	} else if f["predicate"] != RegistryPredicate {
+		// The registry log is read once per store, not once per pair.
 		d.histories++
 	}
 	return rows, total, err

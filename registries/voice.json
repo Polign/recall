@@ -1,0 +1,72 @@
+{
+  "accessibility_need": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "Something the caller needs the agent to accommodate"
+  },
+  "appointment_time": {
+    "cardinality": "single",
+    "value_type": "date",
+    "description": "When the caller's next appointment is"
+  },
+  "callback_number": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Number to call the caller back on"
+  },
+  "calling_on_behalf_of": {
+    "cardinality": "single",
+    "value_type": "ref",
+    "description": "Person the caller is calling for"
+  },
+  "consent_to_record": {
+    "cardinality": "single",
+    "value_type": "boolean",
+    "description": "Whether the caller agreed to the call being recorded"
+  },
+  "name": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Name the caller wants to be called"
+  },
+  "note": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "A statement worth keeping that no other predicate fits, in the words it was stated"
+  },
+  "open_request": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "Something the caller asked for that is not done yet"
+  },
+  "preferred_contact_time": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "When the caller wants to be called"
+  },
+  "preferred_language": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Language the caller wants to speak"
+  },
+  "prefers_response_style": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "How the caller wants to be spoken to, such as brief or step by step"
+  },
+  "pronouns": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Pronouns the caller uses"
+  },
+  "reason_for_calling": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Why the caller is calling, as they last put it"
+  },
+  "timezone": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Caller's timezone"
+  }
+}

@@ -52,6 +52,7 @@ type Client struct {
 	registry     Registry
 	embedder     Embedder
 	materialized *Materialization
+	reglog       *registryLog
 }
 
 // NewClient validates configuration and copies the registry.
@@ -77,7 +78,7 @@ func NewClient(cfg Config) (*Client, error) {
 	if nilInterface(embedder) {
 		embedder = nil
 	}
-	c := &Client{backend: cfg.Backend, collection: collection, registry: registry, embedder: embedder}
+	c := &Client{backend: cfg.Backend, collection: collection, registry: registry, embedder: embedder, reglog: &registryLog{}}
 	if cfg.Materialize {
 		c.materialized = &Materialization{}
 	}
@@ -263,7 +264,7 @@ func (c *Client) forContext(ctx context.Context) (*Store, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &Store{db: requestBackend{ctx: ctx, backend: c.backend}, collection: c.collection, registry: c.registry, now: time.Now, materialized: c.materialized, textFirst: textFirstFor(c.embedder),
+	return &Store{db: requestBackend{ctx: ctx, backend: c.backend}, collection: c.collection, registry: c.registry, reglog: c.reglog, now: time.Now, materialized: c.materialized, textFirst: textFirstFor(c.embedder),
 		embed: func(text string) ([]float32, error) {
 			if err := ctx.Err(); err != nil {
 				return nil, err

@@ -88,7 +88,7 @@ func (s *Store) materializedBeliefs(p pair, asOf time.Time) ([]Belief, error) {
 		}
 		after, err := w.Watermark(s.collection)
 		if err != nil || after == "" {
-			return Fold(events, s.cardinality(p.predicate), asOf), nil
+			return s.foldEvents(p, events, asOf)
 		}
 		if rev != after {
 			// The revision covers the whole collection, so a write to an
@@ -98,7 +98,10 @@ func (s *Store) materializedBeliefs(p pair, asOf time.Time) ([]Belief, error) {
 			// fold uncached.
 			continue
 		}
-		beliefs := Fold(events, s.cardinality(p.predicate), asOf)
+		beliefs, err := s.foldEvents(p, events, asOf)
+		if err != nil {
+			return nil, err
+		}
 		entry := materializedEntry{watermark: rev, beliefs: append([]Belief(nil), beliefs...), asOf: asOf, filledAt: s.now()}
 		for _, event := range events {
 			if event.ObservedAt.After(asOf) && (entry.nextEvent.IsZero() || event.ObservedAt.Before(entry.nextEvent)) {

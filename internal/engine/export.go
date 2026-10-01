@@ -31,26 +31,44 @@ func (s *Store) ExportEvents(q Export) ([]Event, error) {
 	if q.Limit > MaxExport {
 		return nil, fmt.Errorf("recall: export limit %d exceeds maximum %d", q.Limit, MaxExport)
 	}
-	filter := map[string]any{}
-	if q.Subject != "" {
-		filter["subject"] = normalizeSubject(q.Subject)
+	sc, err := s.view()
+	if err != nil {
+		return nil, err
 	}
+	// A renamed predicate is exported under every name it has had.
+	names := []string{""}
 	if q.Predicate != "" {
-		filter["predicate"] = strings.TrimSpace(q.Predicate)
+		names = sc.storedNames(sc.canonical(strings.TrimSpace(q.Predicate)))
 	}
 	limit := q.Limit
 	if limit <= 0 {
 		limit = MaxExport
 	}
 	var events []Event
-	var err error
-	if q.Limit <= 0 {
-		events, err = s.completeEvents(filter, limit)
-	} else {
-		events, err = s.eventsMatching(filter, limit)
+	for _, name := range names {
+		filter := map[string]any{}
+		if q.Subject != "" {
+			filter["subject"] = normalizeSubject(q.Subject)
+		}
+		if name != "" {
+			filter["predicate"] = name
+		}
+		var part []Event
+		if q.Limit <= 0 {
+			part, err = s.completeEvents(filter, limit)
+		} else {
+			part, err = s.eventsMatching(filter, limit-len(events))
+		}
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, part...)
+		if q.Limit > 0 && len(events) >= limit {
+			break
+		}
 	}
-	if err != nil {
-		return nil, err
+	if len(events) > limit {
+		return nil, fmt.Errorf("%w: read %d events (maximum %d)", ErrIncompleteHistory, len(events), limit)
 	}
 	SortEvents(events)
 	return events, nil

@@ -66,6 +66,9 @@ type Belief struct {
 	// belief was drawn from and the event holding the whole text.
 	Evidence   string `json:"evidence,omitempty"`
 	EvidenceID string `json:"evidence_id,omitempty"`
+	// Via is set on a belief that Query.FollowRefs added: the event of the
+	// belief whose ref value led to this one's subject.
+	Via string `json:"via,omitempty"`
 }
 
 // Cardinality decides what a second value for the same subject and predicate
@@ -88,6 +91,19 @@ const (
 // clock that stepped backwards changes the answer only in so far as it
 // changed the log.
 func Fold(events []Event, card Cardinality, asOf time.Time) []Belief {
+	return foldWith(events, func(time.Time) Cardinality { return card }, asOf)
+}
+
+// foldWith is Fold for a predicate whose cardinality has changed: cardAt
+// reports the cardinality in effect at an instant, and each assertion is
+// applied under the one in effect when it was observed. A question about an
+// instant before a change is therefore answered the way it was at the time.
+//
+// Under single an assertion replaces whatever is held; under multi it is
+// added. A predicate that went from multi to single keeps the values it held
+// until the next assertion replaces them, and one that went from single to
+// multi keeps its value and accumulates from there.
+func foldWith(events []Event, cardAt func(time.Time) Cardinality, asOf time.Time) []Belief {
 	if asOf.IsZero() {
 		asOf = time.Now()
 	}
@@ -123,39 +139,13 @@ func Fold(events []Event, card Cardinality, asOf time.Time) []Belief {
 		return ordered[i].ID < ordered[j].ID
 	})
 
-	switch card {
-	case Multi:
-		return foldMulti(ordered)
-	default:
-		return foldSingle(ordered)
-	}
-}
-
-// foldSingle tracks the currently held value. A targeted retraction clears
-// only that value; withdrawing a superseded value leaves the newer assertion
-// intact. Clearing the current value never revives a superseded assertion.
-func foldSingle(ordered []Event) []Belief {
-	var current Event
-	held := false
-	for _, e := range ordered {
-		if !e.Retraction {
-			current, held = e, true
-		} else if held && (e.Value == nil || ValueKey(e.Value) == ValueKey(current.Value)) {
-			held = false
-		}
-	}
-	if held {
-		return []Belief{beliefOf(current)}
-	}
-	return nil
-}
-
-// foldMulti accumulates values, where a retraction removes one value or, with
-// no value, all of them.
-func foldMulti(ordered []Event) []Belief {
 	held := map[string]Belief{}
 	var order []string
 	for _, e := range ordered {
+		// A retraction removes one value or, with no value, all of them. A
+		// targeted retraction of a value that is not held changes nothing, so
+		// withdrawing a superseded value leaves the newer assertion intact,
+		// and clearing the current value never revives a superseded one.
 		if e.Retraction && e.Value == nil {
 			held = map[string]Belief{}
 			order = order[:0]
@@ -166,6 +156,10 @@ func foldMulti(ordered []Event) []Belief {
 			delete(held, k)
 			order = slices.DeleteFunc(order, func(v string) bool { return v == k })
 			continue
+		}
+		if cardAt(e.ObservedAt) != Multi {
+			held = map[string]Belief{}
+			order = order[:0]
 		}
 		if _, seen := held[k]; !seen {
 			order = append(order, k)
@@ -186,6 +180,9 @@ func foldMulti(ordered []Event) []Belief {
 		if b, ok := held[k]; ok {
 			out = append(out, b)
 		}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

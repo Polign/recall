@@ -63,3 +63,35 @@ func TestPublicAuditRoundTrip(t *testing.T) {
 		t.Fatalf("audit error does not match the public sentinel: %v", err)
 	}
 }
+
+// The JSON starter registries are generated from the Go ones. Set
+// RECALL_WRITE_REGISTRIES=1 to regenerate them after changing a starter.
+func TestStarterRegistryFilesMatch(t *testing.T) {
+	for _, name := range recall.StarterNames() {
+		want, err := recall.StarterRegistry(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := "registries/" + name + ".json"
+		if os.Getenv("RECALL_WRITE_REGISTRIES") != "" {
+			raw, err := json.MarshalIndent(want, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, append(raw, '\n'), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := recall.LoadRegistry(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s is out of date; run the tests with RECALL_WRITE_REGISTRIES=1", path)
+		}
+	}
+}

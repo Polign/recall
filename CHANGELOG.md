@@ -2,6 +2,43 @@
 
 ## [Unreleased]
 
+### Added
+
+- Starter registries. `StarterRegistry(name)` returns a ready-made registry for
+  `coding`, `support`, `sales`, or `voice` agents, and `StarterNames()` lists
+  them. `DefaultRegistry()` is the coding one, unchanged. The same registries
+  are in `registries/` as JSON.
+- Three value types. `enum` accepts one of the predicate's `allowed` values and
+  names them when it refuses another. `date` accepts a day or an RFC3339 time
+  and can be filtered with `Query.ValueAfter` and `Query.ValueBefore`. `ref`
+  holds the name of another subject.
+- Reads across refs. `Query.RefersTo` returns the current beliefs whose ref
+  value is a given subject. `Query.FollowRefs` adds what is believed about each
+  subject a returned ref names, one step, with `Belief.Via` naming the ref.
+- Registry changes are recorded in the log. `Client.SyncRegistry` writes one
+  event for each predicate whose definition changed, and `Client.RegistryLog`
+  reads them back. A cardinality change applies from the moment it is recorded,
+  so `AsOf` reads from before it answer as they did then.
+- Renames. A predicate lists its former names in `aliases`. Events under an old
+  name fold with the new one, and a write to an old name is stored under the
+  new one.
+- `ErrRegistryMismatch`. Once a store has a recorded registry, a client whose
+  registry disagrees on a predicate's cardinality or value type, or still uses
+  a renamed name, is refused until it is corrected or calls `SyncRegistry`.
+- Audit bundles carry the recorded registry changes in `registry_log` and
+  replay under them. Bundles without one verify and replay as before.
+
+### Changed
+
+- `Predicate` has two new fields, `Allowed` and `Aliases`. Code that builds a
+  `Predicate` without field names, or compares two with `==`, no longer
+  compiles. Use field names and `reflect.DeepEqual`.
+- Each client reads the store's registry events once, then at most every 30
+  seconds. This is one extra listing per client, not per call.
+- A stored value is checked against its predicate's stored type (text, number,
+  or boolean) when read, no longer against the full rule for new writes. This
+  keeps a value readable after its enum drops it.
+
 ## Python client 0.6.0 - 2026-09-30
 
 - `recall(with_sources=True)` returns each belief's `evidence`, `evidence_id`

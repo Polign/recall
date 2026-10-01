@@ -31,47 +31,65 @@ func candidateFilter(q Query) map[string]any {
 	return f
 }
 
-func (s *Store) recallExact(q Query, limit int, asOf time.Time) ([]Belief, error) {
-	filter := candidateFilter(q)
-	width := min(max(limit*4, 20), MaxCandidateEvents)
-	total := -1
-	var previous []Event
+// discover answers an exact read that does not name one pair. It reads the
+// events matching each filter, folds every pair they reach, and keeps the
+// beliefs that pass keep, until it has limit of them or has provably seen
+// every matching event.
+func (s *Store) discover(sc *schema, filters []map[string]any, keep func(Belief) bool, registry bool, limit int, asOf time.Time) ([]Belief, error) {
 	seen := make(map[pair]bool)
 	var out ranked
-	for {
-		events, count, err := s.exactCandidates(filter, width)
+	for _, filter := range filters {
+		full, err := s.discoverFilter(sc, filter, keep, registry, limit, asOf, seen, &out)
 		if err != nil {
 			return nil, err
 		}
+		if full {
+			break
+		}
+	}
+	return out.beliefs(), nil
+}
+
+// discoverFilter widens one filter's listing until out holds limit beliefs,
+// which it reports, or the listing is exhausted.
+func (s *Store) discoverFilter(sc *schema, filter map[string]any, keep func(Belief) bool, registry bool, limit int, asOf time.Time, seen map[pair]bool, out *ranked) (bool, error) {
+	width := min(max(limit*4, 20), MaxCandidateEvents)
+	total := -1
+	var previous []Event
+	for {
+		events, count, err := s.exactCandidates(filter, width)
+		if err != nil {
+			return false, err
+		}
 		if total >= 0 && count != total {
-			return nil, fmt.Errorf("%w: total changed during discovery; retry", ErrIncompleteCandidates)
+			return false, fmt.Errorf("%w: total changed during discovery; retry", ErrIncompleteCandidates)
 		}
 		total = count
 		// Widening List must extend the same ordered prefix. Check decoded
 		// content as well as IDs: an overwritten event invalidates prior folds.
 		if len(previous) > 0 && (len(events) < len(previous) || !reflect.DeepEqual(events[:len(previous)], previous)) {
-			return nil, fmt.Errorf("%w: events changed during discovery; retry", ErrIncompleteCandidates)
+			return false, fmt.Errorf("%w: events changed during discovery; retry", ErrIncompleteCandidates)
 		}
-		for _, p := range dedupePairs(events[len(previous):]) {
+		for _, p := range dedupePairs(sc.candidates(events[len(previous):], registry)) {
 			if seen[p] {
 				continue
 			}
 			seen[p] = true
 			beliefs, err := s.pairBeliefs(p, asOf)
 			if err != nil {
-				return nil, err
+				return false, err
 			}
 			for _, b := range beliefs {
-				if matchesBelief(b, q) && out.add(b) == limit {
-					return out.beliefs(), nil
+				if keep(b) && out.add(b) == limit {
+					return true, nil
 				}
 			}
 		}
 		if len(events) == total {
-			return out.beliefs(), nil
+			return false, nil
 		}
 		if width == MaxCandidateEvents {
-			return nil, fmt.Errorf("%w: examined %d of %d events; narrow the query", ErrIncompleteCandidates, width, total)
+			return false, fmt.Errorf("%w: examined %d of %d events; narrow the query", ErrIncompleteCandidates, width, total)
 		}
 		previous = events
 		width = min(width*2, MaxCandidateEvents)

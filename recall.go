@@ -38,7 +38,8 @@ func NewClient(cfg Config) (*Client, error) {
 	return engine.NewClient(cfg)
 }
 
-// RememberRequest records a typed value (string, float64, or bool). Kind defaults
+// RememberRequest records a typed value: a string, float64, or bool. An enum,
+// a date, and a ref are given as strings. Kind defaults
 // to fact and Source to user_stated. Nil Confidence defaults to 1; a pointer to
 // zero records zero confidence rather than selecting the default.
 type RememberRequest = engine.RememberRequest
@@ -146,8 +147,10 @@ func ValueKey(v any) string {
 // Predicate is one registry entry. Cardinality decides what a second value
 // for the same subject means: "single" makes a newer value supersede the old
 // one, "multi" makes it an additional fact. ValueType decides what a value
-// IS: a string, a number, or a boolean. Values are stored with that type, so
-// a number compares numerically in recall filters instead of lexically.
+// IS: a string, a number, a boolean, an enum (one of Allowed), a date, or a
+// ref to another subject. Values are stored with that type, so a number
+// compares numerically in recall filters instead of lexically. Aliases are
+// names the predicate used to have.
 type Predicate = engine.Predicate
 
 // Registry is the closed set of predicates the store accepts. A write with an
@@ -161,11 +164,51 @@ func LoadRegistry(raw []byte) (Registry, error) {
 	return engine.LoadRegistry(raw)
 }
 
-// DefaultRegistry returns an independent starter vocabulary. Applications may
-// extend the returned map before constructing a Client.
+// DefaultRegistry returns an independent starter vocabulary, the one for
+// coding agents. Applications may extend the returned map before constructing
+// a Client. StarterRegistry has the others.
 func DefaultRegistry() Registry {
 	return engine.DefaultRegistry()
 }
+
+// Starter registries, by the kind of agent each is written for.
+const (
+	StarterCoding  = engine.StarterCoding
+	StarterSupport = engine.StarterSupport
+	StarterSales   = engine.StarterSales
+	StarterVoice   = engine.StarterVoice
+)
+
+// StarterRegistry returns an independent copy of a starter vocabulary: a
+// registry that is useful for one kind of agent before anyone has written
+// their own. It is a starting point, to be extended or trimmed, and it always
+// includes the note predicate.
+func StarterRegistry(name string) (Registry, error) {
+	return engine.StarterRegistry(name)
+}
+
+// StarterNames lists the starter registries StarterRegistry knows.
+func StarterNames() []string {
+	return engine.StarterNames()
+}
+
+// The registry's own history lives in the log it governs: each change is an
+// event about RegistrySubject under RegistryPredicate. Reads leave these
+// events out unless a query names them.
+const (
+	RegistrySubject   = engine.RegistrySubject
+	RegistryPredicate = engine.RegistryPredicate
+)
+
+// RegistryChange is one recorded definition of a predicate: what it was from
+// At until the next change to the same name. Client.RegistryLog returns them,
+// and Client.SyncRegistry records them.
+type RegistryChange = engine.RegistryChange
+
+// ErrRegistryMismatch means this client's configured registry disagrees with
+// the registry recorded in the store, or asks for a change that would make
+// stored values unreadable. Client.SyncRegistry records an intended change.
+var ErrRegistryMismatch = engine.ErrRegistryMismatch
 
 // LexicalEmbedder is a dependency-free signed feature-hashing fallback. It
 // retrieves overlapping words, not semantic synonyms. Use a dedicated collection

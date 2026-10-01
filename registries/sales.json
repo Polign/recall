@@ -1,0 +1,95 @@
+{
+  "budget_confirmed": {
+    "cardinality": "single",
+    "value_type": "boolean",
+    "description": "Whether the account has confirmed it has budget"
+  },
+  "champion": {
+    "cardinality": "single",
+    "value_type": "ref",
+    "description": "Person inside the account who wants the deal to happen"
+  },
+  "close_date": {
+    "cardinality": "single",
+    "value_type": "date",
+    "description": "When the deal is expected to close"
+  },
+  "competitor": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "Another vendor the account is considering or using"
+  },
+  "deal_stage": {
+    "cardinality": "single",
+    "value_type": "enum",
+    "description": "Where the deal stands",
+    "allowed": [
+      "lead",
+      "qualified",
+      "proposal",
+      "negotiation",
+      "won",
+      "lost"
+    ]
+  },
+  "deal_value": {
+    "cardinality": "single",
+    "value_type": "number",
+    "description": "Expected value of the deal, in the account's currency"
+  },
+  "decision_maker": {
+    "cardinality": "multi",
+    "value_type": "ref",
+    "description": "Person who has to approve the deal"
+  },
+  "last_contacted": {
+    "cardinality": "single",
+    "value_type": "date",
+    "description": "When the contact or account was last spoken to"
+  },
+  "name": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Name the contact uses"
+  },
+  "next_step": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "What was agreed to happen next"
+  },
+  "note": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "A statement worth keeping that no other predicate fits, in the words it was stated"
+  },
+  "objection": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "A reason the account gave for not buying"
+  },
+  "pain_point": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "A problem the account wants solved"
+  },
+  "reports_to": {
+    "cardinality": "single",
+    "value_type": "ref",
+    "description": "Person the contact reports to"
+  },
+  "title": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Contact's job title"
+  },
+  "uses_technology": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "Technology the account uses"
+  },
+  "works_at": {
+    "cardinality": "single",
+    "value_type": "ref",
+    "description": "Account the contact works at"
+  }
+}

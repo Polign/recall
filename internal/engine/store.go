@@ -76,6 +76,8 @@ type Store struct {
 	now          func() time.Time
 	materialized *Materialization
 	registryErr  error
+	// reglog caches the registry recorded in the store; see schema.go.
+	reglog *registryLog
 	// textFirst ranks every lexical hit ahead of the vector hits instead of
 	// fusing the two rankings; see textFirstFor.
 	textFirst bool
@@ -96,7 +98,7 @@ func NewStore(db VectorDB, collection string, registry Registry, embed func(stri
 		registryErr = errors.Join(registryErr, err)
 	}
 	return &Store{db: db, collection: collection, registry: withNote, now: time.Now,
-		registryErr: registryErr,
+		registryErr: registryErr, reglog: &registryLog{},
 		embed: func(text string) ([]float32, error) {
 			if embed == nil {
 				return nil, ErrEmbedderRequired
@@ -180,13 +182,19 @@ func (s *Store) remember(kind, subject, predicate string, value any, confidence 
 	if !predicateName.MatchString(predicate) {
 		return zero, fmt.Errorf("predicate must be snake_case (e.g. prefers_editor), got %q", predicate)
 	}
-	spec, ok := s.registry[predicate]
+	sc, err := s.view()
+	if err != nil {
+		return zero, err
+	}
+	// A former name is accepted and stored under the name that owns it now.
+	predicate = sc.canonical(predicate)
+	spec, ok := sc.writable[predicate]
 	if !ok {
 		return zero, fmt.Errorf("predicate %q is not in the registry; registered predicates are: %s. "+
 			"If none of them fits, remember it with predicate %q and the statement as the value",
-			predicate, strings.Join(s.registry.Names(), ", "), NotePredicate)
+			predicate, strings.Join(sc.writable.Names(), ", "), NotePredicate)
 	}
-	value, err := normalizeValue(predicate, spec, value)
+	value, err = normalizeValue(predicate, spec, value)
 	if err != nil {
 		return zero, err
 	}
@@ -209,7 +217,7 @@ func (s *Store) remember(kind, subject, predicate string, value any, confidence 
 	// earlier stays earlier: TestObservationTimeOverridesWriteAcceptanceOrder
 	// pins that, and Superseded below is only meaningful at this same ceiling.
 	now = disambiguateInstant(events, now)
-	held := Fold(events, spec.Cardinal(), now)
+	held := sc.fold(predicate, events, now)
 
 	// Idempotence lives here rather than in the id: stating what is already
 	// believed is not new information, and appending it would add an event
@@ -243,7 +251,7 @@ func (s *Store) remember(kind, subject, predicate string, value any, confidence 
 	// What this statement displaced, reported for the agent's benefit. It is
 	// derived from the fold, not from any field written on the old events.
 	var superseded []Belief
-	if spec.Cardinal() == Single {
+	if sc.cardAt(predicate, now) == Single {
 		superseded = held
 	}
 	return RememberResult{Stored: beliefOf(ev), Superseded: superseded}, nil
@@ -260,10 +268,14 @@ func (s *Store) Forget(subject, predicate, value string) (int, error) {
 		return 0, s.registryErr
 	}
 
-	predicate = strings.TrimSpace(predicate)
+	sc, err := s.view()
+	if err != nil {
+		return 0, err
+	}
+	predicate = sc.canonical(strings.TrimSpace(predicate))
 	var typed any
 	if value = strings.TrimSpace(value); value != "" {
-		t, err := s.registry.parseValue(predicate, value)
+		t, err := sc.reg.parseValue(predicate, value)
 		if err != nil {
 			return 0, err
 		}
@@ -278,12 +290,17 @@ func (s *Store) forgetValue(subject, predicate string, typed any) (int, error) {
 	if subject == "" || predicate == "" {
 		return 0, fmt.Errorf("forget needs a subject and a predicate")
 	}
-	spec, ok := s.registry[predicate]
+	sc, err := s.view()
+	if err != nil {
+		return 0, err
+	}
+	predicate = sc.canonical(predicate)
+	spec, ok := sc.reg[predicate]
 	if !ok {
 		return 0, fmt.Errorf("predicate %q is not in the registry", predicate)
 	}
 	if typed != nil {
-		value, err := normalizeValue(predicate, spec, typed)
+		value, err := lenientValue(predicate, spec, typed)
 		if err != nil {
 			return 0, err
 		}
@@ -300,7 +317,7 @@ func (s *Store) forgetValue(subject, predicate string, typed any) (int, error) {
 	// nothing, and let the belief reappear. Remember keeps the writer's clock
 	// for the reason given there; Forget cannot.
 	now := writeInstant(events, s.now())
-	held := Fold(events, spec.Cardinal(), now)
+	held := sc.fold(predicate, events, now)
 	if len(held) == 0 {
 		return 0, nil
 	}
@@ -356,6 +373,19 @@ type Query struct {
 	// ValueMin and ValueMax bound number-typed values.
 	ValueMin *float64
 	ValueMax *float64
+	// ValueAfter and ValueBefore bound date-typed values, both inclusive. A
+	// calendar day counts as its first instant in UTC.
+	ValueAfter  time.Time
+	ValueBefore time.Time
+	// RefersTo answers "who points at this subject": the beliefs of
+	// ref-typed predicates whose value is the subject named here. It is an
+	// exact read and cannot be combined with Text. With Predicate set, only
+	// that predicate is searched.
+	RefersTo string
+	// FollowRefs adds, after each ref-typed belief in the answer, what is
+	// believed about the subject it names, one hop and within Limit. The
+	// added beliefs carry Via.
+	FollowRefs bool
 }
 
 // Recall returns the beliefs that hold at the query's instant.
@@ -367,6 +397,10 @@ func (s *Store) Recall(q Query) ([]Belief, error) {
 	if err := validateQuery(q); err != nil {
 		return nil, err
 	}
+	sc, err := s.view()
+	if err != nil {
+		return nil, err
+	}
 	limit := q.Limit
 	if limit <= 0 {
 		limit = defaultLimit
@@ -375,11 +409,29 @@ func (s *Store) Recall(q Query) ([]Belief, error) {
 	if asOf.IsZero() {
 		asOf = s.now().UTC()
 	}
-	if q.Text == "" && (q.Subject == "" || q.Predicate == "") {
-		return s.recallExact(q, limit, asOf)
-	}
+	q.Predicate = sc.canonical(strings.TrimSpace(q.Predicate))
 
-	candidates, err := s.candidatePairs(q, limit)
+	var beliefs []Belief
+	switch {
+	case q.RefersTo != "":
+		beliefs, err = s.recallReferrers(sc, q, limit, asOf)
+	case q.Text == "" && (q.Subject == "" || q.Predicate == ""):
+		beliefs, err = s.discover(sc, s.filters(sc, q), func(b Belief) bool { return matchesBelief(b, q) }, q.Predicate == RegistryPredicate, limit, asOf)
+	default:
+		beliefs, err = s.recallRanked(sc, q, limit, asOf)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if q.FollowRefs {
+		return s.followRefs(sc, beliefs, limit, asOf)
+	}
+	return beliefs, nil
+}
+
+// recallRanked answers a query that names its pair or carries search text.
+func (s *Store) recallRanked(sc *schema, q Query, limit int, asOf time.Time) ([]Belief, error) {
+	candidates, err := s.candidatePairs(sc, q, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -390,7 +442,7 @@ func (s *Store) Recall(q Query) ([]Belief, error) {
 		if err != nil {
 			return nil, err
 		}
-		multi := s.cardinality(c.pair.predicate) == Multi
+		multi := sc.cardAt(c.pair.predicate, asOf) == Multi
 		for _, b := range beliefs {
 			if !matchesBelief(b, q) {
 				continue
@@ -424,6 +476,82 @@ func (s *Store) Recall(q Query) ([]Belief, error) {
 	return out.beliefs(), nil
 }
 
+// recallReferrers finds the beliefs whose ref value is one subject. The
+// value is stored the way subjects are, so the read is an exact filter on it.
+func (s *Store) recallReferrers(sc *schema, q Query, limit int, asOf time.Time) ([]Belief, error) {
+	if q.Text != "" {
+		return nil, fmt.Errorf("recall: refers_to is an exact read and cannot be combined with search text")
+	}
+	target := normalizeSubject(q.RefersTo)
+	if target == "" {
+		return nil, fmt.Errorf("recall: refers_to must name a subject")
+	}
+	var predicates []string
+	if q.Predicate != "" {
+		if sc.reg[q.Predicate].valueType() != typeRef {
+			return nil, fmt.Errorf("recall: refers_to needs a ref-typed predicate, and %q is not one", q.Predicate)
+		}
+		predicates = []string{q.Predicate}
+	} else {
+		for _, name := range sc.reg.Names() {
+			if sc.reg[name].valueType() == typeRef {
+				predicates = append(predicates, name)
+			}
+		}
+	}
+	var filters []map[string]any
+	for _, predicate := range predicates {
+		for _, name := range sc.storedNames(predicate) {
+			f := map[string]any{"predicate": name, "value": target}
+			if q.Subject != "" {
+				f["subject"] = normalizeSubject(q.Subject)
+			}
+			filters = append(filters, f)
+		}
+	}
+	return s.discover(sc, filters, func(b Belief) bool {
+		return matchesBelief(b, q) && ValueKey(b.Value) == ValueKey(target)
+	}, false, limit, asOf)
+}
+
+// followRefs appends what is believed about each subject a ref-typed belief
+// names. It goes one hop: a belief it adds is never followed in turn, so the
+// answer stays bounded by the question rather than by the shape of the data.
+func (s *Store) followRefs(sc *schema, beliefs []Belief, limit int, asOf time.Time) ([]Belief, error) {
+	seen := make(map[string]bool, len(beliefs))
+	for _, b := range beliefs {
+		seen[b.EventID] = true
+	}
+	out := beliefs
+	followed := map[string]bool{}
+	for _, b := range beliefs {
+		if len(out) >= limit {
+			break
+		}
+		target, ok := b.Value.(string)
+		if !ok || sc.reg[b.Predicate].valueType() != typeRef || followed[target] {
+			continue
+		}
+		followed[target] = true
+		about, err := s.discover(sc, []map[string]any{{"subject": target}}, func(Belief) bool { return true }, false, limit, asOf)
+		if err != nil {
+			return nil, err
+		}
+		for _, a := range about {
+			if len(out) >= limit {
+				break
+			}
+			if seen[a.EventID] {
+				continue
+			}
+			seen[a.EventID] = true
+			a.Via = b.EventID
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
 // hit is one belief a semantic query found, with the search rank of the event
 // that earned it.
 type hit struct {
@@ -452,16 +580,6 @@ func (r *ranked) beliefs() []Belief {
 
 func (s *Store) pairBeliefs(p pair, asOf time.Time) ([]Belief, error) {
 	return s.materializedBeliefs(p, asOf)
-}
-
-// cardinality reports how a predicate folds. An unregistered predicate folds
-// as single-valued, which is the safer default: it supersedes rather than
-// accumulates.
-func (s *Store) cardinality(predicate string) Cardinality {
-	if spec, ok := s.registry[predicate]; ok {
-		return spec.Cardinal()
-	}
-	return Single
 }
 
 // disambiguateInstant keeps a new event off an instant this pair's log already
@@ -508,24 +626,48 @@ func (s *Store) foldPair(p pair, asOf time.Time) ([]Belief, error) {
 	if err != nil {
 		return nil, err
 	}
-	return Fold(events, s.cardinality(p.predicate), asOf), nil
+	return s.foldEvents(p, events, asOf)
+}
+
+// foldEvents folds one pair's complete history under the store's schema.
+func (s *Store) foldEvents(p pair, events []Event, asOf time.Time) ([]Belief, error) {
+	sc, err := s.view()
+	if err != nil {
+		return nil, err
+	}
+	return sc.fold(sc.canonical(p.predicate), events, asOf), nil
 }
 
 // History returns every event recorded for one subject and predicate, oldest
 // first. It is the audit primitive: the fold is a pure function of exactly
 // this, so anything the store answered can be re-derived from it.
+//
+// A predicate that was renamed has events under each name it has had. They
+// are one history, returned together, each event under the name it was
+// written with.
 func (s *Store) History(subject, predicate string) ([]Event, error) {
 	if s.registryErr != nil {
 		return nil, s.registryErr
 	}
-
-	filter := map[string]any{
-		"subject":   normalizeSubject(subject),
-		"predicate": strings.TrimSpace(predicate),
-	}
-	events, err := s.completeEvents(filter, MaxHistoryEvents)
+	sc, err := s.view()
 	if err != nil {
 		return nil, err
+	}
+
+	var events []Event
+	for _, name := range sc.storedNames(sc.canonical(strings.TrimSpace(predicate))) {
+		filter := map[string]any{
+			"subject":   normalizeSubject(subject),
+			"predicate": name,
+		}
+		part, err := s.completeEvents(filter, MaxHistoryEvents)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, part...)
+	}
+	if len(events) > MaxHistoryEvents {
+		return nil, fmt.Errorf("%w: read %d events (maximum %d)", ErrIncompleteHistory, len(events), MaxHistoryEvents)
 	}
 	SortEvents(events)
 	return events, nil
@@ -547,12 +689,10 @@ type candidate struct {
 	values map[string]int
 }
 
-func (s *Store) candidatePairs(q Query, limit int) ([]candidate, error) {
+func (s *Store) candidatePairs(sc *schema, q Query, limit int) ([]candidate, error) {
 	if q.Subject != "" && q.Predicate != "" {
-		return []candidate{{pair: pair{normalizeSubject(q.Subject), strings.TrimSpace(q.Predicate)}}}, nil
+		return []candidate{{pair: pair{normalizeSubject(q.Subject), q.Predicate}}}, nil
 	}
-
-	filter := candidateFilter(q)
 
 	// Candidates are read wider than the limit: several events can belong to
 	// one pair, and a pair can fold to nothing, so a page of events yields
@@ -562,11 +702,47 @@ func (s *Store) candidatePairs(q Query, limit int) ([]candidate, error) {
 		width = 20
 	}
 
-	events, err := s.searchEvents(q.Text, filter, width)
-	if err != nil {
-		return nil, err
+	// A renamed predicate is searched under each of its names, the current
+	// one first.
+	var events []Event
+	for _, filter := range s.filters(sc, q) {
+		found, err := s.searchEvents(q.Text, filter, width)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, found...)
 	}
-	return rankCandidates(events), nil
+	return rankCandidates(sc.candidates(events, q.Predicate == RegistryPredicate)), nil
+}
+
+// candidates prepares discovered events for grouping into pairs: each takes
+// the name of the predicate that owns it now, and the registry's own history
+// is left out unless the query asked for it.
+func (sc *schema) candidates(events []Event, registry bool) []Event {
+	out := make([]Event, 0, len(events))
+	for _, e := range events {
+		if !registry && isRegistryPair(pair{normalizeSubject(e.Subject), e.Predicate}) {
+			continue
+		}
+		e.Predicate = sc.canonical(strings.TrimSpace(e.Predicate))
+		out = append(out, e)
+	}
+	return out
+}
+
+// filters is the candidate filter for a query, once per name its predicate's
+// events may be stored under.
+func (s *Store) filters(sc *schema, q Query) []map[string]any {
+	if q.Predicate == "" {
+		return []map[string]any{candidateFilter(q)}
+	}
+	var out []map[string]any
+	for _, name := range sc.storedNames(q.Predicate) {
+		f := candidateFilter(q)
+		f["predicate"] = name
+		out = append(out, f)
+	}
+	return out
 }
 
 // rankCandidates groups search hits by pair, first hit first, and keeps the
@@ -621,6 +797,13 @@ func matchesBelief(b Belief, q Query) bool {
 	}
 	if q.MinConfidence > 0 && b.Confidence < q.MinConfidence {
 		return false
+	}
+	if !q.ValueAfter.IsZero() || !q.ValueBefore.IsZero() {
+		v, _ := b.Value.(string)
+		d, ok := parseDate(v)
+		if !ok || !q.ValueAfter.IsZero() && d.Before(q.ValueAfter) || !q.ValueBefore.IsZero() && d.After(q.ValueBefore) {
+			return false
+		}
 	}
 	if q.ValueMin != nil || q.ValueMax != nil {
 		f, ok := b.Value.(float64)

@@ -24,6 +24,9 @@ func validateQuery(q Query) error {
 	if q.ValueMin != nil && q.ValueMax != nil && *q.ValueMin > *q.ValueMax {
 		return fmt.Errorf("recall: value minimum exceeds maximum")
 	}
+	if !q.ValueAfter.IsZero() && !q.ValueBefore.IsZero() && q.ValueAfter.After(q.ValueBefore) {
+		return fmt.Errorf("recall: value_after is later than value_before")
+	}
 	return nil
 }
 
@@ -34,8 +37,8 @@ func (s *Store) decodeEvent(id string, md map[string]any) (Event, error) {
 	if err != nil {
 		return Event{}, err
 	}
-	if spec, ok := s.registry[e.Predicate]; ok && e.Value != nil {
-		if _, err := normalizeValue(e.Predicate, spec, e.Value); err != nil {
+	if spec, ok := s.registry[s.registry.canonical(e.Predicate)]; ok && e.Value != nil {
+		if err := checkStored(e.Predicate, spec, e.Value); err != nil {
 			return Event{}, fmt.Errorf("%w: event %q: %w", ErrInvalidEvent, id, err)
 		}
 	}
