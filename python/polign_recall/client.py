@@ -305,16 +305,23 @@ class Client:
     `agent=True` also turns on the agent resume tools, for `resume`. It needs
     write=True. Agents resumed through this client stay held until they are
     released or the client closes.
+
+    `extract_model` names the model that works out the statements in text
+    remembered without any, as "provider:model": "anthropic:claude-opus-5-5",
+    "openai:<model>", or "ollama:<model>". Keys come from ANTHROPIC_API_KEY or
+    OPENAI_API_KEY. POLIGN_EXTRACT_MODEL in the environment does the same.
     """
 
     def __init__(self, *, command: Sequence[str] | None = None,
                  env: Mapping[str, str] | None = None, timeout: float = 120,
                  write: bool = True, local_dir: str | os.PathLike[str] | None = None,
-                 agent: bool = False):
+                 agent: bool = False, extract_model: str | None = None):
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be finite and positive")
         if agent and not write:
             raise ValueError("agent=True needs write=True: resuming an agent writes its records")
+        if extract_model is not None and command is not None:
+            raise ValueError("extract_model configures the polign CLI and cannot be combined with command")
         if local_dir is not None and command is not None:
             raise ValueError("local_dir runs the polign CLI itself and cannot be combined with command")
         self.timeout = timeout
@@ -324,7 +331,8 @@ class Client:
         self._closed = False
         self._agent = agent
         argv = list(command) if command is not None else (
-            [polign_bin(), "mcp", "-memory-only"] + (["-write"] if write else []) + (["-agent"] if agent else []))
+            [polign_bin(), "mcp", "-memory-only"] + (["-write"] if write else []) + (["-agent"] if agent else [])
+            + (["-extract-model", extract_model] if extract_model else []))
         if local_dir is not None:
             env = {**(env or {}), **_local_server(argv[0], local_dir, timeout)}
         try:
@@ -442,7 +450,10 @@ class Client:
                  kind: str | None = None, confidence: float | None = None,
                  source: str | None = None,
                  observed_at: str | datetime | None = None) -> RememberResult | ExtractionResult:
-        """Record a typed statement, or statements proposed from text.
+        """Record a typed statement, or the statements in a piece of text.
+
+        In text mode, pass `statements` your agent proposes, or leave them out
+        and the server's extraction model (`extract_model`) proposes them.
 
         `observed_at` dates a statement made earlier, such as a line of an
         imported conversation; omitted means now. A statement dated before a
@@ -453,9 +464,8 @@ class Client:
         if text is not None:
             if any(x is not None for x in (subject, predicate, kind, confidence, source)) or value is not _MISSING:
                 raise ValueError("text mode cannot be combined with typed fields")
-            if statements is None:
-                raise ValueError("text mode requires statements proposed by your agent")
-            data = self._tool("remember", {"text": text, "statements": list(statements), **dated})
+            proposed = {"statements": list(statements)} if statements is not None else {}
+            data = self._tool("remember", {"text": text, **proposed, **dated})
             return ExtractionResult(tuple(data.get("proposals") or []),
                                     tuple(RememberResult.decode(r) for r in data["results"]),
                                     tuple(data.get("unfiled") or []),

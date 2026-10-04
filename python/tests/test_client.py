@@ -75,6 +75,16 @@ class TransportTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 memory.remember("user", "prefers_editor", "vim", observed_at=datetime(2023, 3, 1))
 
+    def test_text_alone_leaves_statements_to_the_server(self):
+        with Client(command=self.command) as memory:
+            sent = []
+            memory._tool = lambda name, args: (sent.append(args), {"proposals": [], "results": []})[1]
+            memory.remember(text="I use emacs now.")
+            memory.remember(text="I use emacs now.", statements=[])
+            self.assertEqual(sent, [{"text": "I use emacs now."}, {"text": "I use emacs now.", "statements": []}])
+        with self.assertRaises(ValueError):
+            Client(command=self.command, extract_model="anthropic")
+
     def test_unknown_fields_from_a_newer_server_are_ignored(self):
         with Client(command=self.command) as memory:
             result = memory.remember("future", "prefers_editor", "vim")

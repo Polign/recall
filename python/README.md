@@ -43,10 +43,23 @@ read-only connection. It runs the `polign` binary pip installed; on a platform
 without a `polign_db` wheel it runs `polign` from `PATH` (CLI v0.8.0+), and
 `command=[...]` overrides both.
 
-`remember(text=..., statements=[...])` accepts proposals from your agent's model;
-the client does not run a second model. Every statement must have subject,
-predicate, typed value, and evidence quoting the text exactly. Read `predicates()`
-to build your extractor prompt. No separate extraction tool is required.
+`remember(text=..., statements=[...])` accepts proposals from your agent's model.
+Every statement must have subject, predicate, typed value, and evidence quoting
+the text exactly. Read `predicates()` to build your extractor prompt.
+
+To have the server work out the statements instead, name a model and pass the
+text alone:
+
+```python
+with Client(extract_model="anthropic:claude-opus-5-5") as memory:
+    memory.remember(text="I moved to Lisbon and I edit in Zed now.")
+```
+
+The model is `provider:model`: `anthropic:<model>`, `openai:<model>`, or
+`ollama:<model>`, with keys from `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. It may
+name only registered predicates and must quote the text; a proposal that does
+not is dropped, and the whole text is kept as a note either way. Statements you
+pass are used as given, and the model is not called.
 
 `recall(..., as_of=...)` accepts an RFC3339 string or timezone-aware datetime.
 `forget` requires a typed value or explicit `all=True`; false and zero remain
