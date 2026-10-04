@@ -1,5 +1,7 @@
 # Amend: correct once, prove what it knew
 
+![The Amend demo: seed, correct, withdraw, timetravel, and audit beats](amend.gif)
+
 A support team runs a chat agent and a voice agent that share one memory. A rep
 promises customer 4812 a refund exception on September 12, and the customer
 calls on September 20 to use it. Today a support lead revokes the exception.
