@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -42,6 +43,9 @@ const DefaultSubject = "user"
 // records that something was said, not what it means.
 const noteConfidence = 0.5
 
+// maxProposals bounds one extraction batch.
+const maxProposals = 32
+
 // RememberText validates the entire proposal batch before the first write.
 // Writes are sequential, not transactional. On a storage failure, the returned
 // result contains the successful prefix, so callers must not blindly retry.
@@ -73,12 +77,16 @@ func (c *Client) RememberTextAt(ctx context.Context, text string, extractor Extr
 	if strings.TrimSpace(text) == "" || len(text) > 32768 {
 		return out, fmt.Errorf("recall: text must contain 1 to 32768 bytes")
 	}
-	proposals, err := extractor.Extract(ctx, text, c.Registry())
+	extractCtx := ctx
+	if !observedAt.IsZero() {
+		extractCtx = context.WithValue(ctx, observedAtKey{}, observedAt)
+	}
+	proposals, err := extractor.Extract(extractCtx, text, c.Registry())
 	if err != nil {
 		return out, err
 	}
-	if len(proposals) > 32 {
-		return out, fmt.Errorf("recall: extractor exceeded 32 proposals")
+	if len(proposals) > maxProposals {
+		return out, fmt.Errorf("recall: extractor exceeded %d proposals", maxProposals)
 	}
 	var filed []int
 	var noteSubjects []string
@@ -150,6 +158,69 @@ func (c *Client) RememberTextAt(ctx context.Context, text string, extractor Extr
 		out.Results = append(out.Results, r)
 	}
 	return out, nil
+}
+
+type observedAtKey struct{}
+
+// ObservedAt is when the text an extractor is reading was said, as given to
+// RememberTextAt. Zero means now. An extractor uses it to resolve relative
+// dates such as "last week".
+func ObservedAt(ctx context.Context) time.Time {
+	t, _ := ctx.Value(observedAtKey{}).(time.Time)
+	return t
+}
+
+// AdmitProposals keeps the proposals RememberText would accept for text and
+// drops the rest, converting a string value to its predicate's declared
+// number or boolean type. RememberText refuses a whole batch for one bad
+// proposal so that the agent that made it can correct it; an extractor
+// backed by a model cannot be asked, so it filters with this instead.
+// Proposals naming an unregistered predicate are kept, since RememberText
+// files their text as a note.
+func (r Registry) AdmitProposals(text string, proposals []Proposal) []Proposal {
+	out := make([]Proposal, 0, len(proposals))
+	for _, p := range proposals {
+		if len(out) == maxProposals {
+			break
+		}
+		p.Subject = strings.TrimSpace(p.Subject)
+		p.Predicate = r.canonical(strings.TrimSpace(p.Predicate))
+		evidence := strings.TrimSpace(p.Evidence)
+		if normalizeSubject(p.Subject) == "" || evidence == "" || len(evidence) > MaxEvidenceBytes || !strings.Contains(text, p.Evidence) {
+			continue
+		}
+		if spec, ok := r[p.Predicate]; ok {
+			p.Value = coerceValue(spec, p.Value)
+			if _, err := normalizeValue(p.Predicate, spec, p.Value); err != nil {
+				continue
+			}
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// coerceValue reads a number or boolean a model wrote as a string.
+func coerceValue(spec Predicate, v any) any {
+	s, ok := v.(string)
+	if !ok {
+		return v
+	}
+	s = strings.TrimSpace(s)
+	switch spec.valueType() {
+	case typeNumber:
+		if f, err := strconv.ParseFloat(strings.ReplaceAll(s, ",", ""), 64); err == nil {
+			return f
+		}
+	case typeBoolean:
+		switch strings.ToLower(s) {
+		case "true", "yes":
+			return true
+		case "false", "no":
+			return false
+		}
+	}
+	return v
 }
 
 // ProposedStatements adapts proposals made by the calling agent. This lets an

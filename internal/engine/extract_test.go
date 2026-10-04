@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestExtractValidateWholeBatchThenFold(t *testing.T) {
@@ -117,5 +118,52 @@ func TestExtractBadValueForRegisteredPredicateStillFails(t *testing.T) {
 	}
 	if got, _ := c.Recall(t.Context(), Query{Subject: "project", Predicate: NotePredicate}); len(got) != 0 {
 		t.Fatalf("failed batch wrote a note: %+v", got)
+	}
+}
+
+func TestAdmitProposalsDropsWhatRememberTextRefuses(t *testing.T) {
+	r := Registry{"port": {Cardinality: "single", ValueType: "number"}, "enabled": {Cardinality: "single", ValueType: "boolean"}, "prefers_editor": {Cardinality: "single", ValueType: "string"}}
+	text := "I use neovim. The port is 8080 and it is turned on."
+	got := r.AdmitProposals(text, []Proposal{
+		{Subject: "user", Predicate: "prefers_editor", Value: "neovim", Evidence: "I use neovim."},
+		{Subject: "user", Predicate: "prefers_editor", Value: "vim", Evidence: "not in the text"},
+		{Subject: "app", Predicate: "port", Value: "8080", Evidence: "The port is 8080"},
+		{Subject: "app", Predicate: "port", Value: "eighty", Evidence: "The port is 8080"},
+		{Subject: "app", Predicate: "enabled", Value: "true", Evidence: "it is turned on"},
+		{Subject: " ", Predicate: "prefers_editor", Value: "neovim", Evidence: "I use neovim."},
+		{Subject: "user", Predicate: "invented", Value: "x", Evidence: "I use neovim."},
+	})
+	if len(got) != 4 || got[1].Value != float64(8080) || got[2].Value != true || got[3].Predicate != "invented" {
+		t.Fatalf("admitted: %+v", got)
+	}
+	c, err := NewClient(Config{Backend: newLockedBackend(), Collection: "m", Registry: r, Embedder: LexicalEmbedder{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := c.RememberText(t.Context(), text, ProposedStatements(got))
+	if err != nil || len(out.Results) != 4 || len(out.Unfiled) != 1 {
+		t.Fatalf("admitted proposals refused: %+v %v", out, err)
+	}
+}
+
+type datedExtractor struct{ seen time.Time }
+
+func (d *datedExtractor) Extract(ctx context.Context, _ string, _ Registry) ([]Proposal, error) {
+	d.seen = ObservedAt(ctx)
+	return nil, nil
+}
+
+func TestExtractorSeesObservedAt(t *testing.T) {
+	c, err := NewClient(Config{Backend: newLockedBackend(), Collection: "m", Registry: DefaultRegistry(), Embedder: LexicalEmbedder{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &datedExtractor{}
+	if _, err := c.RememberText(t.Context(), "hello", d); err != nil || !d.seen.IsZero() {
+		t.Fatalf("now: %v %v", d.seen, err)
+	}
+	at := time.Date(2023, 5, 20, 2, 21, 0, 0, time.UTC)
+	if _, err := c.RememberTextAt(t.Context(), "hello again", d, at); err != nil || !d.seen.Equal(at) {
+		t.Fatalf("dated: %v %v", d.seen, err)
 	}
 }

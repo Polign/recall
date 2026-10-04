@@ -1,6 +1,7 @@
 package recall
 
 import (
+	"context"
 	"time"
 
 	"github.com/Polign/recall/internal/engine"
@@ -256,6 +257,13 @@ type Proposal = engine.Proposal
 type Extractor = engine.Extractor
 
 type ExtractionResult = engine.ExtractionResult
+
+// ObservedAt is when the text an extractor is reading was said, as given to
+// RememberTextAt. Zero means now. An extractor uses it to resolve relative
+// dates such as "last week".
+func ObservedAt(ctx context.Context) time.Time {
+	return engine.ObservedAt(ctx)
+}
 
 // DefaultSubject is who a note is about when the text yielded no proposal to
 // take a subject from.

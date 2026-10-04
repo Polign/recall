@@ -188,6 +188,15 @@ dated in the future would stay hidden from every query about the present.
 `RememberTextAt` does the same for text mode, stamping every statement and note
 it writes. Forget always records its retraction after everything it withdraws.
 
+`RememberText` takes any `Extractor`. `ProposedStatements` passes on what the
+calling agent proposed. The `github.com/Polign/recall/model` package proposes
+statements with a language model: `model.Parse("anthropic:claude-opus-5-5")`
+(or `openai:<model>`, `ollama:<model>`) and `model.NewExtractor` build one, with
+keys from `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. Its prompt lists the
+registered predicates and the date from `ObservedAt(ctx)`, and its replies go
+through `Registry.AdmitProposals`, which drops a proposal `RememberText` would
+refuse instead of failing the batch.
+
 Client configuration is validated and its registry is copied. Both Client and
 legacy Store return a registry copy, so callers cannot mutate their configuration
 through `Registry()`. Backends and embedders must support concurrent calls and

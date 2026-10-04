@@ -1,9 +1,36 @@
 # Changelog
 
-## [Unreleased]
+## Python client 0.9.0 - 2026-10-04
+
+The Python client now shares the Go library's version number.
+
+- `remember(text=...)` no longer needs `statements`. Without them, the server's
+  extraction model proposes the statements in the text. Statements your agent
+  passes are still used as given, and the model is not called.
+- `Client(extract_model="provider:model")` names that model, for example
+  `"anthropic:claude-opus-5-5"`, `"openai:<model>"`, or `"ollama:<model>"`.
+  `POLIGN_EXTRACT_MODEL` in the environment does the same.
+- Requires `polign_db` 0.11.0 or later, the first whose `polign mcp` takes
+  `-extract-model`.
+
+## [0.9.0] - 2026-10-04
 
 ### Added
 
+- Extraction by a language model. The new `model` package is an `Extractor`
+  that proposes the statements in a text, so `RememberText` can be given text
+  alone. `model.Parse("anthropic:claude-opus-5-5")` and `model.NewExtractor`
+  build it. Anthropic models are called through the Anthropic Go SDK; OpenAI,
+  Ollama, and other endpoints that speak the OpenAI chat completions API are
+  called over HTTP. The model can name only registered predicates and must
+  quote its evidence from the text; the registry and the fold decide what is
+  stored, as for any other extractor.
+- `Registry.AdmitProposals` keeps the proposals `RememberText` would accept and
+  drops the rest, reading numbers and booleans written as strings. An extractor
+  whose model cannot be asked to correct a refused batch uses it, so one bad
+  proposal does not cost the others.
+- `ObservedAt(ctx)` gives an extractor the time `RememberTextAt` was given, so
+  relative dates such as "last week" resolve against when the text was said.
 - Starter registries. `StarterRegistry(name)` returns a ready-made registry for
   `coding`, `support`, `sales`, or `voice` agents, and `StarterNames()` lists
   them. `DefaultRegistry()` is the coding one, unchanged. The same registries
