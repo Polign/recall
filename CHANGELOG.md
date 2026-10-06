@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Reads deliver corrections. Every `Belief` now carries `Replaced`, the values
+  it displaced when it was asserted, each with its source, the time it was
+  stated, and its event id. An agent that asks what is believed gets the
+  current value and the correction behind it in one call, without a separate
+  `History` read. It goes back one step, a multi-valued predicate never
+  replaces anything, and restating the current value keeps the correction it
+  made. The MCP `recall` tool returns it as `replaced`.
+- Python client: `Belief.replaced`, a tuple of `PriorValue`.
+
 ## Python client 0.9.0 - 2026-10-04
 
 The Python client now shares the Go library's version number.

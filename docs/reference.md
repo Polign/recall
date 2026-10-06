@@ -93,6 +93,21 @@ beliefs from those events using the registry's rules. A correction preserves the
 previous event, so history and past-time queries can still show it. This does
 not serialize concurrent writers; see the client and audit contracts below.
 
+Every read delivers the correction with the answer. A belief lists, under
+`Replaced`, the value it displaced, when that value was stated, and its source,
+so an agent asking for `prefers_editor` gets neovim and learns it replaced vim
+in the same call:
+
+```text
+value:       neovim
+observed_at: 2026-09-12T04:31:07Z
+replaced:    vim, user_stated, 2026-08-30T17:02:44Z
+```
+
+`Replaced` goes back one step. The whole chain is in `History`. A belief of a
+multi-valued predicate never replaces anything, and a value restated without
+change keeps the correction it made.
+
 Forgetting records a retraction rather than deleting data. A targeted retraction
 withdraws only that value: vim → emacs → retract vim leaves emacs current.
 Retracting the current value never revives one that was superseded. Clearing a

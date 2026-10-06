@@ -26,6 +26,15 @@ class RecallError(Exception):
 
 
 @dataclass(frozen=True)
+class PriorValue:
+    """A value that a newer statement replaced."""
+    value: Value
+    source: str
+    observed_at: str
+    event_id: str
+
+
+@dataclass(frozen=True)
 class Belief:
     subject: str
     predicate: str
@@ -41,6 +50,9 @@ class Belief:
     evidence: str = ""
     evidence_id: str = ""
     source_text: str = ""
+    # What this belief replaced when it was stated, one step back: the
+    # correction, delivered with the answer. Empty when it replaced nothing.
+    replaced: tuple[PriorValue, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -92,8 +104,12 @@ def _known(cls: type, data: Any) -> dict[str, Any]:
 
 
 def _belief(data: Any) -> Belief:
+    known = _known(Belief, data)
+    known["replaced"] = tuple(
+        PriorValue(**{"value": "", "source": "", "observed_at": "", "event_id": "", **_known(PriorValue, p)})
+        for p in known.get("replaced") or ())
     return Belief(**{"subject": "", "predicate": "", "value": "", "confidence": 0.0, "source": "",
-                     "kind": "", "observed_at": "", "event_id": "", **_known(Belief, data)})
+                     "kind": "", "observed_at": "", "event_id": "", **known})
 
 
 @dataclass(frozen=True)

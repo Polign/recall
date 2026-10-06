@@ -114,6 +114,9 @@ type Event = engine.Event
 // log, not a stored row.
 type Belief = engine.Belief
 
+// PriorValue is a value a belief displaced, listed in Belief.Replaced.
+type PriorValue = engine.PriorValue
+
 // Cardinality decides what a second value for the same subject and predicate
 // means.
 type Cardinality = engine.Cardinality

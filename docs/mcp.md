@@ -60,7 +60,7 @@ does not determine how long memories are kept.
 | --- | --- |
 | `list_predicates` | Lists the kinds of memory the application accepts. |
 | `remember` | Saves a fact or preference. A new value replaces an old one when its type allows only one current value. |
-| `recall` | Reads current memories or answers a query about an earlier time. |
+| `recall` | Reads current memories or answers a query about an earlier time. Each memory lists the value it replaced, so a correction arrives with the answer. |
 | `memory_history` | Shows the statements and withdrawals behind a memory. |
 | `forget` | Withdraws a memory from current answers while preserving its history. |
 

@@ -7,7 +7,7 @@ import time
 import unittest
 import unittest.mock
 
-from polign_recall import Client, RecallError, ResumeContext, WorkingState
+from polign_recall import Client, PriorValue, RecallError, ResumeContext, WorkingState
 
 
 FAKE = r'''
@@ -90,6 +90,14 @@ class TransportTests(unittest.TestCase):
             result = memory.remember("future", "prefers_editor", "vim")
             self.assertEqual(result.stored.value, "vim")
             self.assertEqual(result.stored.evidence, "")
+
+    def test_replaced_values_decode(self):
+        from polign_recall.client import _belief
+        b = _belief({"subject": "4812", "predicate": "refund_exception", "value": "revoked",
+                     "replaced": [{"value": "approved", "source": "user_stated",
+                                   "observed_at": "2026-09-12T00:00:00Z", "event_id": "e1", "later": 1}]})
+        self.assertEqual(b.replaced, (PriorValue("approved", "user_stated", "2026-09-12T00:00:00Z", "e1"),))
+        self.assertEqual(_belief({"subject": "4812"}).replaced, ())
 
     def test_partial_results_are_preserved(self):
         with Client(command=self.command) as memory:

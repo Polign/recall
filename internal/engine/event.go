@@ -69,6 +69,20 @@ type Belief struct {
 	// Via is set on a belief that Query.FollowRefs added: the event of the
 	// belief whose ref value led to this one's subject.
 	Via string `json:"via,omitempty"`
+	// Replaced lists the values this belief displaced when it was asserted,
+	// so a reader sees the correction alongside the answer: what was believed
+	// before, when, and on what basis. It goes back one step; the whole chain
+	// is in the history. Empty when the belief displaced nothing, which is
+	// always the case for a multi-valued predicate.
+	Replaced []PriorValue `json:"replaced,omitempty"`
+}
+
+// PriorValue is a value that a newer assertion displaced.
+type PriorValue struct {
+	Value      any       `json:"value"`
+	Source     string    `json:"source"`
+	ObservedAt time.Time `json:"observed_at"`
+	EventID    string    `json:"event_id"`
 }
 
 // Cardinality decides what a second value for the same subject and predicate
@@ -157,11 +171,28 @@ func foldWith(events []Event, cardAt func(time.Time) Cardinality, asOf time.Time
 			order = slices.DeleteFunc(order, func(v string) bool { return v == k })
 			continue
 		}
+		b := beliefOf(e)
+		// Restating a held value keeps what that value had replaced: hearing
+		// it again does not undo the correction it was.
+		prev, seen := held[k]
+		if seen {
+			b.Replaced = prev.Replaced
+		}
 		if cardAt(e.ObservedAt) != Multi {
+			var replaced []PriorValue
+			for _, hk := range order {
+				if hk != k {
+					replaced = append(replaced, priorOf(held[hk]))
+				}
+			}
+			if len(replaced) > 0 {
+				b.Replaced = replaced
+			}
 			held = map[string]Belief{}
 			order = order[:0]
+			seen = false
 		}
-		if _, seen := held[k]; !seen {
+		if !seen {
 			order = append(order, k)
 		}
 		// A repeated assertion refreshes confidence, source, and instant:
@@ -173,7 +204,7 @@ func foldWith(events []Event, cardAt func(time.Time) Cardinality, asOf time.Time
 		// logs, a re-assertion after a retraction, and any writer appending
 		// events directly. Raising confidence through Remember would be a
 		// change to that idempotence rule, not to this fold.
-		held[k] = beliefOf(e)
+		held[k] = b
 	}
 	out := make([]Belief, 0, len(held))
 	for _, k := range order {
@@ -200,6 +231,10 @@ func beliefOf(e Event) Belief {
 		Evidence:   e.Evidence,
 		EvidenceID: e.EvidenceID,
 	}
+}
+
+func priorOf(b Belief) PriorValue {
+	return PriorValue{Value: b.Value, Source: b.Source, ObservedAt: b.ObservedAt, EventID: b.EventID}
 }
 
 // ValueKey renders a value in the canonical form used to tell two values
