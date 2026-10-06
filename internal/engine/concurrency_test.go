@@ -47,6 +47,12 @@ func TestConcurrentRememberAndTargetedForgetReplay(t *testing.T) {
 		put: db.Put,
 		list: func(ctx context.Context, c string, f map[string]any, n int) ([]StoredVector, int, error) {
 			rows, total, err := db.List(ctx, c, f, n)
+			// Hold only the history reads. Each store reads its registry log
+			// first, and holding that instead lets one writer finish before
+			// the other reads history, which is not the race under test.
+			if f["subject"] == RegistrySubject {
+				return rows, total, err
+			}
 			if calls.Add(1) <= 2 {
 				arrived <- struct{}{}
 				<-release
