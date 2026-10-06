@@ -1,6 +1,6 @@
 # Changelog
 
-## Python client 0.10.0 - unreleased
+## Python client 0.10.0 - 2026-10-05
 
 - `Belief.replaced`, a tuple of `PriorValue`: what each belief replaced.
 - Requires `polign_db` 0.12.0 or later, the first whose `recall` tool returns
@@ -21,7 +21,7 @@
 ### Compatibility
 
 - polign-recall 0.5.0 and earlier fail on a field they do not know, so they
-  cannot read beliefs from a server built on this release. Later clients
+  cannot read beliefs from a server built on this release. 0.6.0 and later
   ignore it.
 
 ## Python client 0.9.0 - 2026-10-04

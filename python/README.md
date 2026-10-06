@@ -18,7 +18,8 @@ from polign_recall import Client
 with Client(local_dir="./recall-data") as memory:
     memory.remember("user", "prefers_editor", "vim")
     changed = memory.remember("user", "prefers_editor", "neovim")
-    print(memory.recall("user", "prefers_editor")[0].value)  # neovim
+    current = memory.recall("user", "prefers_editor")[0]
+    print(current.value, current.replaced[0].value)  # neovim vim
     print(memory.history("user", "prefers_editor"))  # both statements
     memory.forget("user", "prefers_editor", "neovim")
 ```
