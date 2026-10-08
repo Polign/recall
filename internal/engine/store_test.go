@@ -52,6 +52,19 @@ func (f *fakeDB) matching(filter map[string]any, limit int) []StoredVector {
 		rec := f.records[id]
 		ok := true
 		for k, want := range filter {
+			if r, isRange := want.(map[string]any); isRange {
+				got, _ := rec.Metadata[k].(float64)
+				if lo, has := r["$gte"].(float64); has && got < lo {
+					ok = false
+				}
+				if hi, has := r["$lte"].(float64); has && got > hi {
+					ok = false
+				}
+				if !ok {
+					break
+				}
+				continue
+			}
 			if fmt.Sprint(rec.Metadata[k]) != fmt.Sprint(want) {
 				ok = false
 				break

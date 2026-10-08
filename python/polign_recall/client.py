@@ -53,6 +53,9 @@ class Belief:
     # What this belief replaced when it was stated, one step back: the
     # correction, delivered with the answer. Empty when it replaced nothing.
     replaced: tuple[PriorValue, ...] = ()
+    # Whole days between when this was stated and the moment asked about
+    # (as_of, or today). None from a server that does not send it.
+    days_ago: int | None = None
 
 
 @dataclass(frozen=True)
@@ -497,16 +500,26 @@ class Client:
     def recall(self, subject: str | None = None, predicate: str | None = None, *,
                query: str | None = None, as_of: str | datetime | None = None,
                min_confidence: float | None = None, limit: int | None = None,
-               with_sources: bool = False) -> list[Belief]:
+               with_sources: bool = False, observed_after: str | datetime | None = None,
+               observed_before: str | datetime | None = None) -> list[Belief]:
         """What is believed. With `with_sources`, a belief remembered from text
         also carries `evidence`, `evidence_id` and `source_text`, the excerpt
         and the whole text it was drawn from. It needs a polign CLI whose
-        recall tool accepts with_sources."""
+        recall tool accepts with_sources.
+
+        `observed_after` and `observed_before` keep only beliefs stated in
+        that span. A query that names a time ("two weeks ago", "last
+        Saturday") already searches that span first without them."""
         if as_of is not None:
             as_of = _instant(as_of, "as_of")
+        if observed_after is not None:
+            observed_after = _instant(observed_after, "observed_after")
+        if observed_before is not None:
+            observed_before = _instant(observed_before, "observed_before")
         args = {"subject": subject, "predicate": predicate, "query": query,
                 "as_of": as_of, "min_confidence": min_confidence, "limit": limit,
-                "with_sources": True if with_sources else None}
+                "with_sources": True if with_sources else None,
+                "observed_after": observed_after, "observed_before": observed_before}
         return [_belief(b) for b in self._tool("recall", {k: v for k, v in args.items() if v is not None}) or []]
 
     def forget(self, subject: str, predicate: str, value: Any = _MISSING, *, all: bool = False) -> int:

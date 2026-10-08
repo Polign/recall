@@ -60,6 +60,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("runs", nargs="+")
     ap.add_argument("--data", default="longmemeval_s_cleaned.json")
+    ap.add_argument("--subset", choices=tuple(lme.SUBSETS), default="all",
+                    help="score only these questions (see run.py --subset)")
     ap.add_argument("--holdout", type=int, default=0,
                     help="leave out the stratified sample of this many questions used for tuning (run.py --limit)")
     args = ap.parse_args()
@@ -67,13 +69,18 @@ def main() -> None:
     refs = {e["question_id"]: e for e in entries}
     global EXCLUDE
     EXCLUDE = {e["question_id"] for e in lme.sample(entries, args.holdout)} if args.holdout else set()
-    if EXCLUDE:
+    EXCLUDE |= {e["question_id"] for e in entries if not lme.SUBSETS[args.subset](e)}
+    if args.subset != "all":
+        print(f"Subset {args.subset}: {len(entries) - len(EXCLUDE)} questions scored.\n")
+    elif EXCLUDE:
         print(f"Held out: the {len(EXCLUDE)} tuning questions are left out.\n")
 
     accs = {r: accuracy(r) for r in args.runs}
     width = max(12, *(len(r) for r in args.runs))
     print("QA accuracy (judged / n)".ljust(28) + "".join(r.rjust(width + 2) for r in args.runs))
     for key in ("all", *TYPES, "abstention"):
+        if not any(key in accs[r] for r in args.runs):
+            continue
         cells = []
         for r in args.runs:
             acc, n = accs[r].get(key, (float("nan"), 0))

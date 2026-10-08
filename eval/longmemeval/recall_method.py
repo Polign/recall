@@ -177,7 +177,10 @@ def ingest_typed(client: Any, entry: dict[str, Any], rounds, extractor: str, sta
     return log
 
 
-COLLECTION = "recall_lexical_v1"  # the MCP memory server's default
+# LME_EMBED_URL gives the memory server a model embedder (see embed_proxy.py),
+# which needs its own collection; without it Recall uses lexical hashing.
+EMBED_URL = os.environ.get("LME_EMBED_URL", "")
+COLLECTION = "recall_embed_v1" if EMBED_URL else "recall_lexical_v1"  # the MCP memory server's default
 
 
 def wait_for_text_index(store: Path, event_id: str, probe: str, timeout: float = 180) -> float:
@@ -231,29 +234,48 @@ def stop_local_server(store: Path) -> None:
 
 
 def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
-            extractor: str = "", as_of: str = "question") -> tuple[list, list[str], dict]:
+            extractor: str = "", as_of: str = "question", profile: int = 0) -> tuple[list, list[str], dict]:
     from polign_recall.client import Client
 
     stats: dict[str, Any] = {"proposed": 0, "bad_evidence": 0, "unregistered": 0, "cross_round": 0, "long_evidence": 0}
     env = {}
+    if EMBED_URL:
+        env["POLIGN_EMBED_URL"] = EMBED_URL
+        env["POLIGN_COLLECTION"] = COLLECTION
     reg: dict[str, Any] = {}
     if method in ("recall-typed", "recall-linked"):
         import extract
         env["POLIGN_PREDICATES"] = str(extract.REGISTRY_PATH)
         reg = extract.registry()
-    store = Path(tempfile.mkdtemp(prefix=f"lme-{entry['question_id']}-"))
+    # LME_STORES keeps each question's ingested store, so a run that only
+    # changes the read side (engine search, reader prompt) reuses it instead
+    # of writing the whole haystack again.
+    stores = os.environ.get("LME_STORES")
+    if stores:
+        store = Path(stores) / f"{method}-{extractor}{'-events' if os.environ.get('LME_EXTRACT_EVENTS') else ''}{'-embed' if EMBED_URL else ''}" / entry["question_id"]
+        if store.exists() and not (store / "ingest.jsonl").exists():
+            shutil.rmtree(store, ignore_errors=True)  # left by an ingest that failed
+        store.mkdir(parents=True, exist_ok=True)
+    else:
+        store = Path(tempfile.mkdtemp(prefix=f"lme-{entry['question_id']}-"))
+    done = store / "ingest.jsonl"
     try:
         with Client(local_dir=store, write=True, timeout=600, env=env) as client:
             t0 = time.monotonic()
-            if method == "recall-notes":
+            if done.exists():
+                log = lme.read_jsonl(done)
+                stats["reused_store"] = True
+            elif method == "recall-notes":
                 log = ingest_notes(client, entry, rounds)
             elif method in ("recall-typed", "recall-linked"):
                 log = ingest_typed(client, entry, rounds, extractor, stats, link=method == "recall-linked")
             else:
                 raise SystemExit(f"unknown recall method {method!r}")
             ingest_s = time.monotonic() - t0
-            if log:
+            if log and not done.exists():
                 stats["index_wait_s"] = wait_for_text_index(store, log[-1]["event_id"], log[-1]["probe"])
+                if stores:
+                    done.write_text("".join(json.dumps(r) + "\n" for r in log))
 
             t1 = time.monotonic()
             # as_of="question" asks what was known on the question date, so a
@@ -263,6 +285,13 @@ def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
             when = instant(entry["question_date"]) if as_of == "question" else None
             beliefs = client.recall(query=entry["question"], limit=k, as_of=when,
                                     with_sources=method == "recall-linked")
+            if profile and reg.get("preference"):
+                # The user's stated preferences about what the question is
+                # about, whatever subject they were filed under.
+                have = {b.event_id for b in beliefs}
+                prefs = client.recall(predicate="preference", query=entry["question"], limit=profile,
+                                      as_of=when, with_sources=method == "recall-linked")
+                beliefs += [b for b in prefs if b.event_id not in have]
             recall_ms = (time.monotonic() - t1) * 1000
 
             where = {r["event_id"]: r for r in log}
@@ -286,7 +315,10 @@ def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
                     order.append(sid)
     finally:
         stop_local_server(store)
-        shutil.rmtree(store, ignore_errors=True)
+        # A cached store is kept only once its ingest finished; a failed one
+        # starts over on the retry rather than build on a partial log.
+        if not stores or not done.exists():
+            shutil.rmtree(store, ignore_errors=True)
 
     (cache_dir / f"{entry['question_id']}.ingest.jsonl").write_text("".join(json.dumps(r) + "\n" for r in log))
     stats.update({"events": len(log), "notes": sum(r["predicate"] == "note" for r in log),

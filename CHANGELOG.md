@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.11.0] - 2026-10-08
+
+### Added
+
+- A search that names a time looks there first. "What did I plant two weeks
+  ago", "who gave me jewelry last Saturday" and "what did I watch in January"
+  now search the span the phrase points at, read relative to `AsOf`, before
+  searching everywhere. Matches from that span take the leading ranks and
+  nothing is dropped. On the user-fact questions of LongMemEval_S this took
+  accuracy from 77.5% to 80.5%, and temporal questions from 68.9% to 76.7%,
+  with no change in latency. `Query.NoTimeHint` turns it off.
+- `Query.ObservedAfter` and `Query.ObservedBefore` keep only beliefs stated in
+  a span, both inclusive.
+
+## Python client, unreleased
+
+- `recall(observed_after=, observed_before=)`, passed to the MCP `recall`
+  tool. Needs a polign_db release whose `recall` tool accepts them.
+- `Belief.days_ago`, from a polign_db whose `recall` tool sends it; `None`
+  otherwise.
+
 ## Python client 0.10.0 - 2026-10-05
 
 - `Belief.replaced`, a tuple of `PriorValue`: what each belief replaced.

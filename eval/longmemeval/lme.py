@@ -78,6 +78,39 @@ def is_abstention(qid: str) -> bool:
     return "_abs" in qid
 
 
+# Question types that ask about the user: what they said, prefer, changed,
+# and when. Left out: single-session-assistant (asks what the assistant
+# said, which Recall does not store as beliefs) and multi-session
+# (aggregation across sessions, reported on the full set).
+USER_FACT_TYPES = ("single-session-user", "single-session-preference",
+                   "knowledge-update", "temporal-reasoning")
+
+
+def _when(date: str) -> str:
+    # "2023/05/20 (Sat) 02:21" -> "2023/05/20 02:21", which sorts by time
+    return re.sub(r" \(\w+\)", "", date)
+
+
+def answer_after_question(entry: dict[str, Any]) -> bool:
+    """True when a session holding the answer is dated after the question.
+    44 questions in the S split do this (43 temporal-reasoning); a memory
+    asked as of the question date correctly cannot see the answer."""
+    dates = dict(zip(entry["haystack_session_ids"], entry["haystack_dates"]))
+    asked = _when(entry["question_date"])
+    return any(_when(dates[s]) > asked for s in entry["answer_session_ids"] if s in dates)
+
+
+SUBSETS = {
+    "all": lambda e: True,
+    "valid": lambda e: not answer_after_question(e),
+    "user-facts": lambda e: e["question_type"] in USER_FACT_TYPES and not answer_after_question(e),
+}
+
+
+def subset(entries: list[dict[str, Any]], name: str) -> list[dict[str, Any]]:
+    return [e for e in entries if SUBSETS[name](e)]
+
+
 def sample(entries: list[dict[str, Any]], limit: int | None) -> list[dict[str, Any]]:
     """A stratified subset: each question type keeps its share of `limit`,
     and the choice within a type is a stable hash of the question id, so the
@@ -104,13 +137,26 @@ def sessions(entry: dict[str, Any]) -> list[tuple[str, str, list[dict[str, Any]]
     return out
 
 
-def format_history(chunks: Iterable[tuple[str, list[dict[str, Any]]]]) -> str:
+def days_before(date: str, now: str) -> int:
+    """Whole days from a dataset date to a later one."""
+    from datetime import datetime
+    day = lambda d: datetime.strptime(d[:10], "%Y/%m/%d")
+    return (day(now) - day(date)).days
+
+
+def format_history(chunks: Iterable[tuple[str, list[dict[str, Any]]]], now: str | None = None) -> str:
     """Upstream's 'nl' history format. Each chunk is (date, turns); chunks are
-    sorted by date before numbering, as upstream does."""
+    sorted by date before numbering, as upstream does. With now (the question
+    date), each session date also says how many days before it falls, so the
+    reader does not have to do calendar arithmetic."""
     history = ""
     for i, (date, turns) in enumerate(sorted(chunks, key=lambda c: c[0])):
         body = "".join("\n\n{}: {}".format(t["role"], t["content"].strip()) for t in turns)
-        history += "\n### Session {}:\nSession Date: {}\nSession Content:\n{}\n".format(i + 1, date, body)
+        when = date
+        if now:
+            n = days_before(date, now)
+            when += " (today)" if n == 0 else f" ({n} day{'s' if n != 1 else ''} before the current date)"
+        history += "\n### Session {}:\nSession Date: {}\nSession Content:\n{}\n".format(i + 1, when, body)
     return history
 
 

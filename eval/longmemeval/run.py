@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -40,6 +41,17 @@ def rounds(turns: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
         else:
             out[-1].append(t)
     return out
+
+
+# Questions whose answer spans several memories: an order, a total, "all",
+# "each" or "both", or a count of days or times between events. They need
+# every match, not the top k.
+LIST_QUESTION = re.compile(r"\b(order|in total|total|list|all (the|of|my)|each|every|both|which (two|three|four)|"
+                           r"how many (days|weeks|months|times|different))\b", re.I)
+
+
+def k_for(entry: dict[str, Any], k: int, list_k: int) -> int:
+    return list_k if list_k and LIST_QUESTION.search(entry["question"]) else k
 
 
 def context(entry: dict[str, Any], method: str, k: int) -> tuple[list[tuple[str, list]], list[str]]:
@@ -79,10 +91,19 @@ def main() -> None:
                     help="recall methods: answer as of the question date, or over all history as the baselines do")
     ap.add_argument("--extractor", default="gpt-4o-mini-2024-07-18", help="recall-typed extraction model")
     ap.add_argument("--cot", action="store_true", help="upstream's step-by-step reader prompt")
+    ap.add_argument("--ages", action="store_true", help="say how many days before the question each session date is")
+    ap.add_argument("--list-k", type=int, default=0,
+                    help="use this k instead for questions that ask for a set, an order or a count")
+    ap.add_argument("--profile", type=int, default=0,
+                    help="recall-*: also show up to this many preference beliefs matching the question")
     ap.add_argument("--max-tokens", type=int, help="reader output budget (upstream: 500, or 800 with --cot)")
     ap.add_argument("--context", type=int, default=128000,
                     help="reader context window; history is cut to context - max-tokens - 1000, as upstream")
     ap.add_argument("--limit", type=int, help="stratified subset of this many questions")
+    ap.add_argument("--subset", choices=tuple(lme.SUBSETS), default="all",
+                    help="valid: drop questions answered by a session dated after them; "
+                         "user-facts: valid questions about the user (no assistant-recall or multi-session)")
+    ap.add_argument("--only", help="file of question ids, one per line: run just those (after --subset)")
     ap.add_argument("--data", default="longmemeval_s_cleaned.json")
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--dry-run", action="store_true", help="build prompts and retrieval, skip the reader")
@@ -91,7 +112,10 @@ def main() -> None:
         args.max_tokens = 800 if args.cot else 500
     history_budget = args.context - args.max_tokens - 1000
 
-    entries = lme.sample(lme.load(args.data), args.limit)
+    entries = lme.sample(lme.subset(lme.load(args.data), args.subset), args.limit)
+    if args.only:
+        wanted = set(open(args.only).read().split())
+        entries = [e for e in entries if e["question_id"] in wanted]
     out = lme.run_dir(args.run)
     manifest = {**vars(args), "data_sha256": lme.file_sha256(lme.DATA / args.data),
                 "questions": len(entries), "argv": sys.argv,
@@ -109,10 +133,12 @@ def main() -> None:
         stats: dict[str, Any] = {}
         if args.method.startswith("recall-"):
             import recall_method
-            chunks, retrieved, stats = recall_method.context(entry, args.method, args.k, rounds, out, args.extractor, args.as_of)
+            chunks, retrieved, stats = recall_method.context(entry, args.method, k_for(entry, args.k, args.list_k), rounds, out, args.extractor,
+                                                              args.as_of, profile=args.profile)
         else:
-            chunks, retrieved = context(entry, args.method, args.k)
-        history, history_tokens = lme.truncate_history(lme.format_history(chunks), history_budget)
+            chunks, retrieved = context(entry, args.method, k_for(entry, args.k, args.list_k))
+        history, history_tokens = lme.truncate_history(
+            lme.format_history(chunks, entry["question_date"] if args.ages else None), history_budget)
         prompt = lme.reader_prompt(history, entry, args.cot, facts=args.method == "recall-typed",
                                    merge=args.method == "recall-linked")
         hyp = "" if args.dry_run else lme.complete(args.reader, prompt, args.max_tokens)

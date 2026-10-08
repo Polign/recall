@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from typing import Any
 
 import lme
@@ -35,13 +36,22 @@ Rules:
 - value is a short, self-contained phrase. Resolve relative dates ("last week", "yesterday", "on 2/15") against the session date and write them as YYYY/MM/DD.
 - evidence is an exact, verbatim excerpt of the session text that supports the statement, copied character for character, at most 200 characters.
 - Keep specifics: names, numbers, places, dates, titles, counts, and amounts. Record facts the user states in passing, not only the topic of the conversation.
-- Use assistant_said for specific content the assistant gave (a figure, a list item, a named recommendation). Skip generic advice.
+{events_rule}- Use assistant_said for specific content the assistant gave (a figure, a list item, a named recommendation). Skip generic advice.
 - If nothing is worth keeping, return an empty list.
 
 Return JSON only: {{"statements": [{{"subject": "...", "predicate": "...", "value": "...", "evidence": "..."}}]}}
 
 Session:
 {session}"""
+
+
+# LME_EXTRACT_EVENTS=1 adds a rule that every dated happening is also an
+# event, so "how many days between" questions have both dates. Without it the
+# prompt is the one the published runs used (and their cache key).
+EVENTS_RULE = ("- Whenever the user did, started, finished, bought, attended, joined, or changed something, also "
+               "record an event with its resolved date, even when you record a status, preference, or detail "
+               "about the same thing. A status keeps only the newest value; the event keeps when it happened.\n")
+PROMPT = PROMPT.replace("{events_rule}", EVENTS_RULE if os.environ.get("LME_EXTRACT_EVENTS") else "")
 
 
 def registry() -> dict[str, Any]:

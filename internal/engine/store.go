@@ -386,6 +386,14 @@ type Query struct {
 	// believed about the subject it names, one hop and within Limit. The
 	// added beliefs carry Via.
 	FollowRefs bool
+	// ObservedAfter and ObservedBefore keep only beliefs whose surviving
+	// event was observed in that span, both inclusive. Either may be zero.
+	ObservedAfter  time.Time
+	ObservedBefore time.Time
+	// NoTimeHint stops a search from reading a time phrase in Text ("two
+	// weeks ago", "last Saturday", "in March") as a hint to look at that
+	// span first. The hint only reorders candidates; it never drops any.
+	NoTimeHint bool
 }
 
 // Recall returns the beliefs that hold at the query's instant.
@@ -431,7 +439,7 @@ func (s *Store) Recall(q Query) ([]Belief, error) {
 
 // recallRanked answers a query that names its pair or carries search text.
 func (s *Store) recallRanked(sc *schema, q Query, limit int, asOf time.Time) ([]Belief, error) {
-	candidates, err := s.candidatePairs(sc, q, limit)
+	candidates, err := s.candidatePairs(sc, q, limit, asOf)
 	if err != nil {
 		return nil, err
 	}
@@ -689,7 +697,7 @@ type candidate struct {
 	values map[string]int
 }
 
-func (s *Store) candidatePairs(sc *schema, q Query, limit int) ([]candidate, error) {
+func (s *Store) candidatePairs(sc *schema, q Query, limit int, asOf time.Time) ([]candidate, error) {
 	if q.Subject != "" && q.Predicate != "" {
 		return []candidate{{pair: pair{normalizeSubject(q.Subject), q.Predicate}}}, nil
 	}
@@ -704,14 +712,43 @@ func (s *Store) candidatePairs(sc *schema, q Query, limit int) ([]candidate, err
 
 	// A renamed predicate is searched under each of its names, the current
 	// one first.
-	var events []Event
+	//
+	// A time phrase in the text searches its span first, for at most limit
+	// events, and then everywhere; the span's events take the leading ranks.
+	text := q.Text
+	hint, hinted := timeHint{}, false
+	if !q.NoTimeHint {
+		hint, hinted = queryWindow(q.Text, asOf)
+		if hinted && strings.TrimSpace(hint.rest) != "" {
+			text = hint.rest
+		}
+	}
+	var first, rest []Event
 	for _, filter := range s.filters(sc, q) {
-		found, err := s.searchEvents(q.Text, filter, width)
+		filter = withObserved(filter, q.ObservedAfter, q.ObservedBefore)
+		if hinted {
+			from, to := hint.from, hint.to
+			if from.Before(q.ObservedAfter) {
+				from = q.ObservedAfter
+			}
+			if !q.ObservedBefore.IsZero() && to.After(q.ObservedBefore) {
+				to = q.ObservedBefore
+			}
+			if from.Before(to) {
+				found, err := s.searchEvents(text, withObserved(filter, from, to), limit)
+				if err != nil {
+					return nil, err
+				}
+				first = append(first, found...)
+			}
+		}
+		found, err := s.searchEvents(text, filter, width)
 		if err != nil {
 			return nil, err
 		}
-		events = append(events, found...)
+		rest = append(rest, found...)
 	}
+	events := append(first, rest...)
 	return rankCandidates(sc.candidates(events, q.Predicate == RegistryPredicate)), nil
 }
 
@@ -796,6 +833,10 @@ func matchesBelief(b Belief, q Query) bool {
 		return false
 	}
 	if q.MinConfidence > 0 && b.Confidence < q.MinConfidence {
+		return false
+	}
+	if !q.ObservedAfter.IsZero() && b.ObservedAt.Before(q.ObservedAfter) ||
+		!q.ObservedBefore.IsZero() && b.ObservedAt.After(q.ObservedBefore) {
 		return false
 	}
 	if !q.ValueAfter.IsZero() || !q.ValueBefore.IsZero() {
