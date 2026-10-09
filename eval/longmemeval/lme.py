@@ -184,6 +184,30 @@ def reader_prompt(history: str, entry: dict[str, Any], cot: bool, facts: bool = 
 
 _clients: dict[str, Any] = {}
 
+# Hidden reasoning tokens a reasoning model may spend before its answer.
+REASONING_BUDGET = 8000
+
+
+def reasoning_model(name: str) -> bool:
+    return name.startswith(("gpt-5", "gpt-6", "o1", "o3", "o4"))
+
+
+_usage_lock = __import__("threading").Lock()
+USAGE: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+
+
+def record_usage(model: str, usage: Any) -> None:
+    """Tokens spent per model in this process, for cost estimates."""
+    if usage is None:
+        return
+    details = getattr(usage, "completion_tokens_details", None)
+    with _usage_lock:
+        u = USAGE[model]
+        u["calls"] += 1
+        u["prompt"] += usage.prompt_tokens or 0
+        u["completion"] += usage.completion_tokens or 0
+        u["reasoning"] += getattr(details, "reasoning_tokens", 0) or 0
+
 
 def complete(model: str, prompt: str, max_tokens: int, json_mode: bool = False) -> str:
     """One deterministic completion. `model` is "provider:name"; a bare name
@@ -198,9 +222,16 @@ def complete(model: str, prompt: str, max_tokens: int, json_mode: bool = False) 
                     from openai import OpenAI
                     _clients["openai"] = OpenAI()
                 extra = {"response_format": {"type": "json_object"}} if json_mode else {}
+                if reasoning_model(name):
+                    # Reasoning models take max_completion_tokens, which also
+                    # pays for their hidden reasoning, and only the default
+                    # temperature. The answer budget is kept on top of that.
+                    extra |= {"max_completion_tokens": max_tokens + REASONING_BUDGET}
+                else:
+                    extra |= {"temperature": 0, "max_tokens": max_tokens}
                 r = _clients["openai"].chat.completions.create(
-                    model=name, messages=[{"role": "user", "content": prompt}],
-                    n=1, temperature=0, max_tokens=max_tokens, **extra)
+                    model=name, messages=[{"role": "user", "content": prompt}], n=1, **extra)
+                record_usage(name, r.usage)
                 return (r.choices[0].message.content or "").strip()
             if provider == "anthropic":
                 if "anthropic" not in _clients:

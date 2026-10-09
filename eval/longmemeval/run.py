@@ -160,6 +160,8 @@ def main() -> None:
                 lme.append_jsonl(hyp_path, row)
             if n % 10 == 0 or n == len(todo):
                 print(f"  {n}/{len(todo)}", flush=True)
+    for model, u in lme.USAGE.items():
+        print(f"usage {model}: {dict(u)}", flush=True)
     if failed:
         raise SystemExit(f"{args.run}: {failed} questions failed; rerun the same command to retry them")
 
