@@ -165,25 +165,37 @@ definitions. Search also requires compatible embedding methods.
 Concurrent reads and writes follow the backend's consistency guarantees. Recall
 does not add transaction isolation or replication.
 
-Two backends ship with Recall:
+### Backends
 
-| Backend | Package | `recall mcp` | What it adds |
-| --- | --- | --- | --- |
-| polign_db | [`polign/`](polign) | default | BM25 text search, agent leases for `-agent`, cached reads |
-| Qdrant | [`backend/qdrant/`](backend/qdrant) | `-backend qdrant -url http://localhost:6333` | Vector search and exact filtered reads |
+| | polign_db (default) | Qdrant |
+| --- | --- | --- |
+| Package | [`polign/`](polign) | [`backend/qdrant/`](backend/qdrant) |
+| `recall mcp` | default | `-backend qdrant` |
+| URL and key variables | `POLIGN_URL`, `POLIGN_API_KEY` | `QDRANT_URL`, `QDRANT_API_KEY` |
+| Server version | 0.8.0 or later | 1.10 or later |
+| Remember, recall, forget, history, as-of | yes | yes |
+| Evidence links, audit export | yes | yes |
+| Keyword (BM25) search | yes | no, vector search only |
+| Cached reads | yes | no, every read refolds the history |
+| Agent leases (`recall mcp -agent`) | yes | no; Go `Resume` with `Unleased: true` only |
+| `recall setup` and the Claude plugin | yes | no, add `recall mcp` by hand |
 
-With Qdrant, `recall mcp` reads `QDRANT_URL` and `QDRANT_API_KEY` when no flag
-is given, and creates each collection on its first write. The agent resume
-tools (`-agent`) need leases, which Qdrant does not provide, so they are not
-available on it.
+Pitfalls on Qdrant:
 
-Go applications can implement the `Put`, `List`, and `Search`
-[backend contract](docs/reference.md#complete-histories) to use another storage
-system, and check it with the conformance suite in [`backendtest/`](backendtest).
-A backend package registers itself by name with `recall.RegisterBackend` in
-`init`, as `database/sql` drivers do, and a program opens it with
-`recall.OpenBackend`. The `recall` binary offers every backend imported in
-[`cmd/recall/backends.go`](cmd/recall/backends.go) through `-backend`.
+- Use a collection only Recall writes to. A point without the `_recall_id`
+  payload field makes reads fail.
+- A collection takes its vector size from the first write. Changing embedders
+  needs a new collection.
+- `Unleased: true` is safe only when something else keeps one process per
+  agent. Without a lease, a crashed process that comes back can overwrite its
+  replacement.
+- With the built-in lexical embedder, exact-word queries rank worse than on
+  polign_db. A model embedder (`-embed-url`) helps paraphrases, not keywords.
+
+To add a backend, implement `Put`, `List` and `Search`
+([contract](docs/reference.md#complete-histories)), register it with
+`recall.RegisterBackend` in `init`, pass [`backendtest`](backendtest), and import
+it in [`cmd/recall/backends.go`](cmd/recall/backends.go).
 
 The Go library has no external module dependencies. Its built-in lexical
 embedder supports word-overlap search; applications can supply a model-based

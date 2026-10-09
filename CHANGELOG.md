@@ -8,7 +8,8 @@
   with no new module dependencies. Event IDs are stored as UUIDv5 point IDs
   with the original ID in the payload; each collection is created, with
   payload indexes on the fields Recall filters on, at its first write. It
-  supports `Get` but not leases, watermarks, or text search.
+  supports `Get` but not leases, watermarks, or text search; the README lists
+  what each gap means. Agent resume works on it only with `Unleased: true`.
 - Backends register by name: `recall.RegisterBackend`, `OpenBackend`,
   `LookupBackend` and `Backends`, in the style of `database/sql` drivers. The
   `polign` and `qdrant` packages register themselves when imported, each with
