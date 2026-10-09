@@ -11,8 +11,6 @@ import (
 
 	"github.com/Polign/recall"
 	"github.com/Polign/recall/model"
-	recallpolign "github.com/Polign/recall/polign"
-	recallqdrant "github.com/Polign/recall/qdrant"
 )
 
 // The memory tools. These are the product surface: an agent states what it
@@ -527,6 +525,7 @@ func (m *memoryRuntime) toolHistory(args json.RawMessage) (string, error) {
 // its own store and adapter, including context and embedding-error state.
 type memoryRuntime struct {
 	client   *recall.Client
+	backend  recall.Backend
 	ctx      context.Context
 	store    *recall.Store
 	newStore func(context.Context) *recall.Store
@@ -562,7 +561,11 @@ func newMemoryRuntime(c *api, collection, predicatesPath, embedURL string) (*mem
 	if embedURL != "" {
 		embedder = newRemoteEmbedder(embedURL, 0)
 	}
-	backend, err := openBackend(c)
+	name := c.backend
+	if name == "" {
+		name = setupBackend
+	}
+	backend, err := recall.OpenBackend(name, recall.BackendOptions{URL: c.base, APIKey: c.key})
 	if err != nil {
 		return nil, err
 	}
@@ -570,18 +573,7 @@ func newMemoryRuntime(c *api, collection, predicatesPath, embedURL string) (*mem
 	if err != nil {
 		return nil, err
 	}
-	return &memoryRuntime{client: client, ctx: context.Background()}, nil
-}
-
-// openBackend connects to the database c names.
-func openBackend(c *api) (recall.Backend, error) {
-	switch c.backend {
-	case "", "polign":
-		return recallpolign.New(recallpolign.Config{BaseURL: c.base, APIKey: c.key})
-	case "qdrant":
-		return recallqdrant.New(recallqdrant.Config{BaseURL: c.base, APIKey: c.key})
-	}
-	return nil, fmt.Errorf("unknown backend %q (want polign or qdrant)", c.backend)
+	return &memoryRuntime{client: client, backend: backend, ctx: context.Background()}, nil
 }
 
 // newExtractor builds the model extractor named by spec, such as

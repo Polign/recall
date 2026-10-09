@@ -170,7 +170,7 @@ Two backends ship with Recall:
 | Backend | Package | `recall mcp` | What it adds |
 | --- | --- | --- | --- |
 | polign_db | [`polign/`](polign) | default | BM25 text search, agent leases for `-agent`, cached reads |
-| Qdrant | [`qdrant/`](qdrant) | `-backend qdrant -url http://localhost:6333` | Vector search and exact filtered reads |
+| Qdrant | [`backend/qdrant/`](backend/qdrant) | `-backend qdrant -url http://localhost:6333` | Vector search and exact filtered reads |
 
 With Qdrant, `recall mcp` reads `QDRANT_URL` and `QDRANT_API_KEY` when no flag
 is given, and creates each collection on its first write. The agent resume
@@ -180,6 +180,10 @@ available on it.
 Go applications can implement the `Put`, `List`, and `Search`
 [backend contract](docs/reference.md#complete-histories) to use another storage
 system, and check it with the conformance suite in [`backendtest/`](backendtest).
+A backend package registers itself by name with `recall.RegisterBackend` in
+`init`, as `database/sql` drivers do, and a program opens it with
+`recall.OpenBackend`. The `recall` binary offers every backend imported in
+[`cmd/recall/backends.go`](cmd/recall/backends.go) through `-backend`.
 
 The Go library has no external module dependencies. Its built-in lexical
 embedder supports word-overlap search; applications can supply a model-based
@@ -192,7 +196,7 @@ embedder for semantic search. See the [embedding guide](docs/reference.md#embedd
 | [`recall.go`](recall.go), [`doc.go`](doc.go) | Public Go API at `github.com/Polign/recall` |
 | [`internal/engine/`](internal/engine) | Memory implementation and unit tests |
 | [`polign/`](polign) | polign_db backend |
-| [`qdrant/`](qdrant) | Qdrant backend |
+| [`backend/qdrant/`](backend/qdrant) | Qdrant backend |
 | [`backendtest/`](backendtest) | Conformance suite for backends |
 | [`python/`](python) | Python package and tests |
 | [`cmd/`](cmd) | Command-line tools, including `recall-audit` |

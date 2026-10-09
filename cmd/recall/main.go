@@ -1,6 +1,6 @@
 // Command recall serves typed, correctable agent memory over MCP, kept in a
-// polign_db instance it reaches through the HTTP API, or in Qdrant with
-// -backend qdrant.
+// polign_db instance it reaches through the HTTP API, or in any other backend
+// registered in backends.go and chosen with -backend.
 //
 //	recall mcp [-write] [-agent] [...]   serve the memory tools over stdio
 //	recall setup [-local | -url URL]     configure Recall, optionally install the Claude plugin
@@ -20,6 +20,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/Polign/recall"
 )
 
 // version is stamped via -ldflags "-X main.version=..." (goreleaser).
@@ -27,9 +29,9 @@ var version = "dev"
 
 func main() {
 	log.SetFlags(0)
-	base := flag.String("url", "", "database base URL (default $POLIGN_URL, or $QDRANT_URL with -backend qdrant; for polign without either, recall mcp uses what recall setup configured)")
-	key := flag.String("key", "", "API key sent on every request (default $POLIGN_API_KEY, or $QDRANT_API_KEY with -backend qdrant)")
-	backend := flag.String("backend", envOr("RECALL_BACKEND", "polign"), "storage backend: polign or qdrant (default $RECALL_BACKEND, then polign)")
+	base := flag.String("url", "", "database base URL (default the backend's URL variable, such as $POLIGN_URL; for polign without either, recall mcp uses what recall setup configured)")
+	key := flag.String("key", "", "API key sent on every request (default the backend's key variable, such as $POLIGN_API_KEY)")
+	backend := flag.String("backend", envOr("RECALL_BACKEND", setupBackend), "storage backend: "+strings.Join(recall.Backends(), ", ")+" (default $RECALL_BACKEND, then "+setupBackend+")")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Usage = func() {
 		fmt.Fprintln(flag.CommandLine.Output(), "Usage: recall [global flags] <command> [options]\n\nCommands: mcp, setup, doctor, skill\nAgent guide: recall skill (offline)\n\nGlobal flags:")
@@ -44,19 +46,16 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
-	if *backend != "polign" && *backend != "qdrant" {
-		log.Fatalf("unknown -backend %q (want polign or qdrant)", *backend)
+	driver, ok := recall.LookupBackend(*backend)
+	if !ok {
+		log.Fatalf("unknown -backend %q (want one of %s)", *backend, strings.Join(recall.Backends(), ", "))
 	}
 	url := *base
-	if url == "" && *backend == "qdrant" {
-		url = os.Getenv("QDRANT_URL")
-	} else if url == "" {
-		url = os.Getenv("POLIGN_URL")
+	if url == "" && driver.URLEnv != "" {
+		url = os.Getenv(driver.URLEnv)
 	}
-	if *key == "" && *backend == "qdrant" {
-		*key = os.Getenv("QDRANT_API_KEY")
-	} else if *key == "" {
-		*key = os.Getenv("POLIGN_API_KEY")
+	if *key == "" && driver.KeyEnv != "" {
+		*key = os.Getenv(driver.KeyEnv)
 	}
 	c := &api{base: strings.TrimRight(url, "/"), key: *key, backend: *backend}
 	cmd, args := flag.Arg(0), flag.Args()[1:]
@@ -76,10 +75,12 @@ func main() {
 	}
 }
 
+// setupBackend is the backend recall setup configures and the default.
+const setupBackend = "polign"
+
 // api is a minimal JSON client for the server's HTTP transport. The key, when
-// set, rides on every request. backend names the database behind base: empty
-// or "polign" for polign_db, "qdrant" for Qdrant, which only the memory
-// runtime reaches, through its own client.
+// set, rides on every request. backend is the registered backend name the
+// memory runtime opens base with; only a polign_db is reached through api itself.
 type api struct {
 	base    string
 	key     string

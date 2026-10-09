@@ -43,6 +43,18 @@ var (
 	_ recall.LeaseBackend = (*Backend)(nil)
 )
 
+// Importing this package registers it as the "polign" backend.
+func init() {
+	recall.RegisterBackend("polign", recall.BackendDriver{
+		Open: func(o recall.BackendOptions) (recall.Backend, error) {
+			return New(Config{BaseURL: o.URL, APIKey: o.APIKey})
+		},
+		DefaultURL: "http://localhost:23000",
+		URLEnv:     "POLIGN_URL",
+		KeyEnv:     "POLIGN_API_KEY",
+	})
+}
+
 // New validates the endpoint and creates a backend without making requests.
 func New(cfg Config) (*Backend, error) {
 	u, err := url.Parse(cfg.BaseURL)

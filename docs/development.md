@@ -71,7 +71,7 @@ names a server, and skips it otherwise:
 
 ```sh
 docker run -d -p 6333:6333 qdrant/qdrant
-RECALL_QDRANT_URL=http://localhost:6333 go test ./qdrant
+RECALL_QDRANT_URL=http://localhost:6333 go test ./backend/qdrant
 ```
 
 To run only the memory implementation or verify an audit fixture:

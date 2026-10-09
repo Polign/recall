@@ -22,6 +22,8 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+
+	"github.com/Polign/recall"
 )
 
 // mcpVersions are the protocol revisions this server speaks, newest first.
@@ -113,26 +115,22 @@ func cmdMCP(c *api, urlGiven bool, args []string) error {
 	// stray POLIGN_URL cannot redirect Claude's memory.
 	explicitDir := false
 	fs.Visit(func(f *flag.Flag) { explicitDir = explicitDir || f.Name == "config-dir" })
-	qdrant := c.backend == "qdrant"
-	if qdrant && explicitDir {
-		return errors.New("mcp: -config-dir holds a polign_db setup; with -backend qdrant, name the server with -url or QDRANT_URL")
-	}
-	if qdrant && *agent {
-		return errors.New("mcp: -agent needs agent leases, which the qdrant backend does not provide")
+	// recall setup saves a connection to its own backend only.
+	setupApplies := c.backend == "" || c.backend == setupBackend
+	if explicitDir && !setupApplies {
+		return fmt.Errorf("mcp: -config-dir holds a %s setup; with -backend %s, name the server with -url", setupBackend, c.backend)
 	}
 	if explicitDir {
 		return serveConfigured(*dir)
 	}
-	if qdrant && !urlGiven {
-		c.base = "http://localhost:6333"
-	} else if !urlGiven {
-		// Without a server named, serve what recall setup saved; with nothing
-		// saved either, the polign-server default address, as polign mcp did.
+	if !urlGiven && setupApplies {
+		// Without a server named, serve what recall setup saved.
 		if _, err := os.Stat(filepath.Join(*dir, "config.json")); err == nil {
 			return serveConfigured(*dir)
 		}
-		c.base = "http://localhost:23000"
 	}
+	// With nothing named or saved, the memory runtime opens the backend's
+	// default address.
 
 	if *collection == "" {
 		if *embedURL != "" {
@@ -151,6 +149,9 @@ func cmdMCP(c *api, urlGiven bool, args []string) error {
 	if *agent {
 		if !*write {
 			return errors.New("mcp: -agent requires -write")
+		}
+		if _, ok := mem.backend.(recall.LeaseBackend); !ok {
+			return fmt.Errorf("mcp: -agent needs agent leases, which the %s backend does not provide", c.backend)
 		}
 		s.agents = newAgentRuntime()
 	}

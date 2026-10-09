@@ -72,6 +72,18 @@ var (
 	_ recall.GetBackend = (*Backend)(nil)
 )
 
+// Importing this package registers it as the "qdrant" backend.
+func init() {
+	recall.RegisterBackend("qdrant", recall.BackendDriver{
+		Open: func(o recall.BackendOptions) (recall.Backend, error) {
+			return New(Config{BaseURL: o.URL, APIKey: o.APIKey})
+		},
+		DefaultURL: "http://localhost:6333",
+		URLEnv:     "QDRANT_URL",
+		KeyEnv:     "QDRANT_API_KEY",
+	})
+}
+
 // New validates the endpoint and creates a backend without making requests.
 func New(cfg Config) (*Backend, error) {
 	u, err := url.Parse(cfg.BaseURL)
