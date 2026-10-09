@@ -34,15 +34,16 @@ and macOS.
 
 To use a server you run yourself, leave `local_dir` out and set `POLIGN_URL`,
 `POLIGN_API_KEY`, and `POLIGN_COLLECTION` in the environment, or pass
-`env={...}` to Client. With neither, the client connects to
-`http://localhost:23000`, where `polign-server -store fs:./recall-data` listens
-by default.
+`env={...}` to Client. With neither, the client uses the connection
+`recall setup` saved, and without one connects to `http://localhost:23000`,
+where `polign-server -store fs:./recall-data` listens by default.
 
-The client owns a long-lived `polign mcp -memory-only -write` subprocess and
-shares the Go implementation's validation and fold. Use `write=False` for a
-read-only connection. It runs the `polign` binary pip installed; on a platform
-without a `polign_db` wheel it runs `polign` from `PATH` (CLI v0.8.0+), and
-`command=[...]` overrides both.
+The client owns a long-lived `recall mcp -write` subprocess and shares the Go
+implementation's validation and fold. Use `write=False` for a read-only
+connection. It runs the `recall` binary that this package's platform wheel
+installs next to `python`; on a platform without one it runs `recall` from
+`PATH`, and without `recall` it falls back to `polign mcp -memory-only`
+from polign_db 0.13 or earlier. `command=[...]` overrides all of these.
 
 `remember(text=..., statements=[...])` accepts proposals from your agent's model.
 Every statement must have subject, predicate, typed value, and evidence quoting
@@ -124,5 +125,4 @@ The other methods write what the next resume reads: `update_working_state`
 than the output threshold is stored whole and the turn keeps a reference),
 `store_output` and `fetch_output` for large tool results, `set_pointer`,
 `remove_pointer` and `pointers`, and `recent_turns` and
-`working_state_history` to read back. Needs a `polign` CLI 0.8.0 or later,
-the first with `polign mcp -agent`.
+`working_state_history` to read back.

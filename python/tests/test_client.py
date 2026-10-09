@@ -318,13 +318,14 @@ class ResilienceTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "transport_error")
 
 
-# Stands in for the `polign` CLI: `recall setup` writes the two files a managed
-# local database leaves behind, and `mcp` answers list_predicates with the
-# connection it was handed, so a test can see what the client passed on.
+# Stands in for the `recall` binary (and, under its old names, the `polign`
+# CLI): `setup` writes the two files a managed local database leaves behind,
+# and `mcp` answers list_predicates with the connection it was handed, so a
+# test can see what the client passed on.
 FAKE_POLIGN = r'''#!%s
 import json, os, sys
 args = sys.argv[1:]
-if args[:2] == ["recall", "setup"]:
+if args[:1] == ["setup"] or args[:2] == ["recall", "setup"]:
     if os.environ.get("POLIGN_URL") or os.environ.get("POLIGN_API_KEY"):
         sys.exit("setup inherited a connection meant for another server")
     directory = args[args.index("-config-dir") + 1]
@@ -349,10 +350,10 @@ class LocalDirTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
-        self.polign = Path(self.directory.name) / "polign"
-        self.polign.write_text(FAKE_POLIGN)
-        self.polign.chmod(0o755)
-        patcher = unittest.mock.patch("polign_recall.client.polign_bin", return_value=str(self.polign))
+        self.recall = Path(self.directory.name) / "recall"
+        self.recall.write_text(FAKE_POLIGN)
+        self.recall.chmod(0o755)
+        patcher = unittest.mock.patch("polign_recall.client.recall_bin", return_value=str(self.recall))
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -362,12 +363,19 @@ class LocalDirTests(unittest.TestCase):
             with Client(local_dir=Path(self.directory.name) / "data", write=False) as memory:
                 (seen,) = memory.predicates()
         self.assertEqual(seen, {"url": "http://127.0.0.1:4242", "key": "plgn_local_secret",
-                                "argv": ["mcp", "-memory-only"]})
+                                "argv": ["mcp"]})
 
     def test_agent_mode_adds_the_agent_flag(self):
         with Client(local_dir=Path(self.directory.name) / "data", agent=True) as memory:
             (seen,) = memory.predicates()
-        self.assertEqual(seen["argv"], ["mcp", "-memory-only", "-write", "-agent"])
+        self.assertEqual(seen["argv"], ["mcp", "-write", "-agent"])
+
+    def test_without_recall_the_old_polign_commands_serve(self):
+        with unittest.mock.patch("polign_recall.client.recall_bin", return_value=None), \
+             unittest.mock.patch("polign_recall.client.polign_bin", return_value=str(self.recall)):
+            with Client(local_dir=Path(self.directory.name) / "data", write=False) as memory:
+                (seen,) = memory.predicates()
+        self.assertEqual(seen["argv"], ["mcp", "-memory-only"])
 
     def test_a_failed_local_start_is_a_recall_error(self):
         with self.assertRaises(RecallError) as caught:

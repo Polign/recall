@@ -1,8 +1,11 @@
 module github.com/Polign/recall
 
-go 1.25
+go 1.25.0
 
-require github.com/anthropics/anthropic-sdk-go v1.78.0
+require (
+	github.com/anthropics/anthropic-sdk-go v1.78.0
+	golang.org/x/sys v0.47.0
+)
 
 require (
 	github.com/bahlo/generic-list-go v0.2.0 // indirect

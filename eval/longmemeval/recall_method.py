@@ -30,11 +30,15 @@ from typing import Any
 
 import lme
 
-# LME_POLIGN_BIN runs a locally built polign CLI instead of the one the
-# polign_db wheel installed, to measure an engine change before it ships.
-if os.environ.get("LME_POLIGN_BIN"):
+# LME_RECALL_BIN runs a locally built `recall` binary instead of the one pip
+# installed, to measure an engine change before it ships. LME_POLIGN_BIN does
+# the same with a polign CLI from polign_db 0.13 or earlier, which hosted the
+# server before it moved into `recall`.
+if os.environ.get("LME_RECALL_BIN") or os.environ.get("LME_POLIGN_BIN"):
     from polign_recall import client as _client
-    _client.polign_bin = lambda: os.environ["LME_POLIGN_BIN"]
+    _client.recall_bin = lambda: os.environ.get("LME_RECALL_BIN")
+    if os.environ.get("LME_POLIGN_BIN"):
+        _client.polign_bin = lambda: os.environ["LME_POLIGN_BIN"]
 
 MAX_TEXT_BYTES = 32768
 MAX_EVIDENCE_BYTES = 2048  # recall.MaxEvidenceBytes  # remember's text limit, in UTF-8 bytes

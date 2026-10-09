@@ -6,6 +6,8 @@ import os
 import queue
 import shutil
 import subprocess
+import sys
+import sysconfig
 import threading
 import time
 from dataclasses import dataclass, field, fields
@@ -260,14 +262,43 @@ def _lease_error(exc: RecallError) -> RecallError:
     return exc
 
 
+def recall_bin() -> str | None:
+    """The `recall` binary to run: the one the polign-recall platform wheel
+    installed next to this interpreter, then whatever `recall` is on PATH.
+    None when neither exists."""
+    exe = "recall" + (".exe" if sys.platform == "win32" else "")
+    candidates = [os.path.join(sysconfig.get_path("scripts"), exe)]
+    # `pip install --user` uses a different scheme from the interpreter's own.
+    if sys.version_info >= (3, 10):
+        candidates.append(os.path.join(sysconfig.get_path("scripts", scheme=sysconfig.get_preferred_scheme("user")), exe))
+    # `pip install --target` puts scripts in <target>/bin next to the package.
+    candidates.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", exe))
+    for path in candidates:
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return shutil.which("recall")
+
+
 def polign_bin() -> str:
-    """The `polign` CLI to run: the one pip installed with the polign_db
-    package, then whatever `polign` is on PATH."""
+    """The `polign` CLI from polign_db 0.13 and earlier, which hosted Recall's
+    server before it moved into the `recall` binary. Used only when `recall`
+    is not installed."""
     try:
         import polign_db
         return polign_db.find_bin("polign")
-    except (ImportError, OSError):
+    except (ImportError, OSError, ValueError):
         return shutil.which("polign") or "polign"
+
+
+def _server() -> tuple[list[str], list[str]]:
+    """The command prefixes that serve memory and set up a local database:
+    `recall mcp` and `recall setup`, or the same server under its old names,
+    `polign mcp -memory-only` and `polign recall setup`."""
+    recall = recall_bin()
+    if recall:
+        return [recall, "mcp"], [recall, "setup"]
+    polign = polign_bin()
+    return [polign, "mcp", "-memory-only"], [polign, "recall", "setup"]
 
 
 # Connection settings that belong to some other server. A managed local
@@ -275,17 +306,17 @@ def polign_bin() -> str:
 _CONNECTION = ("POLIGN_URL", "POLIGN_API_KEY", "POLIGN_COLLECTION", "POLIGN_PREDICATES")
 
 
-def _local_server(polign: str, directory: str | os.PathLike[str], timeout: float) -> dict[str, str]:
+def _local_server(setup: Sequence[str], directory: str | os.PathLike[str], timeout: float) -> dict[str, str]:
     """Start (or find) the managed local database kept in `directory` and
     return the POLIGN_URL and POLIGN_API_KEY that reach it.
 
-    `polign recall setup -local` does the work: it starts one detached
-    polign-server for the directory, shared by every process that opens it,
-    and is safe to run again while that server is up.
+    `recall setup -local` does the work: it starts one detached polign-server
+    for the directory, shared by every process that opens it, and is safe to
+    run again while that server is up.
     """
     directory = os.path.abspath(directory)
     env = {k: v for k, v in os.environ.items() if k not in _CONNECTION}
-    argv = [polign, "recall", "setup", "-local", "-no-plugin", "-config-dir", directory]
+    argv = [*setup, "-local", "-no-plugin", "-config-dir", directory]
     try:
         done = subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, capture_output=True,
                               text=True, timeout=timeout)
@@ -293,7 +324,7 @@ def _local_server(polign: str, directory: str | os.PathLike[str], timeout: float
         raise RecallError(f"local database in {directory} did not start within {timeout:g}s",
                           code="timeout") from exc
     except OSError as exc:
-        raise RecallError(f"could not start {polign!r}: {exc}", code="transport_error") from exc
+        raise RecallError(f"could not start {argv[0]!r}: {exc}", code="transport_error") from exc
     if done.returncode != 0:
         raise RecallError(f"local database in {directory} did not start: "
                           f"{(done.stderr or done.stdout).strip()}", code="transport_error")
@@ -315,11 +346,12 @@ class Client:
     in POLIGN_API_KEY, not command-line arguments. The default enables memory
     writes; pass write=False to expose only read operations.
 
-    The `polign` CLI comes with the polign_db package that pip installs next
-    to this one. With `local_dir`, the client also runs the database: it keeps
-    a local polign-server for that directory and connects to it, ignoring any
-    POLIGN_URL or POLIGN_API_KEY. Without it, the CLI connects to POLIGN_URL
-    (default http://localhost:23000).
+    The `recall` binary comes in this package's platform wheel, and
+    polign-server with polign_db. With
+    `local_dir`, the client also runs the database: it keeps a local
+    polign-server for that directory and connects to it, ignoring any
+    POLIGN_URL or POLIGN_API_KEY. Without it, `recall` connects to POLIGN_URL,
+    or to what `recall setup` configured when POLIGN_URL is unset.
 
     `agent=True` also turns on the agent resume tools, for `resume`. It needs
     write=True. Agents resumed through this client stay held until they are
@@ -340,20 +372,21 @@ class Client:
         if agent and not write:
             raise ValueError("agent=True needs write=True: resuming an agent writes its records")
         if extract_model is not None and command is not None:
-            raise ValueError("extract_model configures the polign CLI and cannot be combined with command")
+            raise ValueError("extract_model configures the recall server and cannot be combined with command")
         if local_dir is not None and command is not None:
-            raise ValueError("local_dir runs the polign CLI itself and cannot be combined with command")
+            raise ValueError("local_dir runs the recall server itself and cannot be combined with command")
         self.timeout = timeout
         self._lock = threading.RLock()
         self._responses: queue.Queue[Any] = queue.Queue()
         self._id = 0
         self._closed = False
         self._agent = agent
+        serve, setup = _server() if command is None else ([], [])
         argv = list(command) if command is not None else (
-            [polign_bin(), "mcp", "-memory-only"] + (["-write"] if write else []) + (["-agent"] if agent else [])
+            serve + (["-write"] if write else []) + (["-agent"] if agent else [])
             + (["-extract-model", extract_model] if extract_model else []))
         if local_dir is not None:
-            env = {**(env or {}), **_local_server(argv[0], local_dir, timeout)}
+            env = {**(env or {}), **_local_server(setup, local_dir, timeout)}
         try:
             self._process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                              stderr=None, env={**os.environ, **(env or {})})

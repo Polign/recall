@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.12.0] - 2026-10-08
+
+### Added
+
+- The `recall` binary: `recall mcp` serves the memory tools (and, with
+  `-agent`, the agent resume tools) over MCP; `recall setup` configures a
+  connection or a managed local polign-server and installs the Claude plugin;
+  `recall doctor` checks a saved setup; `recall skill` prints the agent guide.
+  It is the server that used to ship inside polign_db as `polign mcp
+  -memory-only` and `polign recall`, moved here so a Recall change releases
+  with a Recall tag alone. It reaches polign_db only through its HTTP API.
+- Release archives for Linux, macOS and Windows on amd64 and arm64, with SBOMs
+  and a Sigstore-signed checksum manifest, and `brew install polign/tap/recall`.
+- One `vX.Y.Z` tag now releases the Go module, the binary and the Python
+  package together. The separate `python-vX.Y.Z` tags are retired.
+- The `recall` tool takes `observed_after` and `observed_before`, and every
+  belief it returns carries `days_ago`, as polign_db 0.13.0's tool did.
+- `recall mcp` without `-url` or `POLIGN_URL` serves the connection `recall
+  setup` saved, and without one connects to `http://localhost:23000`. An
+  explicit `-config-dir` always means the saved connection.
+
+## Python client 0.12.0 - 2026-10-08
+
+- `polign-recall` ships as one wheel per platform with the `recall` binary
+  inside, installed next to `python`, plus a pure wheel for every other
+  platform. The client runs that `recall`, then one on `PATH`, and without
+  either falls back to `polign mcp -memory-only` from polign_db 0.13 or
+  earlier. `polign_db` stays a dependency for `polign-server`, which a managed
+  local store runs.
+- Published from the `vX.Y.Z` release workflow (release.yml) instead of
+  python-publish.yml.
+- `recall(observed_after=, observed_before=)` keeps only beliefs stated in
+  that span.
+- `Belief.days_ago`: whole days between when a belief was stated and `as_of`
+  (or today). `None` from an older server that does not send it.
+
 ## [0.11.0] - 2026-10-08
 
 ### Added
@@ -13,13 +49,6 @@
   with no change in latency. `Query.NoTimeHint` turns it off.
 - `Query.ObservedAfter` and `Query.ObservedBefore` keep only beliefs stated in
   a span, both inclusive.
-
-## Python client, unreleased
-
-- `recall(observed_after=, observed_before=)`, passed to the MCP `recall`
-  tool. Needs a polign_db release whose `recall` tool accepts them.
-- `Belief.days_ago`, from a polign_db whose `recall` tool sends it; `None`
-  otherwise.
 
 ## Python client 0.10.0 - 2026-10-05
 

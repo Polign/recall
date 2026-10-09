@@ -1,0 +1,119 @@
+# GoReleaser config for the `recall` binary: the MCP memory server, `recall
+# setup` and `recall doctor`.
+#
+# Produces one static (CGO-free) binary for linux/darwin/windows on
+# amd64/arm64, as archives named so a download snippet can resolve them from
+# $(uname):
+#
+#   recall_<os>_<arch>.tar.gz          (e.g. recall_darwin_arm64.tar.gz)
+#   recall_windows_<arch>.zip          (Windows ships a zip)
+#   <archive>.sbom.spdx.json           (SPDX JSON SBOM for each archive)
+#   checksums.txt                      (sha256 of every archive and SBOM)
+#   checksums.txt.sigstore.json        (keyless Sigstore signature bundle)
+#
+# Release flow: push a tag (vX.Y.Z) -> .github/workflows/release.yml runs
+# `goreleaser release` -> artifacts attach to the GitHub Release on this repo.
+# The same tag is the Go module version, so the library and the binary built
+# from it always share a number.
+#
+# Recall keeps memory in polign_db, which ships separately (polign-server).
+version: 2
+
+project_name: recall
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: recall
+    main: ./cmd/recall
+    binary: recall
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: recall
+    ids: [recall]
+    name_template: "recall_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+
+# args spelled out so Syft does not enrich from package registries during the
+# release, which would make the SBOM differ between re-runs of one tag.
+sboms:
+  - id: archives
+    artifacts: archive
+    documents:
+      - "{{ .ArtifactName }}.sbom.spdx.json"
+    args:
+      - "$artifact"
+      - --output
+      - "spdx-json=$document"
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+# Keyless: cosign signs with the GitHub Actions OIDC identity of this
+# repository's release workflow, so no signing key is stored anywhere.
+signs:
+  - id: checksums
+    cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - --yes
+    artifacts: checksum
+
+# The release body comes from CHANGELOG.md: release.yml extracts this tag's
+# section and passes it with --release-notes. Do not set changelog.disable;
+# that also discards the --release-notes file.
+
+# `brew install polign/tap/recall` installs recall and, through the polign
+# cask, the polign-server it keeps memory in.
+homebrew_casks:
+  - name: recall
+    ids: [recall]
+    binaries: [recall]
+    dependencies:
+      - cask: polign/tap/polign
+    repository:
+      owner: Polign
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: https://polign.com/recall
+    description: "Typed, correctable agent memory over MCP, kept in your own polign_db"
+    skip_upload: auto
+    # The binaries are not yet Apple Developer ID signed or notarized.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr",
+                           args: ["-dr", "com.apple.quarantine", "#{staged_path}/recall"]
+          end
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev"
+
+release:
+  github:
+    owner: Polign
+    name: recall
+  draft: false
+  prerelease: auto

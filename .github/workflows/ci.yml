@@ -1,6 +1,7 @@
-# Test and lint gate for every push and PR. The library has no dependencies
-# outside the standard library and needs no services, so the whole suite is one
-# short run.
+# Test and lint gate for every push and PR. The library itself needs no
+# services; cmd/recall's integration tests run a real polign-server from the
+# latest polign_db wheel, so the HTTP contract Recall depends on is checked
+# against what users install.
 name: ci
 
 on:
@@ -36,8 +37,39 @@ jobs:
             exit 1
           fi
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install polign-server
+        run: |
+          python -m pip install --upgrade polign_db
+          echo "POLIGN_SERVER_BIN=$(python -c 'import polign_db; print(polign_db.find_bin("polign-server"))')" >> "$GITHUB_ENV"
+
       - name: Test (race)
-        run: go test -race -timeout 5m ./...
+        env:
+          RECALL_REQUIRE_POLIGN: "1"
+        run: go test -race -timeout 10m ./...
+
+      - name: Wheel builder tests
+        run: python -m unittest discover -s packaging/tests -v
+
+      # The installed-binary path end to end: recall setup with a managed
+      # local polign-server, its launcher, doctor, crash recovery, and the
+      # Python client across server restarts.
+      - name: Setup and restart, end to end
+        run: |
+          go build -o "$RUNNER_TEMP/recall" ./cmd/recall
+          python tests/setup_e2e.py "$RUNNER_TEMP/recall" "$POLIGN_SERVER_BIN"
+          python -m pip install --no-deps ./python
+          RECALL_TEST_POLIGN="$RUNNER_TEMP/recall" RECALL_TEST_SERVER="$POLIGN_SERVER_BIN" python python/tests/restart.py
+
+      - name: Release config
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
+        with:
+          distribution: goreleaser
+          version: v2.18.0
+          args: check
 
   python:
     runs-on: ubuntu-latest
@@ -51,5 +83,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install and test Python package
         run: |
-          python -m pip install ./python
+          # The tests run the client against stand-in servers, so the binary
+          # wheels it depends on (which a release publishes) are not needed.
+          python -m pip install --no-deps ./python
           python -m unittest discover -s python/tests -v

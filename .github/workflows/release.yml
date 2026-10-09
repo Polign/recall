@@ -1,0 +1,148 @@
+# One vX.Y.Z tag releases everything: the Go module (the tag itself), the
+# `recall` binary as GitHub release archives with SBOMs and a Sigstore-signed
+# checksum manifest, the Homebrew cask, and `polign-recall` on PyPI: the
+# Python client with the binary inside, as one wheel per platform, plus a
+# pure wheel and an sdist for every other platform.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and upload artifacts
+      id-token: write # keyless Sigstore signing through GitHub OIDC
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+
+      # The release body is the CHANGELOG's entry for this tag. A tag with no
+      # section fails here, before anything is public.
+      - name: Extract release notes from CHANGELOG
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          notes="$RUNNER_TEMP/release-notes.md"
+          awk -v v="$version" '
+            $0 == "## [" v "]" || index($0, "## [" v "] ") == 1 { flag = 1; next }
+            /^## / { flag = 0 }
+            flag { print }
+          ' CHANGELOG.md > "$notes"
+          if [ ! -s "$notes" ]; then
+            echo "::error::CHANGELOG.md has no section for [${version}]; add one before tagging"
+            exit 1
+          fi
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
+        with:
+          distribution: goreleaser
+          version: v2.18.0
+          args: release --clean --release-notes=${{ runner.temp }}/release-notes.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A cross-repo token for Polign/homebrew-tap; the cask upload is
+          # skipped for prereleases.
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      # Download the published assets back and verify them the way a user
+      # would, so a partial upload turns the run red.
+      - name: Verify published release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release.yml@refs/tags/${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/verify"
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir "$work"
+          cosign verify-blob \
+            --bundle "$work/checksums.txt.sigstore.json" \
+            --certificate-identity="$IDENTITY" \
+            --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+            "$work/checksums.txt"
+          (cd "$work" && sha256sum --check checksums.txt)
+          tar -xzf "$work/recall_linux_amd64.tar.gz" -C "$work" recall
+          test "$("$work/recall" -version)" = "${GITHUB_REF_NAME#v}"
+
+  # PyPI trusted publishing: the polign-recall project trusts this repository,
+  # this workflow file and the `pypi` environment, so no token is stored.
+  pypi:
+    needs: goreleaser
+    if: ${{ !contains(github.ref_name, '-') }} # no PyPI upload for prereleases
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write # OIDC token for PyPI trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The Python version is written by hand in two places; a mismatch with
+      # the tag fails here instead of publishing a stray version.
+      - name: Check the package version matches the tag
+        working-directory: python
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          pkg="$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)"
+          mod="$(grep -m1 '^__version__ = "' polign_recall/__init__.py | cut -d'"' -f2)"
+          if [ "$want" != "$pkg" ] || [ "$want" != "$mod" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} needs version ${want}; pyproject.toml says ${pkg}, __init__.py says ${mod}"
+            exit 1
+          fi
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+
+      - name: Download the release and verify its signature
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release"
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/release" \
+            --pattern 'checksums.txt*' --pattern 'recall_*.tar.gz' --pattern 'recall_*.zip'
+          cosign verify-blob \
+            --bundle "$RUNNER_TEMP/release/checksums.txt.sigstore.json" \
+            --certificate-identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${GITHUB_REF_NAME}" \
+            --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+            "$RUNNER_TEMP/release/checksums.txt"
+
+      - name: Build the pure wheel, the sdist, and one wheel per platform
+        run: |
+          python -m pip install build
+          python -m build python --outdir dist
+          python packaging/build_wheels.py --wheel dist/polign_recall-${GITHUB_REF_NAME#v}-py3-none-any.whl \
+            --archives "$RUNNER_TEMP/release" --out dist
+          ls -l dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          skip-existing: true
