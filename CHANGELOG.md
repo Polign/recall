@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- A Qdrant backend, `github.com/Polign/recall/qdrant`, over Qdrant's REST API
+  with no new module dependencies. Event IDs are stored as UUIDv5 point IDs
+  with the original ID in the payload; each collection is created, with
+  payload indexes on the fields Recall filters on, at its first write. It
+  supports `Get` but not leases, watermarks, or text search.
+- `recall -backend qdrant` (or `RECALL_BACKEND=qdrant`) serves memory from
+  Qdrant, reading `QDRANT_URL` and `QDRANT_API_KEY`. `-agent` is refused on
+  this backend because it needs leases.
+- `github.com/Polign/recall/backendtest`, a conformance suite any backend can
+  run against a live database: exact totals, a stable ordered prefix,
+  filters, search, `Get`, and a full `Client` round trip.
+
 ## [0.12.0] - 2026-10-08
 
 ### Added

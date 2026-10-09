@@ -66,6 +66,14 @@ The default suites need no running database. The Go adapter tests start local
 HTTP servers. Python's optional live integration test requires
 `RECALL_TEST_POLIGN` (the CLI executable) and `POLIGN_URL`.
 
+The Qdrant backend runs the shared conformance suite when `RECALL_QDRANT_URL`
+names a server, and skips it otherwise:
+
+```sh
+docker run -d -p 6333:6333 qdrant/qdrant
+RECALL_QDRANT_URL=http://localhost:6333 go test ./qdrant
+```
+
 To run only the memory implementation or verify an audit fixture:
 
 ```sh

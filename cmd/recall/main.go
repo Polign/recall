@@ -1,5 +1,6 @@
 // Command recall serves typed, correctable agent memory over MCP, kept in a
-// polign_db instance it reaches through the HTTP API.
+// polign_db instance it reaches through the HTTP API, or in Qdrant with
+// -backend qdrant.
 //
 //	recall mcp [-write] [-agent] [...]   serve the memory tools over stdio
 //	recall setup [-local | -url URL]     configure Recall, optionally install the Claude plugin
@@ -26,8 +27,9 @@ var version = "dev"
 
 func main() {
 	log.SetFlags(0)
-	base := flag.String("url", "", "polign_db server base URL (default $POLIGN_URL; without either, recall mcp uses what recall setup configured)")
-	key := flag.String("key", os.Getenv("POLIGN_API_KEY"), "API key sent on every request (default $POLIGN_API_KEY)")
+	base := flag.String("url", "", "database base URL (default $POLIGN_URL, or $QDRANT_URL with -backend qdrant; for polign without either, recall mcp uses what recall setup configured)")
+	key := flag.String("key", "", "API key sent on every request (default $POLIGN_API_KEY, or $QDRANT_API_KEY with -backend qdrant)")
+	backend := flag.String("backend", envOr("RECALL_BACKEND", "polign"), "storage backend: polign or qdrant (default $RECALL_BACKEND, then polign)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Usage = func() {
 		fmt.Fprintln(flag.CommandLine.Output(), "Usage: recall [global flags] <command> [options]\n\nCommands: mcp, setup, doctor, skill\nAgent guide: recall skill (offline)\n\nGlobal flags:")
@@ -42,11 +44,21 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
+	if *backend != "polign" && *backend != "qdrant" {
+		log.Fatalf("unknown -backend %q (want polign or qdrant)", *backend)
+	}
 	url := *base
-	if url == "" {
+	if url == "" && *backend == "qdrant" {
+		url = os.Getenv("QDRANT_URL")
+	} else if url == "" {
 		url = os.Getenv("POLIGN_URL")
 	}
-	c := &api{base: strings.TrimRight(url, "/"), key: *key}
+	if *key == "" && *backend == "qdrant" {
+		*key = os.Getenv("QDRANT_API_KEY")
+	} else if *key == "" {
+		*key = os.Getenv("POLIGN_API_KEY")
+	}
+	c := &api{base: strings.TrimRight(url, "/"), key: *key, backend: *backend}
 	cmd, args := flag.Arg(0), flag.Args()[1:]
 	var err error
 	switch cmd {
@@ -65,10 +77,13 @@ func main() {
 }
 
 // api is a minimal JSON client for the server's HTTP transport. The key, when
-// set, rides on every request.
+// set, rides on every request. backend names the database behind base: empty
+// or "polign" for polign_db, "qdrant" for Qdrant, which only the memory
+// runtime reaches, through its own client.
 type api struct {
-	base string
-	key  string
+	base    string
+	key     string
+	backend string
 }
 
 // apiError is a non-2xx response. It carries the status code so a caller can

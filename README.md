@@ -163,9 +163,23 @@ backend, collection, and namespace, with compatible Recall versions and memory
 definitions. Search also requires compatible embedding methods.
 
 Concurrent reads and writes follow the backend's consistency guarantees. Recall
-does not add transaction isolation or replication. Go applications can implement
-the `Put`, `List`, and `Search` [backend contract](docs/reference.md#complete-histories)
-to use another storage system.
+does not add transaction isolation or replication.
+
+Two backends ship with Recall:
+
+| Backend | Package | `recall mcp` | What it adds |
+| --- | --- | --- | --- |
+| polign_db | [`polign/`](polign) | default | BM25 text search, agent leases for `-agent`, cached reads |
+| Qdrant | [`qdrant/`](qdrant) | `-backend qdrant -url http://localhost:6333` | Vector search and exact filtered reads |
+
+With Qdrant, `recall mcp` reads `QDRANT_URL` and `QDRANT_API_KEY` when no flag
+is given, and creates each collection on its first write. The agent resume
+tools (`-agent`) need leases, which Qdrant does not provide, so they are not
+available on it.
+
+Go applications can implement the `Put`, `List`, and `Search`
+[backend contract](docs/reference.md#complete-histories) to use another storage
+system, and check it with the conformance suite in [`backendtest/`](backendtest).
 
 The Go library has no external module dependencies. Its built-in lexical
 embedder supports word-overlap search; applications can supply a model-based
@@ -177,7 +191,9 @@ embedder for semantic search. See the [embedding guide](docs/reference.md#embedd
 | --- | --- |
 | [`recall.go`](recall.go), [`doc.go`](doc.go) | Public Go API at `github.com/Polign/recall` |
 | [`internal/engine/`](internal/engine) | Memory implementation and unit tests |
-| [`polign/`](polign) | Go backend adapter |
+| [`polign/`](polign) | polign_db backend |
+| [`qdrant/`](qdrant) | Qdrant backend |
+| [`backendtest/`](backendtest) | Conformance suite for backends |
 | [`python/`](python) | Python package and tests |
 | [`cmd/`](cmd) | Command-line tools, including `recall-audit` |
 | [`examples/`](examples) | Runnable Go and Python examples, including a crash-and-resume demo |

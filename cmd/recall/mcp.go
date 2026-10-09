@@ -113,10 +113,19 @@ func cmdMCP(c *api, urlGiven bool, args []string) error {
 	// stray POLIGN_URL cannot redirect Claude's memory.
 	explicitDir := false
 	fs.Visit(func(f *flag.Flag) { explicitDir = explicitDir || f.Name == "config-dir" })
+	qdrant := c.backend == "qdrant"
+	if qdrant && explicitDir {
+		return errors.New("mcp: -config-dir holds a polign_db setup; with -backend qdrant, name the server with -url or QDRANT_URL")
+	}
+	if qdrant && *agent {
+		return errors.New("mcp: -agent needs agent leases, which the qdrant backend does not provide")
+	}
 	if explicitDir {
 		return serveConfigured(*dir)
 	}
-	if !urlGiven {
+	if qdrant && !urlGiven {
+		c.base = "http://localhost:6333"
+	} else if !urlGiven {
 		// Without a server named, serve what recall setup saved; with nothing
 		// saved either, the polign-server default address, as polign mcp did.
 		if _, err := os.Stat(filepath.Join(*dir, "config.json")); err == nil {
