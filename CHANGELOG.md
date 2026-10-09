@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.13.0] - 2026-10-09
 
 ### Added
 
@@ -21,6 +21,10 @@
 - `github.com/Polign/recall/backendtest`, a conformance suite any backend can
   run against a live database: exact totals, a stable ordered prefix,
   filters, search, `Get`, and a full `Client` round trip.
+
+## Python client 0.13.0 - 2026-10-09
+
+- The bundled `recall` binary is 0.13.0, which adds `-backend qdrant`.
 
 ## [0.12.0] - 2026-10-08
 
