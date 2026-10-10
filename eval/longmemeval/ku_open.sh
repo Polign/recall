@@ -1,42 +1,45 @@
 #!/bin/bash
 # Open vocabulary against the hand-tuned registry, on the 77 knowledge-update
-# questions of the user-facts subset. Both versions use the same gpt-4o-mini
-# extraction prompt rules and the same reader (Claude Sonnet 5.5), and gpt-4o
-# judges, so the difference between them is the vocabulary.
+# questions of the user-facts subset, all on OpenAI: gpt-4o-mini extraction
+# with the same prompt rules, gpt-4o answering and judging. The difference
+# between the two versions is the vocabulary.
 #
-# The fixed version reuses its cached extraction and stores, so it pays only
-# for answering and judging. The open version pays for gpt-4o-mini extraction
-# of 3,655 sessions as well. Estimated cost, at list prices: about $2.40 of
-# OpenAI extraction, about $1.50 of Claude answering, and well under $1 of
-# OpenAI judging. Resumable: rerun to finish a stopped run.
+# The fixed version is the knowledge-update rows of uf-rel012-ages (gpt-4o,
+# same settings), copied here without new calls: this branch retrieves the
+# same sessions for all 77 questions (checked with a dry run on 2026-10-10).
+# Only the open version is paid for: gpt-4o-mini extraction of 3,655
+# sessions (about $2.40) and gpt-4o answering and judging of 77 questions
+# (about $1.05), about $3.50 at list prices. Resumable: rerun to finish a
+# stopped run.
 #
-#   OPENAI_API_KEY=... ANTHROPIC_API_KEY=... bash ku_open.sh
+#   bash ku_open.sh
 set -euo pipefail
 cd "$(dirname "$0")"
 : "${OPENAI_API_KEY:=$(bash -c 'source ~/.bashrc >/dev/null 2>&1; printf %s "$OPENAI_API_KEY"')}"
-: "${ANTHROPIC_API_KEY:=$(bash -c 'source ~/.bashrc >/dev/null 2>&1; printf %s "$ANTHROPIC_API_KEY"')}"
-export OPENAI_API_KEY ANTHROPIC_API_KEY
+export OPENAI_API_KEY
 [ -n "$OPENAI_API_KEY" ] || { echo "OPENAI_API_KEY is not set" >&2; exit 1; }
-[ -n "$ANTHROPIC_API_KEY" ] || { echo "ANTHROPIC_API_KEY is not set (use a key from the organization holding the credits)" >&2; exit 1; }
 
-# The open version needs this branch's recall (RECALL_OPEN); both use it, so
-# the read side is the same.
+# The open version needs this branch's recall (RECALL_OPEN).
 (cd ../.. && go build -o eval/longmemeval/out/recall-branch ./cmd/recall)
 export LME_RECALL_BIN="$PWD/out/recall-branch" LME_STORES=out/stores
 PY=.venv/bin/python
-"$PY" -c "
+
+"$PY" - <<'EOF'
+import json, shutil
 import lme
-ids = [e['question_id'] for e in lme.subset(lme.load(), 'user-facts') if e['question_type'] == 'knowledge-update']
-open('out/ku-ids.txt', 'w').write('\n'.join(ids) + '\n')
-print(len(ids), 'knowledge-update questions')"
+ku = [e["question_id"] for e in lme.subset(lme.load(), "user-facts") if e["question_type"] == "knowledge-update"]
+open("out/ku-ids.txt", "w").write("\n".join(ku) + "\n")
+src, dst = lme.HERE / "out" / "uf-rel012-ages", lme.HERE / "out" / "ku-fixed-4o"
+dst.mkdir(exist_ok=True)
+for name in ("hyp.jsonl", "judge.jsonl"):
+    rows = [r for r in lme.read_jsonl(src / name) if r["question_id"] in set(ku)]
+    (dst / name).write_text("".join(json.dumps(r) + "\n" for r in rows))
+manifest = json.loads((src / "manifest.json").read_text())
+manifest.update(run="ku-fixed-4o", only="out/ku-ids.txt", questions=len(ku), copied_from="uf-rel012-ages")
+(dst / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+print(len(ku), "knowledge-update questions; fixed version copied from uf-rel012-ages")
+EOF
 
-common=(--subset user-facts --only out/ku-ids.txt --method recall-linked --ages --reader anthropic:claude-sonnet-5-5 --workers 6)
-
-# The fixed version first: it costs only answering, so a reader problem
-# shows up before any extraction is paid for.
-"$PY" run.py --run ku-fixed-s55 "${common[@]}"
-LME_OPEN_VOCAB=1 "$PY" run.py --run ku-open-s55 "${common[@]}"
-
-"$PY" judge.py --run ku-fixed-s55 --workers 8
-"$PY" judge.py --run ku-open-s55 --workers 8
-"$PY" report.py ku-fixed-s55 ku-open-s55 | tee out/report-ku-open.txt
+LME_OPEN_VOCAB=1 "$PY" run.py --run ku-open-4o --subset user-facts --only out/ku-ids.txt --method recall-linked --ages --workers 6
+"$PY" judge.py --run ku-open-4o --workers 8
+"$PY" report.py ku-fixed-4o ku-open-4o | tee out/report-ku-open.txt
