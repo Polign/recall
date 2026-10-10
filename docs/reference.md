@@ -48,6 +48,20 @@ are marked `agent_inferred` with a default confidence of 0.8; this is a conventi
 not a calibrated model probability. Validation cannot prove
 that an extracted statement is true. Typed `remember` also remains available.
 
+When a model extracts the statements (`RememberText` with `model.NewExtractor`,
+or `-extract-model`), Recall records what it proposed beside the episode.
+Remembering the same text again replays that record instead of asking the
+model again. A write retried after a crash therefore files the text exactly as
+the first attempt did, and restating something files it as before. Replayed
+statements still go through the fold, so restating "I prefer vim" after
+switching to zed makes vim current again. Statements the calling agent
+proposes are not recorded; the agent sends them again itself.
+
+To forget by description, `client.ForgetText(ctx, "forget my editor",
+extractor)` searches the current beliefs for the request, asks the model which
+of them it names, and withdraws those. It returns what it withdrew. Like
+`Forget`, it records retractions and deletes nothing.
+
 The default search uses local lexical word overlap, not semantic synonyms.
 Set `-embed-url` with a dedicated collection to use model embeddings instead.
 Never mix embedding spaces in one collection. Exact subject/predicate reads
@@ -572,7 +586,9 @@ A predicate any client defined is writable by every open client.
 `client.Vocabulary(ctx)` lists everything defined so far, and `RememberText`
 offers that list to the extractor, so a model reuses names before it coins
 new ones. A proposal may carry `cardinality` and `description` for a name it
-coins. When two clients define the same name at once, the first definition
+coins. `model.NewExtractor` does this on its own for an open client: the
+model sees the predicates in use, reuses them where they fit, and coins new
+ones with a cardinality, a description, and a value type. When two clients define the same name at once, the first definition
 recorded wins.
 
 Guessing single-valued is safe to get wrong. If `allergic_to` should have been

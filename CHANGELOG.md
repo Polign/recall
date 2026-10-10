@@ -15,6 +15,15 @@
 - `Client.Redefine` records a retroactive definition that applies to a
   predicate's whole history, so a wrong cardinality is corrected for present
   and as-of answers alike.
+- `model` extractors coin predicates for an open client: the prompt lists the
+  predicates in use and the schema drops the fixed list. Extractors can tell
+  through `recall.OpenVocabulary(ctx)`.
+- `RememberText` records what a model extraction proposed beside the episode
+  (reserved subject `recall:extraction`, left out of answers and audits) and
+  replays it when the same text is remembered again, so a retried write files
+  identically and restated text does not cost a model call.
+- `Client.ForgetText` withdraws the beliefs a request in words names, chosen
+  by a `Selector`; `model.Extractor` is one.
 - Fold version `recall-fold-v3` for audit bundles whose registry log uses a
   retroactive definition or a second automatic definition of one name. Other
   bundles are still written as `recall-fold-v2`, with unchanged checksums.

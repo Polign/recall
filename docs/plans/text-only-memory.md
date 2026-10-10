@@ -1,6 +1,6 @@
 # Text-only memory: predicates become internal
 
-Status: phase 1 built on branch `at/text-only-memory` (2026-10-09).
+Status: phases 1 and 3 built on branch `at/text-only-memory` (2026-10-09).
 
 ## Goal
 
@@ -124,6 +124,16 @@ over-merge and under-merge rates, and the over-merge rate is under 1%.
 
 Done when: replaying a crashed write files nothing new, and forget on a
 paraphrase withdraws the right belief in the test suite.
+
+Built: open prompt and schema in `model/` (with `value_type` so coined
+numbers stay numbers), `recall.OpenVocabulary(ctx)`, `Client.ForgetText`
+with a `Selector` (`model.Extractor` implements it). Retry safety changed
+from the caller key above: the engine records each model extraction beside
+its episode (reserved subject `recall:extraction`) and replays it when the
+same text comes in again. That needs no caller key, files a retry
+identically, and still lets restated text become current again, because
+replay goes through the fold. Not yet: a live-model test that forget on a
+paraphrase picks the right belief (the suite uses a stub selector).
 
 ### 4. Text-only surface
 
