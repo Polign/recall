@@ -381,3 +381,22 @@ func (s *Store) recordExtraction(episode Belief, proposals []Proposal) error {
 		EvidenceID: episode.EventID,
 	})
 }
+
+// episodeFiled reports whether a model extraction filed any statement from
+// the episode with this id.
+func (s *Store) episodeFiled(id string) (bool, error) {
+	rows, _, err := s.db.List(s.collection, map[string]any{"subject": ExtractionSubject, "predicate": ExtractionPredicate, "evidence_id": id}, 1)
+	if err != nil || len(rows) == 0 {
+		return false, err
+	}
+	e, err := s.decodeEvent(rows[0].ID, rows[0].Metadata)
+	if err != nil {
+		return false, err
+	}
+	raw, _ := e.Value.(string)
+	var proposals []Proposal
+	if err := json.Unmarshal([]byte(raw), &proposals); err != nil {
+		return false, fmt.Errorf("%w: extraction record %q is malformed", ErrInvalidEvent, e.ID)
+	}
+	return len(proposals) > 0, nil
+}

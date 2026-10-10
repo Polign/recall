@@ -37,6 +37,13 @@ func (c *Client) ForgetText(ctx context.Context, request string, selector Select
 	if err != nil {
 		return out, err
 	}
+	// Forgetting withdraws facts. The texts they were drawn from are the
+	// record of what was said, and one text can hold facts about many
+	// things, so a text is offered only when no fact matches.
+	facts := slices.DeleteFunc(slices.Clone(candidates), func(b Belief) bool { return b.Predicate == NotePredicate })
+	if len(facts) > 0 {
+		candidates = facts
+	}
 	if len(candidates) == 0 {
 		return out, nil
 	}

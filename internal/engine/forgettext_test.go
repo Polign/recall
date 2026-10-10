@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -51,5 +52,65 @@ func TestForgetTextWithdrawsWhatTheSelectorNames(t *testing.T) {
 	}
 	if _, err := c.ForgetText(ctx, "forget where I live", selectFunc(func(string, []Belief) []int { return []int{99} })); err == nil {
 		t.Fatal("an out-of-range choice was accepted")
+	}
+}
+
+// TestForgetTextWithdrawsFactsNotTheirSource reproduces a live run in which
+// the model, asked to forget "my editor", also chose the texts that mention
+// an editor, withdrawing a record that held where the user lives.
+func TestForgetTextWithdrawsFactsNotTheirSource(t *testing.T) {
+	ctx := context.Background()
+	c := openClient(t, newLockedBackend())
+	text := "I use helix as my editor. I live in Lisbon."
+	x := &vocabularySpy{proposals: []Proposal{
+		{Subject: "user", Predicate: "prefers_editor", Value: "helix", Evidence: "helix as my editor"},
+		{Subject: "user", Predicate: "lives_in", Value: "Lisbon", Evidence: "I live in Lisbon"},
+	}}
+	if _, err := c.RememberText(ctx, text, x); err != nil {
+		t.Fatal(err)
+	}
+	greedy := selectFunc(func(_ string, cands []Belief) []int {
+		var out []int
+		for i, b := range cands {
+			if strings.Contains(Sentence(b.Subject, b.Predicate, b.Value), "editor") {
+				out = append(out, i)
+			}
+		}
+		return out
+	})
+	out, err := c.ForgetText(ctx, "forget my editor", greedy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Withdrawn) != 1 || out.Withdrawn[0].Predicate != "prefers_editor" {
+		t.Fatalf("withdrawn %+v, want only the editor fact", out.Withdrawn)
+	}
+	notes, err := c.Recall(ctx, Query{Subject: "user", Predicate: NotePredicate})
+	if err != nil || len(notes) != 1 || notes[0].Value != text {
+		t.Fatalf("the source text was withdrawn: %v, %v", beliefValues(notes), err)
+	}
+}
+
+func TestAskHidesTextsItFiledStatementsFrom(t *testing.T) {
+	ctx := context.Background()
+	c := openClient(t, newLockedBackend())
+	filed := &vocabularySpy{proposals: []Proposal{{Subject: "user", Predicate: "lives_in", Value: "Lisbon", Evidence: "Lisbon"}}}
+	if _, err := c.RememberText(ctx, "I live in Lisbon.", filed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.RememberText(ctx, "Lisbon trams are lovely in spring.", &vocabularySpy{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.Ask(ctx, "Lisbon")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var texts []string
+	for _, m := range got {
+		texts = append(texts, m.Text)
+	}
+	joined := strings.Join(texts, " | ")
+	if strings.Contains(joined, "I live in Lisbon.") || !strings.Contains(joined, "user lives in: Lisbon") || !strings.Contains(joined, "Lisbon trams are lovely in spring.") {
+		t.Fatalf("memories: %s", joined)
 	}
 }

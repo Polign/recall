@@ -44,8 +44,23 @@ func (c *Client) AskAt(ctx context.Context, question string, asOf time.Time) ([]
 	if err != nil {
 		return nil, err
 	}
+	s, err := c.forContext(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]Memory, 0, len(beliefs))
 	for _, b := range beliefs {
+		// A text that statements were filed from is told by those
+		// statements; repeating it would say everything twice.
+		if b.Predicate == NotePredicate {
+			filed, err := s.episodeFiled(b.EventID)
+			if err != nil {
+				return nil, err
+			}
+			if filed {
+				continue
+			}
+		}
 		m := Memory{Text: Sentence(b.Subject, b.Predicate, b.Value), Since: b.ObservedAt, EventID: b.EventID}
 		for _, p := range b.Replaced {
 			m.Before = append(m.Before, Earlier{Text: valueText(p.Value), Since: p.ObservedAt})
