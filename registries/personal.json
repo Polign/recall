@@ -1,0 +1,82 @@
+{
+  "amount": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "A price, cost, count, or other quantity the subject has now"
+  },
+  "date": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "When the subject happens, happened, or is due"
+  },
+  "detail": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "Another fact about the subject worth keeping"
+  },
+  "did": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "Something the subject did or that happened, with its date when known"
+  },
+  "dislikes": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "Something the subject dislikes or avoids"
+  },
+  "goal": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "Something the subject is working toward"
+  },
+  "likes": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "Something the subject likes, enjoys, or prefers"
+  },
+  "lives_in": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Where the subject lives now"
+  },
+  "name": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Name the subject uses"
+  },
+  "note": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "A statement worth keeping that no other predicate fits, in the words it was stated"
+  },
+  "owns": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "Something the subject owns or has"
+  },
+  "plans": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "Something the subject plans or intends to do"
+  },
+  "relationship": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "A person in the subject's life and how they are related, such as sister Emma"
+  },
+  "role": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "The subject's current job or role"
+  },
+  "status": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "The current state or progress of the subject, such as in repair or halfway through"
+  },
+  "works_at": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Where the subject works now"
+  }
+}

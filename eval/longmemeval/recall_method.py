@@ -137,9 +137,10 @@ def ingest_typed(client: Any, entry: dict[str, Any], rounds, extractor: str, sta
     round with no statements is still kept as its episode."""
     import extract
 
-    # The open vocabulary starts empty and grows with what the extractor
-    # coins, as an open Recall store's does; the fixed one is registry.json.
-    reg = {} if extract.OPEN else extract.registry()
+    # The open vocabulary starts from the personal starter and grows with
+    # what the extractor coins, as an open Recall store's does; the fixed one
+    # is registry.json.
+    reg = extract.seeds() if extract.OPEN else extract.registry()
     cache = extract.Cache(extractor, entry["question_id"])
     subjects: list[str] = []
     log = []
@@ -259,11 +260,9 @@ def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
     if method in ("recall-typed", "recall-linked"):
         import extract
         if extract.OPEN:
-            # An empty registry with -open: every predicate is defined by
-            # the store as the extractor coins it.
-            empty = lme.HERE / "out" / "empty-registry.json"
-            empty.write_text("{}\n")
-            env["POLIGN_PREDICATES"] = str(empty)
+            # The personal starter with -open: the store defines everything
+            # else as the extractor coins it.
+            env["POLIGN_PREDICATES"] = str(extract.SEEDS_PATH)
             env["RECALL_OPEN"] = "1"
         else:
             env["POLIGN_PREDICATES"] = str(extract.REGISTRY_PATH)

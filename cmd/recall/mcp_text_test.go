@@ -162,3 +162,15 @@ func TestExplainToolAndOutput(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenSeedsJoinCodingAndPersonal(t *testing.T) {
+	seeds := openSeeds()
+	for _, name := range []string{"prefers_editor", "likes", "did", "relationship", "note"} {
+		if _, ok := seeds[name]; !ok {
+			t.Fatalf("open seeds lack %s: %v", name, seeds.Names())
+		}
+	}
+	if seeds["likes"].Cardinality != "multi" || seeds["role"].Description != "Current professional or project role" {
+		t.Fatalf("seed definitions: likes %+v, role %+v", seeds["likes"], seeds["role"])
+	}
+}

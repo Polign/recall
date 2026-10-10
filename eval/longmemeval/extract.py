@@ -70,14 +70,24 @@ OPEN_PROMPT = (PROMPT
 """)
     .replace("""- Single-valued predicates (status, count, plan, location, relationship, date, duration, cost) keep only the newest value per subject, so a new value erases the old one. Never use them with subject "user" unless the fact describes the user as a whole (where the user lives, the user's job). "$30 book" and "$75 necklace" are two subjects, each with its own cost.
 - Use subject "user" for event, preference, and detail statements about the user's life in general.""",
-    """- predicate names the relation, in snake_case. Reuse a predicate from the list above whenever one fits, even when the session words it differently. Otherwise coin a new one, such as works_at, lives_in, or allergic_to. Name the relation, not the value.
-- For a predicate you coin, set cardinality to single when a new value for the same subject replaces the old one, and to multi when values add up. Give a one-line description. For a predicate from the list above, leave cardinality and description empty.
+    """- predicate names the relation. Use a predicate from the list above whenever one can hold the fact, even when the session words it differently; most facts fit one. Coin a new predicate only when none can. A predicate is a short snake_case relation that many different facts could share, such as allergic_to or attends. Never put the value, topic, or place in its name (likes with value French wine, not interested_in_french_wine), and never name it after the subject.
+- For a predicate you coin, choose cardinality multi unless the subject can hold only one value at a time and a new value makes the old one untrue (where someone lives now, a current job, a status, a price): single. Interests, experiences, events, possessions, people, and preferences add up. When unsure, choose multi. Give a one-line description. For a predicate from the list above, leave cardinality and description empty.
 - A single-valued predicate keeps only the newest value per subject, so a new value erases the old one. Never use one with subject "user" unless the fact describes the user as a whole (where the user lives, the user's job). "$30 book" and "$75 necklace" are two subjects, each with its own values.
 - Use subject "user" for facts about the user's life in general.""")
     .replace('''Return JSON only: {{"statements": [{{"subject": "...", "predicate": "...", "value": "...", "evidence": "..."}}]}}''',
              '''Return JSON only: {{"statements": [{{"subject": "...", "predicate": "...", "value": "...", "evidence": "...", "cardinality": "single, multi, or empty", "description": "..."}}]}}''')
     .replace(EVENTS_RULE, ""))
-assert "with these predicates only" not in OPEN_PROMPT and "coin a new one" in OPEN_PROMPT and '"cardinality"' in OPEN_PROMPT
+assert "with these predicates only" not in OPEN_PROMPT and "Coin a new predicate only" in OPEN_PROMPT and '"cardinality"' in OPEN_PROMPT
+
+
+# The open vocabulary is seeded with Recall's personal starter, as an open
+# server with no predicates file seeds it, so the extractor has generic
+# relations to reuse from the first session.
+SEEDS_PATH = lme.HERE.parent.parent / "registries" / "personal.json"
+
+
+def seeds() -> dict[str, Any]:
+    return {k: v for k, v in json.loads(SEEDS_PATH.read_text()).items() if k != "note"}
 
 
 def active_prompt() -> str:
@@ -101,7 +111,7 @@ def predicate_table(reg: dict[str, Any]) -> str:
 
 def cache_key(model: str) -> str:
     h = hashlib.sha256()
-    for part in (model, active_prompt(), "open" if OPEN else REGISTRY_PATH.read_text()):
+    for part in (model, active_prompt(), SEEDS_PATH.read_text() if OPEN else REGISTRY_PATH.read_text()):
         h.update(part.encode())
         h.update(b"\0")
     return h.hexdigest()[:12]
@@ -147,7 +157,7 @@ class Cache:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         meta = self.path.parent / "meta.json"
         if not meta.exists():
-            meta.write_text(json.dumps({"model": model, "prompt": active_prompt(), "registry": {} if OPEN else registry()}, indent=2))
+            meta.write_text(json.dumps({"model": model, "prompt": active_prompt(), "registry": seeds() if OPEN else registry()}, indent=2))
         self.rows = {r["session_id"]: r["statements"] for r in lme.read_jsonl(self.path)}
 
     def get(self, sid: str) -> list[dict[str, Any]] | None:

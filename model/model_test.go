@@ -291,7 +291,7 @@ func TestOpenVocabularyExtraction(t *testing.T) {
 			t.Error(err)
 		}
 		system := body.Messages[0].Content
-		if !strings.Contains(system, "Predicates already in use:\n- location") || !strings.Contains(system, "coin a new one") {
+		if !strings.Contains(system, "Predicates already in use:\n- location") || !strings.Contains(system, "Coin a new predicate only") {
 			t.Errorf("system prompt:\n%s", system)
 		}
 		items := body.ResponseFormat.JSONSchema.Schema["properties"].(map[string]any)["statements"].(map[string]any)["items"].(map[string]any)

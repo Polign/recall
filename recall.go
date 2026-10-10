@@ -177,10 +177,11 @@ func DefaultRegistry() Registry {
 
 // Starter registries, by the kind of agent each is written for.
 const (
-	StarterCoding  = engine.StarterCoding
-	StarterSupport = engine.StarterSupport
-	StarterSales   = engine.StarterSales
-	StarterVoice   = engine.StarterVoice
+	StarterCoding   = engine.StarterCoding
+	StarterSupport  = engine.StarterSupport
+	StarterSales    = engine.StarterSales
+	StarterVoice    = engine.StarterVoice
+	StarterPersonal = engine.StarterPersonal
 )
 
 // StarterRegistry returns an independent copy of a starter vocabulary: a

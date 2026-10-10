@@ -23,11 +23,15 @@ const (
 	StarterSupport = "support"
 	StarterSales   = "sales"
 	StarterVoice   = "voice"
+	// StarterPersonal is for an assistant that remembers a person's life. It
+	// seeds an open vocabulary: generic relations that many facts share, so
+	// an extractor reuses them instead of coining one predicate per fact.
+	StarterPersonal = "personal"
 )
 
 // StarterNames lists the starter registries StarterRegistry knows.
 func StarterNames() []string {
-	return []string{StarterCoding, StarterSales, StarterSupport, StarterVoice}
+	return []string{StarterCoding, StarterPersonal, StarterSales, StarterSupport, StarterVoice}
 }
 
 // StarterRegistry returns an independent copy of a starter vocabulary: a
@@ -118,6 +122,31 @@ var starters = map[string]func() Registry{
 			"objection":        many(typeString, "A reason the account gave for not buying"),
 			"competitor":       many(typeString, "Another vendor the account is considering or using"),
 			"uses_technology":  many(typeString, "Technology the account uses"),
+		}
+	},
+	// An assistant that remembers a person's life. The relations are generic
+	// on purpose: the subject carries the specifics ("the $30 book", "sister
+	// Emma"), so one predicate holds many facts and a later statement about
+	// the same subject replaces or adds to the earlier one. Everything that
+	// accumulates is multi-valued; single-valued is kept for what can only
+	// have one value at a time.
+	StarterPersonal: func() Registry {
+		return Registry{
+			"name":         one(typeString, "Name the subject uses"),
+			"lives_in":     one(typeString, "Where the subject lives now"),
+			"works_at":     one(typeString, "Where the subject works now"),
+			"role":         one(typeString, "The subject's current job or role"),
+			"status":       one(typeString, "The current state or progress of the subject, such as in repair or halfway through"),
+			"amount":       one(typeString, "A price, cost, count, or other quantity the subject has now"),
+			"date":         one(typeString, "When the subject happens, happened, or is due"),
+			"relationship": many(typeString, "A person in the subject's life and how they are related, such as sister Emma"),
+			"owns":         many(typeString, "Something the subject owns or has"),
+			"likes":        many(typeString, "Something the subject likes, enjoys, or prefers"),
+			"dislikes":     many(typeString, "Something the subject dislikes or avoids"),
+			"did":          many(typeString, "Something the subject did or that happened, with its date when known"),
+			"plans":        many(typeString, "Something the subject plans or intends to do"),
+			"goal":         many(typeString, "Something the subject is working toward"),
+			"detail":       many(typeString, "Another fact about the subject worth keeping"),
 		}
 	},
 	// A voice agent meets the same caller again with no screen to scroll

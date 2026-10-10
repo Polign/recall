@@ -596,6 +596,9 @@ func (m *memoryRuntime) forRequest(ctx context.Context) *memoryRuntime {
 // vocabulary.
 func newMemoryRuntime(c *api, collection, predicatesPath, embedURL string, open bool) (*memoryRuntime, error) {
 	registry := recall.DefaultRegistry()
+	if open && predicatesPath == "" {
+		registry = openSeeds()
+	}
 	if predicatesPath != "" {
 		raw, err := readFileTrimmed(predicatesPath)
 		if err != nil {
@@ -721,4 +724,20 @@ func (m *memoryRuntime) toolExplain(args json.RawMessage) (string, error) {
 		return "", err
 	}
 	return marshal(explanations)
+}
+
+// openSeeds is the vocabulary an open server starts from when no predicates
+// file is given: the coding starter, for the agents Recall began with, and
+// the personal one, for assistants that remember a person. Generic seeds are
+// what keep an extractor from coining one predicate per fact; where both
+// starters define a name, the coding one is kept.
+func openSeeds() recall.Registry {
+	seeds := recall.DefaultRegistry()
+	personal, _ := recall.StarterRegistry(recall.StarterPersonal)
+	for name, p := range personal {
+		if _, ok := seeds[name]; !ok {
+			seeds[name] = p
+		}
+	}
+	return seeds
 }
