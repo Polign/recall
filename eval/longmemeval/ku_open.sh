@@ -12,8 +12,11 @@
 # (about $1.05), about $3.50 at list prices. Resumable: rerun to finish a
 # stopped run.
 #
-#   bash ku_open.sh
+#   bash ku_open.sh      # all 77 questions, then judge and report
+#   bash ku_open.sh 5    # pilot: the first 5 questions only, then show the
+#                        # predicates coined; the full run reuses its work
 set -euo pipefail
+pilot="${1:-}"
 cd "$(dirname "$0")"
 : "${OPENAI_API_KEY:=$(bash -c 'source ~/.bashrc >/dev/null 2>&1; printf %s "$OPENAI_API_KEY"')}"
 export OPENAI_API_KEY
@@ -40,6 +43,31 @@ manifest.update(run="ku-fixed-4o", only="out/ku-ids.txt", questions=len(ku), cop
 print(len(ku), "knowledge-update questions; fixed version copied from uf-rel012-ages")
 EOF
 
-LME_OPEN_VOCAB=1 "$PY" run.py --run ku-open-4o --subset user-facts --only out/ku-ids.txt --method recall-linked --ages --workers 6
+ids=out/ku-ids.txt
+if [ -n "$pilot" ]; then
+  head -n "$pilot" out/ku-ids.txt > out/ku-ids-pilot.txt
+  ids=out/ku-ids-pilot.txt
+fi
+LME_OPEN_VOCAB=1 "$PY" run.py --run ku-open-4o --subset user-facts --only "$ids" --method recall-linked --ages --workers 6
+if [ -n "$pilot" ]; then
+  LME_OPEN_VOCAB=1 "$PY" - <<'EOF2'
+import collections, json
+import extract, lme
+seeds = extract.seeds()
+counts, coined = collections.Counter(), {}
+for f in (lme.HERE / "out" / "extract-cache" / extract.cache_key("gpt-4o-mini-2024-07-18")).glob("*.jsonl"):
+    for row in lme.read_jsonl(f):
+        for st in row["statements"]:
+            counts[st["predicate"]] += 1
+            if st["predicate"] not in seeds:
+                coined.setdefault(st["predicate"], st.get("cardinality") or "single")
+total = sum(counts.values())
+print(f"{total} statements, {len(counts)} predicates, {len(coined)} coined; "
+      f"{sum(c for p, c in counts.items() if p in seeds) / max(total, 1):.0%} of statements use a seed")
+for p, c in counts.most_common(30):
+    print(f"  {c:4d} {p}" + ("" if p in seeds else f"  (coined, {coined[p]})"))
+EOF2
+  exit 0
+fi
 "$PY" judge.py --run ku-open-4o --workers 8
 "$PY" report.py ku-fixed-4o ku-open-4o | tee out/report-ku-open.txt
