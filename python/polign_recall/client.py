@@ -99,6 +99,41 @@ class ExtractionResult:
     episode: RememberResult | None = None
 
 
+@dataclass(frozen=True)
+class Remembered:
+    """One statement a text-mode remember filed, told in words."""
+    text: str
+    replaces: tuple[str, ...] = ()
+    already_known: bool = False
+
+
+@dataclass(frozen=True)
+class TextResult:
+    """What a text-mode remember did. `kept_as_text` is True when the text
+    itself was kept as the record; with no extraction model on the server,
+    that is all that happens and `remembered` is empty."""
+    remembered: tuple[Remembered, ...]
+    kept_as_text: bool
+
+
+@dataclass(frozen=True)
+class Earlier:
+    """A value a Memory replaced, with the day it was stated."""
+    text: str
+    since: str
+
+
+@dataclass(frozen=True)
+class Memory:
+    """One current memory as the text tools tell it: a sentence, the day it
+    was stated, how many days before the question that was, and what it
+    replaced."""
+    text: str
+    since: str
+    days_ago: int
+    before: tuple[Earlier, ...] = ()
+
+
 def _known(cls: type, data: Any) -> dict[str, Any]:
     """The keys of `data` that `cls` declares. A newer server may send fields
     this client does not know yet; they are dropped instead of failing."""
@@ -361,12 +396,19 @@ class Client:
     remembered without any, as "provider:model": "anthropic:claude-opus-5-5",
     "openai:<model>", or "ollama:<model>". Keys come from ANTHROPIC_API_KEY or
     OPENAI_API_KEY. POLIGN_EXTRACT_MODEL in the environment does the same.
+
+    `text=True` uses the text tools instead of the typed ones (`recall mcp
+    -text`): `remember(text=...)`, `ask(question)` and `forget_text(...)`,
+    with no predicates anywhere. The server works out the facts with
+    `extract_model`; without one, remembered text is kept as written and
+    replaces nothing. With `command`, the command must start the server with
+    -text itself. Needs recall 0.14 or later.
     """
 
     def __init__(self, *, command: Sequence[str] | None = None,
                  env: Mapping[str, str] | None = None, timeout: float = 120,
                  write: bool = True, local_dir: str | os.PathLike[str] | None = None,
-                 agent: bool = False, extract_model: str | None = None):
+                 agent: bool = False, extract_model: str | None = None, text: bool = False):
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be finite and positive")
         if agent and not write:
@@ -381,9 +423,11 @@ class Client:
         self._id = 0
         self._closed = False
         self._agent = agent
+        self._text = text
         serve, setup = _server() if command is None else ([], [])
         argv = list(command) if command is not None else (
             serve + (["-write"] if write else []) + (["-agent"] if agent else [])
+            + (["-text"] if text else [])
             + (["-extract-model", extract_model] if extract_model else []))
         if local_dir is not None:
             env = {**(env or {}), **_local_server(setup, local_dir, timeout)}
@@ -501,11 +545,14 @@ class Client:
                  statements: Sequence[Mapping[str, Any]] | None = None,
                  kind: str | None = None, confidence: float | None = None,
                  source: str | None = None,
-                 observed_at: str | datetime | None = None) -> RememberResult | ExtractionResult:
+                 observed_at: str | datetime | None = None) -> RememberResult | ExtractionResult | TextResult:
         """Record a typed statement, or the statements in a piece of text.
 
         In text mode, pass `statements` your agent proposes, or leave them out
         and the server's extraction model (`extract_model`) proposes them.
+
+        On a client opened with text=True, pass `text` alone; the result is a
+        TextResult saying what was filed and what each statement replaced.
 
         `observed_at` dates a statement made earlier, such as a line of an
         imported conversation; omitted means now. A statement dated before a
@@ -513,6 +560,15 @@ class Client:
         does not replace it. The server refuses times in the future.
         """
         dated = {"observed_at": _instant(observed_at, "observed_at")} if observed_at is not None else {}
+        if self._text:
+            if text is None or statements is not None or value is not _MISSING or any(
+                    x is not None for x in (subject, predicate, kind, confidence, source)):
+                raise ValueError("a text client remembers text alone: remember(text=...)")
+            data = self._tool("remember", {"text": text, **dated})
+            return TextResult(tuple(Remembered(r.get("text", ""), tuple(r.get("replaces") or ()),
+                                               bool(r.get("already_known")))
+                                    for r in data.get("remembered") or ()),
+                              bool(data.get("kept_as_text")))
         if text is not None:
             if any(x is not None for x in (subject, predicate, kind, confidence, source)) or value is not _MISSING:
                 raise ValueError("text mode cannot be combined with typed fields")
@@ -530,6 +586,35 @@ class Client:
         args.update({k: v for k, v in {"kind": kind, "confidence": confidence, "source": source}.items() if v is not None})
         return RememberResult.decode(self._tool("remember", args))
 
+    def ask(self, question: str, *, as_of: str | datetime | None = None) -> list[Memory]:
+        """What is believed about `question`, as sentences (text=True only).
+        Each Memory lists under `before` what it replaced. `as_of` asks about
+        an earlier time."""
+        self._need_text("ask")
+        args: dict[str, Any] = {"question": question}
+        if as_of is not None:
+            args["as_of"] = _instant(as_of, "as_of")
+        data = self._tool("recall", args)
+        return [Memory(m.get("text", ""), m.get("since", ""), int(m.get("days_ago", 0)),
+                       tuple(Earlier(e.get("text", ""), e.get("since", "")) for e in m.get("before") or ()))
+                for m in data.get("memories") or ()]
+
+    def forget_text(self, text: str) -> list[str]:
+        """Withdraws the facts a description names, such as "my editor"
+        (text=True only), and returns them as sentences. The texts they came
+        from stay as the record. Needs an extraction model on the server."""
+        self._need_text("forget_text")
+        return list(self._tool("forget", {"text": text}).get("forgotten") or [])
+
+    def _need_text(self, method: str) -> None:
+        if not self._text:
+            raise ValueError(f"{method} needs a client opened with text=True")
+
+    def _need_typed(self, method: str) -> None:
+        if self._text:
+            raise ValueError(f"{method} uses the typed tools; this client was opened with text=True "
+                             "(use ask, remember(text=...) and forget_text)")
+
     def recall(self, subject: str | None = None, predicate: str | None = None, *,
                query: str | None = None, as_of: str | datetime | None = None,
                min_confidence: float | None = None, limit: int | None = None,
@@ -543,6 +628,7 @@ class Client:
         `observed_after` and `observed_before` keep only beliefs stated in
         that span. A query that names a time ("two weeks ago", "last
         Saturday") already searches that span first without them."""
+        self._need_typed("recall")
         if as_of is not None:
             as_of = _instant(as_of, "as_of")
         if observed_after is not None:
@@ -556,6 +642,7 @@ class Client:
         return [_belief(b) for b in self._tool("recall", {k: v for k, v in args.items() if v is not None}) or []]
 
     def forget(self, subject: str, predicate: str, value: Any = _MISSING, *, all: bool = False) -> int:
+        self._need_typed("forget")
         if all == (value is not _MISSING) or value is None:
             raise ValueError("forget requires exactly one typed value or all=True")
         args = {"subject": subject, "predicate": predicate}
@@ -564,9 +651,11 @@ class Client:
         return self._tool("forget", args)["withdrawn"]
 
     def history(self, subject: str, predicate: str) -> list[Event]:
+        self._need_typed("history")
         return [Event(**_known(Event, e)) for e in self._tool("memory_history", {"subject": subject, "predicate": predicate}) or []]
 
     def predicates(self) -> list[dict[str, Any]]:
+        self._need_typed("predicates")
         return self._tool("list_predicates", {})
 
     @property

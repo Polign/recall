@@ -55,6 +55,13 @@
   name. Other
   bundles are still written as `recall-fold-v2`, with unchanged checksums.
 
+## Python client, unreleased
+
+- `Client(text=True)` uses the text tools (`recall mcp -text`):
+  `remember(text=...)` returns a `TextResult`, `ask(question)` returns
+  `Memory` sentences with what each replaced, and `forget_text(...)` withdraws
+  what a description names. Typed calls raise `ValueError` on a text client.
+
 ## [0.13.0] - 2026-10-09
 
 ### Added

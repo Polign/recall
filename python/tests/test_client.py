@@ -7,7 +7,7 @@ import time
 import unittest
 import unittest.mock
 
-from polign_recall import Client, PriorValue, RecallError, ResumeContext, WorkingState
+from polign_recall import Client, Earlier, Memory, PriorValue, RecallError, Remembered, ResumeContext, TextResult, WorkingState
 
 
 FAKE = r'''
@@ -345,6 +345,66 @@ for line in sys.stdin:
 ''' % sys.executable
 
 
+# A text-surface server: remember files one sentence, recall answers with
+# memories, forget withdraws what it was asked to.
+TEXT_FAKE = r'''
+import json, sys
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    result = {}
+    if request["method"] == "tools/call":
+        name, args = request["params"]["name"], request["params"]["arguments"]
+        if name == "remember":
+            body = {"remembered": [{"text": "user prefers editor: zed", "replaces": ["user prefers editor: helix"]}],
+                    "kept_as_text": True, "echo": args}
+        elif name == "recall":
+            body = {"memories": [{"text": "user prefers editor: zed", "since": "2026-10-03", "days_ago": 7,
+                                  "before": [{"text": "helix", "since": "2026-09-01"}], "newer_field": 1}], "echo": args}
+        elif name == "forget":
+            body = {"forgotten": ["user prefers editor: zed"]}
+        else:
+            body = {}
+        result = {"content": [{"type": "text", "text": json.dumps(body)}]}
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+'''
+
+
+class TextModeTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / "text_server.py"
+        path.write_text(TEXT_FAKE)
+        self.command = [sys.executable, str(path)]
+
+    def test_remember_ask_and_forget_in_words(self):
+        with Client(command=self.command, text=True) as memory:
+            result = memory.remember(text="I switched to zed.", observed_at="2026-10-03T00:00:00Z")
+            self.assertEqual(result, TextResult((Remembered("user prefers editor: zed", ("user prefers editor: helix",)),), True))
+            self.assertEqual(memory.ask("which editor?", as_of="2026-10-10T00:00:00Z"),
+                             [Memory("user prefers editor: zed", "2026-10-03", 7, (Earlier("helix", "2026-09-01"),))])
+            self.assertEqual(memory.forget_text("my editor"), ["user prefers editor: zed"])
+
+    def test_typed_and_text_calls_do_not_mix(self):
+        with Client(command=self.command, text=True) as memory:
+            with self.assertRaises(ValueError):
+                memory.remember("user", "prefers_editor", "zed")
+            with self.assertRaises(ValueError):
+                memory.remember(text="x", statements=[])
+            for call in (lambda: memory.recall("user", "prefers_editor"), memory.predicates,
+                         lambda: memory.history("user", "prefers_editor"),
+                         lambda: memory.forget("user", "prefers_editor", all=True)):
+                with self.assertRaises(ValueError):
+                    call()
+        with Client(command=self.command) as typed:
+            with self.assertRaises(ValueError):
+                typed.ask("which editor?")
+            with self.assertRaises(ValueError):
+                typed.forget_text("my editor")
+
+
 @unittest.skipIf(sys.platform == "win32", "managed local databases are Unix only")
 class LocalDirTests(unittest.TestCase):
     def setUp(self):
@@ -369,6 +429,11 @@ class LocalDirTests(unittest.TestCase):
         with Client(local_dir=Path(self.directory.name) / "data", agent=True) as memory:
             (seen,) = memory.predicates()
         self.assertEqual(seen["argv"], ["mcp", "-write", "-agent"])
+
+    def test_text_mode_adds_the_text_flag(self):
+        with Client(local_dir=Path(self.directory.name) / "data", text=True) as memory:
+            (seen,) = memory._tool("list_predicates", {})
+        self.assertEqual(seen["argv"], ["mcp", "-write", "-text"])
 
     def test_without_recall_the_old_polign_commands_serve(self):
         with unittest.mock.patch("polign_recall.client.recall_bin", return_value=None), \

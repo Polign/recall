@@ -63,6 +63,28 @@ name only registered predicates and must quote the text; a proposal that does
 not is dropped, and the whole text is kept as a note either way. Statements you
 pass are used as given, and the model is not called.
 
+### Text only
+
+With `text=True`, the client uses the text tools and never sees a predicate:
+
+```python
+with Client(text=True, extract_model="anthropic:claude-haiku-4-5-20251001") as memory:
+    memory.remember(text="I switched from helix to zed last week.")
+    for m in memory.ask("Which editor do I use?"):
+        print(m.text, m.since, [e.text for e in m.before])  # user prefers editor: zed ... ['helix']
+    memory.forget_text("my editor")
+```
+
+`remember(text=...)` returns a `TextResult` listing what was filed and what
+each statement replaced. `ask` returns `Memory` sentences, each with `since`,
+`days_ago`, and what it replaced under `before`; it accepts `as_of`.
+`forget_text` withdraws the facts a description names and returns them; the
+texts they came from stay as the record. The server works out the facts with
+the model; without one, remembered text is kept as written and replaces
+nothing, and `forget_text` needs a model. The typed calls (`recall`,
+`forget`, `history`, `predicates`) raise `ValueError` on a text client. Needs
+recall 0.14 or later.
+
 `recall(..., as_of=...)` accepts an RFC3339 string or timezone-aware datetime.
 `forget` requires a typed value or explicit `all=True`; false and zero remain
 values. Forgetting retracts a belief and retains its historical events.
