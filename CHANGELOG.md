@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.14.0] - 2026-10-10
 
 ### Added
 
@@ -36,7 +36,8 @@
   `recall(question)` and `forget(text)`, with no predicates in any tool,
   instruction or answer; it needs `-extract-model` to file statements and
   implies `-open` unless `-predicates` is given. `recall mcp -open` keeps the
-  typed tools with an open vocabulary.
+  typed tools with an open vocabulary; `RECALL_OPEN=1` turns it on for clients
+  that start the server themselves.
 - `recall setup -extract-model` saves a model, and the saved setup then serves
   the text-only tools. New setups get an open vocabulary. Setup never picks a
   model itself; without one it lists the local Ollama models it finds.
@@ -52,10 +53,14 @@
 - `recall skill` explains both tool surfaces and open servers.
 - Fold version `recall-fold-v3` for audit bundles whose registry log uses a
   retroactive definition, a merge, or a second automatic definition of one
-  name. Other
-  bundles are still written as `recall-fold-v2`, with unchanged checksums.
+  name. Other bundles are still written as `recall-fold-v2`, with unchanged
+  checksums.
 
-## Python client, unreleased
+### Changed
+
+- The default (typed) MCP tool list gains a read-only `explain` tool.
+
+## Python client 0.14.0 - 2026-10-10
 
 - `Client(text=True)` uses the text tools (`recall mcp -text`):
   `remember(text=...)` returns a `TextResult`, `ask(question)` returns

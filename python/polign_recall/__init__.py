@@ -6,4 +6,4 @@ from .client import (Belief, Client, Earlier, Event, ExtractionResult, Memory, O
 __all__ = ["Belief", "Client", "Earlier", "Event", "Memory", "RecallError", "Remembered", "RememberResult",
            "ExtractionResult", "TextResult",
            "Output", "OutputRef", "Pointer", "PriorValue", "ResumeContext", "ResumedAgent", "Turn", "WorkingState"]
-__version__ = "0.13.0"
+__version__ = "0.14.0"
