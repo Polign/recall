@@ -41,6 +41,12 @@ type Config struct {
 	Embedder   Embedder
 	// Materialize caches current pair beliefs when the backend supplies watermarks.
 	Materialize bool
+	// Open lets writes define predicates. A write naming a predicate nothing
+	// has defined records its definition in the store's registry log, and a
+	// predicate defined there by any client is writable. Registry then only
+	// seeds the vocabulary and may be empty. Without Open the registry is a
+	// closed set and an unregistered predicate is refused.
+	Open bool
 }
 
 // Client is a context-aware memory client. Configuration is immutable, and
@@ -53,6 +59,7 @@ type Client struct {
 	embedder     Embedder
 	materialized *Materialization
 	reglog       *registryLog
+	open         bool
 }
 
 // NewClient validates configuration and copies the registry.
@@ -64,7 +71,7 @@ func NewClient(cfg Config) (*Client, error) {
 	if collection == "" {
 		return nil, fmt.Errorf("recall: collection is required")
 	}
-	if len(cfg.Registry) == 0 {
+	if len(cfg.Registry) == 0 && !cfg.Open {
 		return nil, fmt.Errorf("recall: registry must not be empty")
 	}
 	if err := cfg.Registry.Validate(); err != nil {
@@ -78,7 +85,7 @@ func NewClient(cfg Config) (*Client, error) {
 	if nilInterface(embedder) {
 		embedder = nil
 	}
-	c := &Client{backend: cfg.Backend, collection: collection, registry: registry, embedder: embedder, reglog: &registryLog{}}
+	c := &Client{backend: cfg.Backend, collection: collection, registry: registry, embedder: embedder, reglog: &registryLog{}, open: cfg.Open}
 	if cfg.Materialize {
 		c.materialized = &Materialization{}
 	}
@@ -98,6 +105,21 @@ func nilInterface(v any) bool {
 
 // Registry returns an independent copy of the client's predicate registry.
 func (c *Client) Registry() Registry { return c.registry.Clone() }
+
+// Vocabulary returns every predicate the store can read: the configured
+// registry plus everything its registry log defines. For an open client this
+// is also everything it can write.
+func (c *Client) Vocabulary(ctx context.Context) (Registry, error) {
+	s, err := c.forContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	sc, err := s.view()
+	if err != nil {
+		return nil, err
+	}
+	return sc.reg.Clone(), nil
+}
 
 // RememberRequest records a typed value (string, float64, or bool). Kind defaults
 // to fact and Source to user_stated. Nil Confidence defaults to 1; a pointer to
@@ -120,6 +142,13 @@ type RememberRequest struct {
 	// RememberText sets both; a caller recording a quote may set Evidence.
 	Evidence   string
 	EvidenceID string
+	// Cardinality and Description define the predicate when an open client
+	// meets it for the first time. Cardinality defaults to Single, because a
+	// stated fact is more often an update than an addition; a wrong guess is
+	// corrected by recording a new definition, and every answer follows it.
+	// Both are ignored for a predicate that is already defined.
+	Cardinality Cardinality
+	Description string
 }
 
 // ForgetRequest selects exactly one typed Value or All=true. False and numeric
@@ -146,7 +175,7 @@ func (c *Client) Remember(ctx context.Context, q RememberRequest) (RememberResul
 		kind = "fact"
 	}
 	return s.remember(kind, q.Subject, q.Predicate, q.Value, confidence, q.Source,
-		provenance{observedAt: q.ObservedAt, evidence: q.Evidence, evidenceID: q.EvidenceID})
+		provenance{observedAt: q.ObservedAt, evidence: q.Evidence, evidenceID: q.EvidenceID, cardinality: q.Cardinality, description: q.Description})
 }
 
 // Forget appends a targeted or blanket retraction.
@@ -264,7 +293,7 @@ func (c *Client) forContext(ctx context.Context) (*Store, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &Store{db: requestBackend{ctx: ctx, backend: c.backend}, collection: c.collection, registry: c.registry, reglog: c.reglog, now: time.Now, materialized: c.materialized, textFirst: textFirstFor(c.embedder),
+	return &Store{db: requestBackend{ctx: ctx, backend: c.backend}, collection: c.collection, registry: c.registry, reglog: c.reglog, now: time.Now, materialized: c.materialized, textFirst: textFirstFor(c.embedder), open: c.open,
 		embed: func(text string) ([]float32, error) {
 			if err := ctx.Err(); err != nil {
 				return nil, err

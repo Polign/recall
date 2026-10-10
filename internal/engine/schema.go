@@ -39,13 +39,21 @@ type RegistryChange struct {
 	At        time.Time `json:"at"`
 	Name      string    `json:"name"`
 	Predicate Predicate `json:"predicate"`
+	// Auto marks a definition an open client recorded because a write named a
+	// predicate nothing had defined yet.
+	Auto bool `json:"auto,omitempty"`
+	// Retroactive marks a correction: the definition applies to the
+	// predicate's whole history up to it, not only from At onward.
+	Retroactive bool `json:"retroactive,omitempty"`
 	// EventID is the log event holding this change.
 	EventID string `json:"event_id"`
 }
 
 // registryRecord is a registry event's value.
 type registryRecord struct {
-	Name string `json:"name"`
+	Name        string `json:"name"`
+	Auto        bool   `json:"auto,omitempty"`
+	Retroactive bool   `json:"retroactive,omitempty"`
 	Predicate
 }
 
@@ -67,18 +75,27 @@ func decodeRegistryChange(e Event) (RegistryChange, error) {
 	if err := (Registry{rec.Name: rec.Predicate}).Validate(); err != nil {
 		return bad("has an invalid definition: " + err.Error())
 	}
-	return RegistryChange{At: e.ObservedAt.UTC(), Name: rec.Name, Predicate: rec.Predicate, EventID: e.ID}, nil
+	return RegistryChange{At: e.ObservedAt.UTC(), Name: rec.Name, Predicate: rec.Predicate, Auto: rec.Auto, Retroactive: rec.Retroactive, EventID: e.ID}, nil
 }
 
+// decodeRegistryLog reads the registry changes in order. An automatic
+// definition of a name that is already defined is left out: two open clients
+// that both met a new predicate at once each record a definition, and the
+// first one recorded is the one every client folds under.
 func decodeRegistryLog(events []Event) ([]RegistryChange, error) {
 	ordered := append([]Event(nil), events...)
 	SortEvents(ordered)
 	out := make([]RegistryChange, 0, len(ordered))
+	defined := map[string]bool{}
 	for _, e := range ordered {
 		c, err := decodeRegistryChange(e)
 		if err != nil {
 			return nil, err
 		}
+		if c.Auto && defined[c.Name] {
+			continue
+		}
+		defined[c.Name] = true
 		out = append(out, c)
 	}
 	return out, nil
@@ -235,6 +252,10 @@ func (sc *schema) storedNames(name string) []string {
 // first seen with. A predicate with no recorded definition folds as
 // configured, and an unknown one as single-valued, which is the safer
 // default: it supersedes rather than accumulates.
+//
+// A retroactive definition is a correction of the ones before it, so it also
+// governs every instant before it was recorded; a later ordinary definition
+// still takes over from its own time.
 func (sc *schema) cardAt(predicate string, at time.Time) Cardinality {
 	defs := sc.defs[predicate]
 	if len(defs) == 0 {
@@ -245,10 +266,9 @@ func (sc *schema) cardAt(predicate string, at time.Time) Cardinality {
 	}
 	card := defs[0].Predicate.Cardinal()
 	for _, d := range defs {
-		if d.At.After(at) {
-			break
+		if !d.At.After(at) || d.Retroactive {
+			card = d.Predicate.Cardinal()
 		}
-		card = d.Predicate.Cardinal()
 	}
 	return card
 }
@@ -383,28 +403,85 @@ func (s *Store) SyncRegistry() ([]string, error) {
 	defer s.reglog.invalidate()
 	recorded := make([]string, 0, len(pending))
 	for _, name := range pending {
-		value, err := json.Marshal(registryRecord{Name: name, Predicate: s.registry[name]})
+		ev, err := s.appendDefinition(log, registryRecord{Name: name, Predicate: s.registry[name]})
 		if err != nil {
-			return recorded, err
-		}
-		at := writeInstant(log, s.now())
-		ev := Event{
-			ID:         eventID(RegistrySubject, RegistryPredicate, string(value), false, at),
-			Kind:       "fact",
-			Subject:    RegistrySubject,
-			Predicate:  RegistryPredicate,
-			Value:      string(value),
-			Confidence: 1,
-			Source:     "tool_result",
-			ObservedAt: at,
-		}
-		if err := s.append(ev); err != nil {
 			return recorded, err
 		}
 		log = append(log, ev)
 		recorded = append(recorded, name)
 	}
 	return recorded, nil
+}
+
+// Redefine corrects a predicate's definition for its whole history, not only
+// from now on. It is how a wrong guess made when an open write defined the
+// predicate is fixed: redefining a single-valued predicate as multi-valued
+// brings back every value it hid, in present and as-of answers alike, because
+// answers are folded from the log at read time and nothing was deleted. The
+// stored type cannot change, because values already written must stay
+// readable.
+func (s *Store) Redefine(name string, p Predicate) error {
+	if s.registryErr != nil {
+		return s.registryErr
+	}
+	sc, err := s.view()
+	if err != nil {
+		return err
+	}
+	name = sc.canonical(s.predicateName(name))
+	old, ok := sc.reg[name]
+	if !ok {
+		return fmt.Errorf("predicate %q is not defined", name)
+	}
+	if p.ValueType == "" {
+		p.ValueType = old.ValueType
+	}
+	if p.Description == "" {
+		p.Description = old.Description
+	}
+	if err := (Registry{name: p}).Validate(); err != nil {
+		return err
+	}
+	if storageClass(old.valueType()) != storageClass(p.valueType()) {
+		return fmt.Errorf("%w: predicate %q cannot change from %s to %s, because its stored values would become unreadable",
+			ErrRegistryMismatch, name, old.valueType(), p.valueType())
+	}
+	if len(sc.log) >= MaxHistoryEvents {
+		return fmt.Errorf("%w: registry log is full at %d events", ErrIncompleteHistory, MaxHistoryEvents)
+	}
+	defer s.reglog.invalidate()
+	_, err = s.appendDefinition(sc.log, registryRecord{Name: name, Retroactive: true, Predicate: p})
+	return err
+}
+
+// Redefine corrects a predicate's definition for its whole history. See
+// Store.Redefine. It writes, so it needs an embedder.
+func (c *Client) Redefine(ctx context.Context, name string, p Predicate) error {
+	s, err := c.forContext(ctx)
+	if err != nil {
+		return err
+	}
+	return s.Redefine(name, p)
+}
+
+// appendDefinition records one registry change after everything in log.
+func (s *Store) appendDefinition(log []Event, rec registryRecord) (Event, error) {
+	value, err := json.Marshal(rec)
+	if err != nil {
+		return Event{}, err
+	}
+	at := writeInstant(log, s.now())
+	ev := Event{
+		ID:         eventID(RegistrySubject, RegistryPredicate, string(value), false, at),
+		Kind:       "fact",
+		Subject:    RegistrySubject,
+		Predicate:  RegistryPredicate,
+		Value:      string(value),
+		Confidence: 1,
+		Source:     "tool_result",
+		ObservedAt: at,
+	}
+	return ev, s.append(ev)
 }
 
 func sameDefinition(a, b Predicate) bool {

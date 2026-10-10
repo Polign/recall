@@ -82,7 +82,7 @@ func TestDigestV2CoversEveryEventField(t *testing.T) {
 
 func auditFixture(t *testing.T) AuditBundle {
 	t.Helper()
-	b := AuditBundle{Version: AuditVersion, EventVersion: EventVersion, FoldVersion: FoldVersion,
+	b := AuditBundle{Version: AuditVersion, EventVersion: EventVersion, FoldVersion: foldVersionV2,
 		AsOf: at(3 * time.Hour), Registry: Registry{"prefers_editor": {Cardinality: "single", ValueType: "string", Description: "editor"}},
 		Events: []Event{assert("a", "Vim", at(0)), assert("b", "Neovim", at(time.Hour)), retract("c", "Vim", at(2*time.Hour))},
 	}
@@ -210,7 +210,7 @@ func TestAuditRejectsInvalidAndUnknownInputs(t *testing.T) {
 	for name, mutate := range map[string]func(*AuditBundle){
 		"bundle version":          func(b *AuditBundle) { b.Version = "recall-audit-v2" },
 		"event version":           func(b *AuditBundle) { b.EventVersion = "recall-event-v3" },
-		"fold version":            func(b *AuditBundle) { b.FoldVersion = "recall-fold-v3" },
+		"fold version":            func(b *AuditBundle) { b.FoldVersion = "recall-fold-v4" },
 		"zero instant":            func(b *AuditBundle) { b.AsOf = time.Time{} },
 		"bad instant":             func(b *AuditBundle) { b.AsOf = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC) },
 		"unnormalized scope":      func(b *AuditBundle) { b.Scope.Subject = " USER " },

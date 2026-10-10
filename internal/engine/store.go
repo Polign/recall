@@ -81,6 +81,8 @@ type Store struct {
 	// textFirst ranks every lexical hit ahead of the vector hits instead of
 	// fusing the two rankings; see textFirstFor.
 	textFirst bool
+	// open lets a write define a predicate; see Config.Open.
+	open bool
 }
 
 // NewStore returns a store over one collection.
@@ -143,6 +145,10 @@ type provenance struct {
 	observedAt time.Time
 	evidence   string
 	evidenceID string
+	// cardinality and description define a predicate an open write meets
+	// for the first time.
+	cardinality Cardinality
+	description string
 }
 
 // MaxObservationSkew is how far past the writer's clock an observation time
@@ -178,9 +184,9 @@ func (s *Store) remember(kind, subject, predicate string, value any, confidence 
 	if subject == "" {
 		return zero, fmt.Errorf("subject must not be empty")
 	}
-	predicate = strings.TrimSpace(predicate)
-	if !predicateName.MatchString(predicate) {
-		return zero, fmt.Errorf("predicate must be snake_case (e.g. prefers_editor), got %q", predicate)
+	predicate = s.predicateName(predicate)
+	if !predicateName.MatchString(predicate) || len(predicate) > maxPredicateName {
+		return zero, fmt.Errorf("predicate must be snake_case (e.g. prefers_editor) of at most %d bytes, got %q", maxPredicateName, predicate)
 	}
 	sc, err := s.view()
 	if err != nil {
@@ -189,6 +195,16 @@ func (s *Store) remember(kind, subject, predicate string, value any, confidence 
 	// A former name is accepted and stored under the name that owns it now.
 	predicate = sc.canonical(predicate)
 	spec, ok := sc.writable[predicate]
+	if !ok && s.open {
+		spec, ok = sc.reg[predicate]
+	}
+	if !ok && s.open {
+		predicate, spec, sc, err = s.define(predicate, value, from)
+		if err != nil {
+			return zero, err
+		}
+		ok = true
+	}
 	if !ok {
 		return zero, fmt.Errorf("predicate %q is not in the registry; registered predicates are: %s. "+
 			"If none of them fits, remember it with predicate %q and the statement as the value",
@@ -272,7 +288,7 @@ func (s *Store) Forget(subject, predicate, value string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	predicate = sc.canonical(strings.TrimSpace(predicate))
+	predicate = sc.canonical(s.predicateName(predicate))
 	var typed any
 	if value = strings.TrimSpace(value); value != "" {
 		t, err := sc.reg.parseValue(predicate, value)
@@ -286,7 +302,7 @@ func (s *Store) Forget(subject, predicate, value string) (int, error) {
 
 func (s *Store) forgetValue(subject, predicate string, typed any) (int, error) {
 	subject = normalizeSubject(subject)
-	predicate = strings.TrimSpace(predicate)
+	predicate = s.predicateName(predicate)
 	if subject == "" || predicate == "" {
 		return 0, fmt.Errorf("forget needs a subject and a predicate")
 	}
@@ -417,7 +433,7 @@ func (s *Store) Recall(q Query) ([]Belief, error) {
 	if asOf.IsZero() {
 		asOf = s.now().UTC()
 	}
-	q.Predicate = sc.canonical(strings.TrimSpace(q.Predicate))
+	q.Predicate = sc.canonical(s.predicateName(q.Predicate))
 
 	var beliefs []Belief
 	switch {
@@ -663,7 +679,7 @@ func (s *Store) History(subject, predicate string) ([]Event, error) {
 	}
 
 	var events []Event
-	for _, name := range sc.storedNames(sc.canonical(strings.TrimSpace(predicate))) {
+	for _, name := range sc.storedNames(sc.canonical(s.predicateName(predicate))) {
 		filter := map[string]any{
 			"subject":   normalizeSubject(subject),
 			"predicate": name,

@@ -31,8 +31,45 @@ const (
 	// share an instant. v1 ordered that tie on the event id, so the same log
 	// can fold differently under the two, and a v1 bundle must not be replayed
 	// here as though nothing had changed.
-	FoldVersion = "recall-fold-v2"
+	//
+	// v3 adds two registry rules: a retroactive definition governs the
+	// predicate's history before it, and an automatic definition of a name
+	// already defined is ignored. A bundle whose registry log uses neither
+	// folds the same under v2 and is still written as v2, so its checksum
+	// and older verifiers are unaffected.
+	FoldVersion = "recall-fold-v3"
+	// foldVersionV2 is written for bundles that do not need v3's rules.
+	foldVersionV2 = "recall-fold-v2"
 )
+
+// foldVersionFor is the oldest fold version that replays a registry log
+// correctly.
+func foldVersionFor(log []Event) string {
+	if usesFoldV3(log) {
+		return FoldVersion
+	}
+	return foldVersionV2
+}
+
+// usesFoldV3 reports a registry log that folds differently under v3: one
+// with a retroactive definition, or with an automatic definition of a name
+// already defined.
+func usesFoldV3(log []Event) bool {
+	ordered := append([]Event(nil), log...)
+	SortEvents(ordered)
+	defined := map[string]bool{}
+	for _, e := range ordered {
+		c, err := decodeRegistryChange(e)
+		if err != nil {
+			continue
+		}
+		if c.Retroactive || c.Auto && defined[c.Name] {
+			return true
+		}
+		defined[c.Name] = true
+	}
+	return false
+}
 
 var (
 	// ErrInvalidAudit marks unsupported versions or invalid bundle inputs.
@@ -88,7 +125,7 @@ func (s *Store) ExportAudit(q AuditRequest) (AuditBundle, error) {
 	}
 	// The bundle carries every predicate its events can be read under, which
 	// includes any the store's log defines and this client's registry omits.
-	b := AuditBundle{Version: AuditVersion, EventVersion: EventVersion, FoldVersion: FoldVersion,
+	b := AuditBundle{Version: AuditVersion, EventVersion: EventVersion, FoldVersion: foldVersionFor(sc.log),
 		Scope: AuditScope{Subject: normalizeSubject(q.Scope.Subject), Predicate: sc.canonical(strings.TrimSpace(q.Scope.Predicate))},
 		AsOf:  q.AsOf.UTC(), Registry: sc.bundleRegistry(), RegistryLog: sc.log,
 	}
@@ -190,6 +227,12 @@ func (b AuditBundle) validateHeader() error {
 		{"fold", b.FoldVersion, FoldVersion},
 	} {
 		if v.what == "event" && v.got == eventVersionV1 {
+			continue
+		}
+		if v.what == "fold" && v.got == foldVersionV2 {
+			if usesFoldV3(b.RegistryLog) {
+				return invalid(fmt.Sprintf("fold version %q cannot replay this registry log, which needs %q", v.got, FoldVersion))
+			}
 			continue
 		}
 		if v.got != v.want {

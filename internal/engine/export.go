@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
-	"strings"
 )
 
 // Export selects part of the log for audit. An empty field means "every one of
@@ -38,7 +37,7 @@ func (s *Store) ExportEvents(q Export) ([]Event, error) {
 	// A renamed predicate is exported under every name it has had.
 	names := []string{""}
 	if q.Predicate != "" {
-		names = sc.storedNames(sc.canonical(strings.TrimSpace(q.Predicate)))
+		names = sc.storedNames(sc.canonical(s.predicateName(q.Predicate)))
 	}
 	limit := q.Limit
 	if limit <= 0 {
