@@ -32,9 +32,10 @@ const (
 	// can fold differently under the two, and a v1 bundle must not be replayed
 	// here as though nothing had changed.
 	//
-	// v3 adds two registry rules: a retroactive definition governs the
-	// predicate's history before it, and an automatic definition of a name
-	// already defined is ignored. A bundle whose registry log uses neither
+	// v3 adds three registry rules: a retroactive definition governs the
+	// predicate's history before it, an automatic definition of a name
+	// already defined is ignored, and a merge record makes one name read as
+	// another. A bundle whose registry log uses neither
 	// folds the same under v2 and is still written as v2, so its checksum
 	// and older verifiers are unaffected.
 	FoldVersion = "recall-fold-v3"
@@ -63,7 +64,7 @@ func usesFoldV3(log []Event) bool {
 		if err != nil {
 			continue
 		}
-		if c.Retroactive || c.Auto && defined[c.Name] {
+		if c.Retroactive || c.AliasOf != "" || c.Auto && defined[c.Name] {
 			return true
 		}
 		defined[c.Name] = true

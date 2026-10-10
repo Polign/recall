@@ -45,6 +45,11 @@ type RegistryChange struct {
 	// Retroactive marks a correction: the definition applies to the
 	// predicate's whole history up to it, not only from At onward.
 	Retroactive bool `json:"retroactive,omitempty"`
+	// AliasOf, when set, makes this change a merge rather than a definition:
+	// Name is read as AliasOf from now on, and Predicate is empty. Events
+	// written under Name keep that name, so a merge is a view of the log; a
+	// later definition of Name takes it back (Client.Split).
+	AliasOf string `json:"alias_of,omitempty"`
 	// EventID is the log event holding this change.
 	EventID string `json:"event_id"`
 }
@@ -54,6 +59,7 @@ type registryRecord struct {
 	Name        string `json:"name"`
 	Auto        bool   `json:"auto,omitempty"`
 	Retroactive bool   `json:"retroactive,omitempty"`
+	AliasOf     string `json:"alias_of,omitempty"`
 	Predicate
 }
 
@@ -71,6 +77,17 @@ func decodeRegistryChange(e Event) (RegistryChange, error) {
 	var rec registryRecord
 	if err := json.Unmarshal([]byte(raw), &rec); err != nil {
 		return bad("has a malformed definition")
+	}
+	if rec.AliasOf != "" {
+		for _, n := range []string{rec.Name, rec.AliasOf} {
+			if !predicateName.MatchString(n) || n == RegistryPredicate || n == NotePredicate {
+				return bad("merges a name that is not a usable predicate")
+			}
+		}
+		if rec.Name == rec.AliasOf {
+			return bad("merges a predicate into itself")
+		}
+		return RegistryChange{At: e.ObservedAt.UTC(), Name: rec.Name, AliasOf: rec.AliasOf, EventID: e.ID}, nil
 	}
 	if err := (Registry{rec.Name: rec.Predicate}).Validate(); err != nil {
 		return bad("has an invalid definition: " + err.Error())
@@ -95,7 +112,9 @@ func decodeRegistryLog(events []Event) ([]RegistryChange, error) {
 		if c.Auto && defined[c.Name] {
 			continue
 		}
-		defined[c.Name] = true
+		if c.AliasOf == "" {
+			defined[c.Name] = true
+		}
 		out = append(out, c)
 	}
 	return out, nil
@@ -118,6 +137,9 @@ type schema struct {
 	defs map[string][]RegistryChange
 	// log is the registry events themselves, oldest first.
 	log []Event
+	// merged marks the aliases a merge created. A write naming one keeps
+	// that name on its event, so the merge can be undone.
+	merged map[string]bool
 }
 
 // newSchema joins a configured registry with a registry log. With check set,
@@ -128,7 +150,7 @@ func newSchema(configured Registry, log []Event, check bool) (*schema, error) {
 	if err != nil {
 		return nil, err
 	}
-	sc := &schema{reg: configured.Clone(), writable: configured, alias: map[string]string{}, defs: map[string][]RegistryChange{}}
+	sc := &schema{reg: configured.Clone(), writable: configured, alias: map[string]string{}, defs: map[string][]RegistryChange{}, merged: map[string]bool{}}
 	sc.log = append([]Event(nil), log...)
 	SortEvents(sc.log)
 	for name, p := range configured {
@@ -139,7 +161,9 @@ func newSchema(configured Registry, log []Event, check bool) (*schema, error) {
 
 	latest := map[string]RegistryChange{}
 	for _, c := range changes {
-		latest[c.Name] = c
+		if c.AliasOf == "" {
+			latest[c.Name] = c
+		}
 	}
 	names := make([]string, 0, len(latest))
 	for name := range latest {
@@ -157,6 +181,21 @@ func newSchema(configured Registry, log []Event, check bool) (*schema, error) {
 				renamed[a] = owner
 			}
 		}
+	}
+	// A merge works the same way, recorded on its own so that two merges
+	// into one predicate never overwrite each other.
+	for _, c := range changes {
+		if c.AliasOf == "" {
+			continue
+		}
+		if def, ok := latest[c.Name]; ok && def.At.After(c.At) {
+			continue
+		}
+		if _, ok := renamed[c.Name]; ok {
+			continue
+		}
+		renamed[c.Name] = c.AliasOf
+		sc.merged[c.Name] = true
 	}
 
 	old := make([]string, 0, len(renamed))
@@ -201,7 +240,16 @@ func newSchema(configured Registry, log []Event, check bool) (*schema, error) {
 		sc.reg[name] = spec
 	}
 
+	// A merge may name a predicate that was itself renamed since.
+	for a := range sc.merged {
+		if owner := sc.canonical(sc.alias[a]); owner != a {
+			sc.alias[a] = owner
+		}
+	}
 	for _, c := range changes {
+		if c.AliasOf != "" {
+			continue
+		}
 		owner := sc.canonical(c.Name)
 		sc.defs[owner] = append(sc.defs[owner], c)
 	}
@@ -283,12 +331,16 @@ func (sc *schema) fold(predicate string, events []Event, asOf time.Time) []Belie
 	return beliefs
 }
 
-// registryLog caches the schema one client or store reads under.
+// registryLog caches the schema one client or store reads under, and the
+// vectors of predicate names it has compared.
 type registryLog struct {
 	mu       sync.Mutex
 	view     *schema
 	err      error
 	loadedAt time.Time
+
+	vmu  sync.Mutex
+	vecs map[string][]float32
 }
 
 func (l *registryLog) invalidate() {
@@ -374,7 +426,9 @@ func (s *Store) SyncRegistry() ([]string, error) {
 	}
 	latest := map[string]Predicate{}
 	for _, c := range changes {
-		latest[c.Name] = c.Predicate
+		if c.AliasOf == "" {
+			latest[c.Name] = c.Predicate
+		}
 	}
 
 	var pending []string
@@ -462,6 +516,24 @@ func (c *Client) Redefine(ctx context.Context, name string, p Predicate) error {
 		return err
 	}
 	return s.Redefine(name, p)
+}
+
+// Merge makes one predicate read as another. See Store.Merge.
+func (c *Client) Merge(ctx context.Context, name, into string) error {
+	s, err := c.forContext(ctx)
+	if err != nil {
+		return err
+	}
+	return s.Merge(name, into)
+}
+
+// Split undoes a merge. See Store.Split.
+func (c *Client) Split(ctx context.Context, name string) error {
+	s, err := c.forContext(ctx)
+	if err != nil {
+		return err
+	}
+	return s.Split(name)
 }
 
 // appendDefinition records one registry change after everything in log.

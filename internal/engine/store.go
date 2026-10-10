@@ -83,6 +83,9 @@ type Store struct {
 	textFirst bool
 	// open lets a write define a predicate; see Config.Open.
 	open bool
+	// matchAt is the similarity at which a new predicate name is read as an
+	// existing one; zero turns matching off. See Config.MatchThreshold.
+	matchAt float64
 }
 
 // NewStore returns a store over one collection.
@@ -192,7 +195,10 @@ func (s *Store) remember(kind, subject, predicate string, value any, confidence 
 	if err != nil {
 		return zero, err
 	}
-	// A former name is accepted and stored under the name that owns it now.
+	// A former name is accepted and stored under the name that owns it now,
+	// except a name a merge made an alias: its events keep it, so the merge
+	// can be undone.
+	written := predicate
 	predicate = sc.canonical(predicate)
 	spec, ok := sc.writable[predicate]
 	if !ok && s.open {
@@ -248,11 +254,15 @@ func (s *Store) remember(kind, subject, predicate string, value any, confidence 
 		return zero, fmt.Errorf("%w: maximum %d events reached", ErrIncompleteHistory, MaxHistoryEvents)
 	}
 
+	storeAs := predicate
+	if sc.merged[written] && sc.canonical(written) == predicate {
+		storeAs = written
+	}
 	ev := Event{
-		ID:         eventID(subject, predicate, value, false, now),
+		ID:         eventID(subject, storeAs, value, false, now),
 		Kind:       kind,
 		Subject:    subject,
-		Predicate:  predicate,
+		Predicate:  storeAs,
 		Value:      value,
 		Confidence: confidence,
 		Source:     source,
@@ -270,7 +280,9 @@ func (s *Store) remember(kind, subject, predicate string, value any, confidence 
 	if sc.cardAt(predicate, now) == Single {
 		superseded = held
 	}
-	return RememberResult{Stored: beliefOf(ev), Superseded: superseded}, nil
+	stored := beliefOf(ev)
+	stored.Predicate = predicate
+	return RememberResult{Stored: stored, Superseded: superseded}, nil
 }
 
 // Forget withdraws a belief by appending a retraction.

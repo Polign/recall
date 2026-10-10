@@ -47,7 +47,20 @@ type Config struct {
 	// seeds the vocabulary and may be empty. Without Open the registry is a
 	// closed set and an unregistered predicate is refused.
 	Open bool
+	// MatchThreshold is how similar, from 0 to 1, a new predicate name must
+	// be to an existing one for an open write to use the existing one
+	// instead of defining it ("favorite_editor" for "editor_favorite").
+	// Similarity is the cosine of the embedder's vectors for the two names,
+	// and their descriptions when both have one. Zero means 0.9; a negative
+	// value turns matching off. Only a predicate with the same stored type,
+	// and the same cardinality when the write names one, can match.
+	MatchThreshold float64
 }
+
+// defaultMatchThreshold is deliberately strict. A missed match leaves two
+// predicates for one relation, which costs completeness; a wrong match
+// can make one value replace an unrelated one. Client.Split undoes a match.
+const defaultMatchThreshold = 0.9
 
 // Client is a context-aware memory client. Configuration is immutable, and
 // operations have independent request state. Concurrent writes still follow the
@@ -60,6 +73,7 @@ type Client struct {
 	materialized *Materialization
 	reglog       *registryLog
 	open         bool
+	matchAt      float64
 }
 
 // NewClient validates configuration and copies the registry.
@@ -70,6 +84,9 @@ func NewClient(cfg Config) (*Client, error) {
 	collection := strings.TrimSpace(cfg.Collection)
 	if collection == "" {
 		return nil, fmt.Errorf("recall: collection is required")
+	}
+	if !finite(cfg.MatchThreshold) || cfg.MatchThreshold > 1 {
+		return nil, fmt.Errorf("recall: match threshold must be at most 1")
 	}
 	if len(cfg.Registry) == 0 && !cfg.Open {
 		return nil, fmt.Errorf("recall: registry must not be empty")
@@ -86,6 +103,12 @@ func NewClient(cfg Config) (*Client, error) {
 		embedder = nil
 	}
 	c := &Client{backend: cfg.Backend, collection: collection, registry: registry, embedder: embedder, reglog: &registryLog{}, open: cfg.Open}
+	switch {
+	case cfg.MatchThreshold == 0:
+		c.matchAt = defaultMatchThreshold
+	case cfg.MatchThreshold > 0:
+		c.matchAt = cfg.MatchThreshold
+	}
 	if cfg.Materialize {
 		c.materialized = &Materialization{}
 	}
@@ -293,7 +316,7 @@ func (c *Client) forContext(ctx context.Context) (*Store, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &Store{db: requestBackend{ctx: ctx, backend: c.backend}, collection: c.collection, registry: c.registry, reglog: c.reglog, now: time.Now, materialized: c.materialized, textFirst: textFirstFor(c.embedder), open: c.open,
+	return &Store{db: requestBackend{ctx: ctx, backend: c.backend}, collection: c.collection, registry: c.registry, reglog: c.reglog, now: time.Now, materialized: c.materialized, textFirst: textFirstFor(c.embedder), open: c.open, matchAt: c.matchAt,
 		embed: func(text string) ([]float32, error) {
 			if err := ctx.Err(); err != nil {
 				return nil, err
