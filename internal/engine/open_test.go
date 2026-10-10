@@ -212,3 +212,52 @@ func TestAuditFoldVersionFollowsRegistryRules(t *testing.T) {
 		t.Fatalf("v2 replay of a v3 log = %v, want ErrInvalidAudit", err)
 	}
 }
+
+// vocabularySpy records the registry each extraction is offered.
+type vocabularySpy struct {
+	proposals []Proposal
+	offered   []Registry
+}
+
+func (v *vocabularySpy) Extract(_ context.Context, _ string, r Registry) ([]Proposal, error) {
+	v.offered = append(v.offered, r)
+	return append([]Proposal(nil), v.proposals...), nil
+}
+
+func TestOpenRememberTextDefinesCoinedPredicates(t *testing.T) {
+	ctx := context.Background()
+	c := openClient(t, newLockedBackend())
+	text := "I'm allergic to peanuts and shellfish."
+	spy := &vocabularySpy{proposals: []Proposal{
+		{Subject: "user", Predicate: "Allergic To", Value: "peanuts", Evidence: "allergic to peanuts", Cardinality: "multi", Description: "Something the subject is allergic to"},
+		{Subject: "user", Predicate: "allergic_to", Value: "shellfish", Evidence: "shellfish"},
+	}}
+	out, err := c.RememberText(ctx, text, spy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Unfiled) != 0 {
+		t.Fatalf("unfiled %+v: an open client files coined predicates", out.Unfiled)
+	}
+	got, err := c.Recall(ctx, Query{Subject: "user", Predicate: "allergic_to"})
+	if err != nil || len(got) != 2 {
+		t.Fatalf("allergies %v, %v; the multi hint should keep both", beliefValues(got), err)
+	}
+	if got[0].EvidenceID != out.Episode.Stored.EventID {
+		t.Fatalf("statement not linked to its episode")
+	}
+	if _, err := c.RememberText(ctx, "Also latex.", &vocabularySpy{}); err != nil {
+		t.Fatal(err)
+	}
+	second := &vocabularySpy{}
+	if _, err := c.RememberText(ctx, "Nothing new.", second); err != nil {
+		t.Fatal(err)
+	}
+	if p, ok := second.offered[0]["allergic_to"]; !ok || p.Description != "Something the subject is allergic to" {
+		t.Fatalf("extractor was offered %v, want the learned allergic_to", second.offered[0].Names())
+	}
+	bad := &vocabularySpy{proposals: []Proposal{{Subject: "user", Predicate: "x", Value: "y", Evidence: "Bad.", Cardinality: "several"}}}
+	if _, err := c.RememberText(ctx, "Bad.", bad); err == nil {
+		t.Fatal("an unknown cardinality was accepted")
+	}
+}

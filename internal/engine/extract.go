@@ -16,6 +16,11 @@ type Proposal struct {
 	Predicate string `json:"predicate"`
 	Value     any    `json:"value"`
 	Evidence  string `json:"evidence"`
+	// Cardinality ("single" or "multi") and Description define a predicate
+	// the proposal coins, for an open client. They are ignored for a
+	// predicate that is already defined.
+	Cardinality string `json:"cardinality,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 type Extractor interface {
@@ -81,7 +86,17 @@ func (c *Client) RememberTextAt(ctx context.Context, text string, extractor Extr
 	if !observedAt.IsZero() {
 		extractCtx = context.WithValue(ctx, observedAtKey{}, observedAt)
 	}
-	proposals, err := extractor.Extract(extractCtx, text, c.Registry())
+	// An open client offers the extractor everything already defined, so it
+	// reuses those names before coining new ones.
+	vocab := c.Registry()
+	if c.open {
+		v, err := c.Vocabulary(ctx)
+		if err != nil {
+			return out, err
+		}
+		vocab = v
+	}
+	proposals, err := extractor.Extract(extractCtx, text, vocab)
 	if err != nil {
 		return out, err
 	}
@@ -101,9 +116,26 @@ func (c *Client) RememberTextAt(ctx context.Context, text string, extractor Extr
 		if len(strings.TrimSpace(p.Evidence)) > MaxEvidenceBytes {
 			return out, fmt.Errorf("recall: proposal %d: evidence is longer than %d bytes; quote the part that supports the fact", i, MaxEvidenceBytes)
 		}
-		proposals[i].Predicate = c.registry.canonical(strings.TrimSpace(p.Predicate))
+		name := strings.TrimSpace(p.Predicate)
+		if c.open {
+			name = normalizePredicateName(name)
+		}
+		proposals[i].Predicate = vocab.canonical(name)
 		p = proposals[i]
-		spec, ok := c.registry[p.Predicate]
+		spec, ok := vocab[p.Predicate]
+		if !ok && c.open {
+			if !predicateName.MatchString(p.Predicate) || len(p.Predicate) > maxPredicateName || p.Predicate == RegistryPredicate {
+				return out, fmt.Errorf("recall: proposal %d: %q cannot name a predicate", i, p.Predicate)
+			}
+			if p.Cardinality != "" && p.Cardinality != string(Single) && p.Cardinality != string(Multi) {
+				return out, fmt.Errorf("recall: proposal %d: cardinality must be single or multi, got %q", i, p.Cardinality)
+			}
+			if _, err := inferValueType(p.Value); err != nil {
+				return out, fmt.Errorf("recall: proposal %d: %w", i, err)
+			}
+			filed = append(filed, i)
+			continue
+		}
 		if !ok {
 			out.Unfiled = append(out.Unfiled, p)
 			if !slices.Contains(noteSubjects, subject) {
@@ -136,7 +168,8 @@ func (c *Client) RememberTextAt(ctx context.Context, text string, extractor Extr
 		}
 		confidence := 0.8
 		r, err := c.Remember(ctx, RememberRequest{Subject: p.Subject, Predicate: p.Predicate, Value: p.Value, Kind: kind, Source: "agent_inferred", Confidence: &confidence,
-			ObservedAt: observedAt, Evidence: p.Evidence, EvidenceID: episode.Stored.EventID})
+			ObservedAt: observedAt, Evidence: p.Evidence, EvidenceID: episode.Stored.EventID,
+			Cardinality: Cardinality(p.Cardinality), Description: p.Description})
 		if err != nil {
 			return out, fmt.Errorf("recall: proposal %d failed after %d completed writes: %w", i, len(out.Results), err)
 		}
