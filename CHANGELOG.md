@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Open vocabulary: with `Config.Open`, a write may name any predicate, and the
+  first write that names one defines it in the registry log (snake_case name,
+  type from the first value, single-valued unless `RememberRequest.Cardinality`
+  says multi). The registry may be empty. `Client.Vocabulary` lists what is
+  defined, `RememberText` offers it to the extractor and files predicates a
+  proposal coins, and proposals may carry `cardinality` and `description`.
+  When two clients define one name at once, the first recorded definition
+  wins.
+- `Client.Redefine` records a retroactive definition that applies to a
+  predicate's whole history, so a wrong cardinality is corrected for present
+  and as-of answers alike.
+- Fold version `recall-fold-v3` for audit bundles whose registry log uses a
+  retroactive definition or a second automatic definition of one name. Other
+  bundles are still written as `recall-fold-v2`, with unchanged checksums.
+
 ## [0.13.0] - 2026-10-09
 
 ### Added

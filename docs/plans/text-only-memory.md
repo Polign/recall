@@ -1,6 +1,6 @@
 # Text-only memory: predicates become internal
 
-Status: draft, 2026-10-09. Nothing built yet.
+Status: phase 1 built on branch `at/text-only-memory` (2026-10-09).
 
 ## Goal
 
@@ -39,12 +39,16 @@ log, like any other event.
    so. `recall setup` picks a model (API key found in the environment, or a
    local Ollama model).
 2. **Unknown predicates default to single-valued.** Stated facts are mostly
-   updates. A wrong guess is fixed by one definition event, because answers
-   are folded at read time and nothing is deleted.
-3. **The typed API stays.** The Go and Python typed calls keep working. A
-   predicates file becomes optional and turns on `-strict` (closed
-   vocabulary, today's behavior). The MCP typed tools move behind `-typed`
-   for one release, then that flag stays as the strict surface.
+   updates. A wrong guess is fixed by one retroactive definition
+   (`Client.Redefine`), because answers are folded at read time and nothing
+   is deleted. An ordinary definition change only applies from when it is
+   recorded, so the retroactive kind was added for this (built in phase 1).
+3. **The typed API stays.** The library gets `Config.Open`, off by default,
+   so existing typed callers keep a closed registry. The `recall` binary
+   turns it on in phase 4, when its surface becomes text-only; a predicates
+   file there turns on `-strict` (closed vocabulary, today's behavior). The
+   MCP typed tools move behind `-typed` for one release, then that flag
+   stays as the strict surface.
 4. **Never merge a single-valued predicate with a multi-valued one**, however
    close the names are.
 5. **Keep the raw relation** the model wrote on each event (new metadata field
@@ -73,6 +77,15 @@ log, like any other event.
 
 Done when: engine tests cover define-on-write, concurrent definitions,
 strict mode, and a cardinality flip that re-derives past answers.
+
+Built: `Config.Open`, define-on-write as `auto` registry events (first
+definition wins), name normalization, type inference,
+`RememberRequest.Cardinality`/`Description`, `Client.Vocabulary`,
+retroactive `Client.Redefine`, `RememberText` filing coined predicates and
+offering the learned vocabulary, and audit fold `recall-fold-v3` (written
+only when a bundle needs it). Not yet: re-reading the registry log on a miss
+happens only inside `define`, so a closed client can take up to 30 s to see
+a new predicate.
 
 ### 2. Matching new names to existing ones
 

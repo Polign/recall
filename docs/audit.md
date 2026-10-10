@@ -72,6 +72,13 @@ semantics (including targeted single-value retractions). `recall-event-v2`
 adds `evidence` and `evidence_id`, and its bundles are checksummed with
 `DigestV3`. Bundles declaring `recall-event-v1` still replay and verify with
 `DigestV2`; a v1 bundle carrying evidence is refused.
+
+`recall-fold-v3` adds two registry rules: a retroactive definition (from
+`Client.Redefine`) governs the predicate's history before it, and an
+automatic definition of a name that is already defined is ignored. A bundle
+is written as v3 only when its registry log uses one of them; otherwise it is
+written as v2 and checksums as before. A v2 bundle whose registry log needs v3
+is refused.
 Future incompatible semantics require a new version and an explicit verifier
 implementation; unknown versions are refused. Existing stored metadata is not
 rewritten or assigned a new event ID by this feature.

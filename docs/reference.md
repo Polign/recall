@@ -516,6 +516,7 @@ What each kind of change does:
 | Add a predicate | Add it to the registry | Writable at once |
 | Rename | Add the new name with the old name in `aliases`, and remove the old entry | Both names are one history. Old events answer under the new name, and a write to the old name is stored under the new one. |
 | Change cardinality | Change `cardinality` | Applies from the moment it is recorded. Earlier events keep the old rule. |
+| Correct a definition | `client.Redefine(ctx, name, recall.Predicate{Cardinality: "multi"})` | Applies to the whole history, as-of reads included. Use it when the old rule was wrong, not when the facts changed. |
 | Widen or narrow an enum | Edit `allowed` | Applies to new writes. Values already stored stay readable and can be forgotten. |
 | Change the stored type, such as number to string | Not supported | `SyncRegistry` refuses it. Register a new predicate. |
 | Split one predicate into two | Not a registry change | Remember each fact again under the right predicate. Which half an old event belongs to is a decision about that event. |
@@ -548,6 +549,42 @@ behaves as before: the client's own registry is the only rule.
 
 A predicate that is recorded in the store but missing from a client's registry
 can be read by that client, under its recorded definition, but not written.
+
+### Open vocabulary
+
+With `Open: true` in `Config`, a write may name any predicate. The first write
+that names one defines it in the registry log:
+
+- the name is brought to snake_case, so `Works For` and `works-for` are
+  `works_for`;
+- the value type comes from the first value: a string, number, or boolean;
+- it is single-valued unless the write says `Cardinality: recall.Multi`, with
+  an optional `Description`.
+
+```go
+client, err := recall.NewClient(recall.Config{Backend: backend, Collection: "memory",
+	Embedder: recall.LexicalEmbedder{}, Open: true}) // Registry may be empty
+client.Remember(ctx, recall.RememberRequest{Subject: "user", Predicate: "allergic_to",
+	Value: "peanuts", Cardinality: recall.Multi})
+```
+
+A predicate any client defined is writable by every open client.
+`client.Vocabulary(ctx)` lists everything defined so far, and `RememberText`
+offers that list to the extractor, so a model reuses names before it coins
+new ones. A proposal may carry `cardinality` and `description` for a name it
+coins. When two clients define the same name at once, the first definition
+recorded wins.
+
+Guessing single-valued is safe to get wrong. If `allergic_to` should have been
+multi-valued, `client.Redefine` records a correction that applies to its whole
+history, and every value the guess hid comes back, because answers are folded
+from the log at read time and nothing was deleted. Audit bundles that rely on
+a correction, or on two clients defining one name, are written as
+`recall-fold-v3`; others stay `recall-fold-v2`.
+
+A client without `Open` treats its registry as a closed set: it reads
+predicates other clients defined, but refuses to write them or to define new
+ones.
 
 `client.RegistryLog(ctx)` returns every recorded change, oldest first. The
 changes are stored as events about the subject `recall:registry`. Recall leaves
