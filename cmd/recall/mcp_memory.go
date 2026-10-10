@@ -127,6 +127,14 @@ func (s *mcpServer) memoryTools() []mcpTool {
 			}, "subject", "predicate"),
 		},
 		{
+			Name:        "explain",
+			Title:       "Explain a belief",
+			Description: "Why each belief a question finds is held: the text it was drawn from, the name it was written under when a merge filed it under another, the definitions that decide how it folds (declared, defined on first use, corrected, or merged), and its full history.",
+			InputSchema: schema(map[string]any{
+				"question": map[string]any{"type": "string", "description": "what to explain, in words"},
+			}, "question"),
+		},
+		{
 			Name:        "memory_history",
 			Title:       "Read a belief's history",
 			Description: "Every statement ever recorded for one subject and predicate, oldest first, including the ones since superseded or retracted. This is the audit trail: what was believed, when, how confidently, and on what basis.",
@@ -190,7 +198,7 @@ func (s *mcpServer) runMemoryTool(ctx context.Context, name string, args json.Ra
 			return "", true, fmt.Errorf("this server is read-only; it was started without -write")
 		}
 	case "recall":
-	case "list_predicates", "memory_history":
+	case "list_predicates", "memory_history", "explain":
 		if s.memory.text {
 			return "", false, nil
 		}
@@ -215,6 +223,8 @@ func (s *mcpServer) runMemoryTool(ctx context.Context, name string, args json.Ra
 		out, err = m.toolForget(args)
 	case "memory_history":
 		out, err = m.toolHistory(args)
+	case "explain":
+		out, err = m.toolExplain(args)
 	}
 	return out, true, err
 }
@@ -694,4 +704,21 @@ func btoi(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+func (m *memoryRuntime) toolExplain(args json.RawMessage) (string, error) {
+	var a struct {
+		Question string `json:"question"`
+	}
+	if err := json.Unmarshal(args, &a); err != nil {
+		return "", err
+	}
+	if m.client == nil {
+		return "", fmt.Errorf("explain needs the context-aware memory client")
+	}
+	explanations, err := m.client.Explain(m.ctx, a.Question)
+	if err != nil {
+		return "", err
+	}
+	return marshal(explanations)
 }

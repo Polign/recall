@@ -128,7 +128,7 @@ func TestMCPMemoryToolsAbsentWithoutARuntime(t *testing.T) {
 func TestMCPListsOnlyMemoryTools(t *testing.T) {
 	resps := runMCP(t, newMemoryMCP(t), `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
 	names := toolNames(t, resps[1])
-	want := []string{"list_predicates", "remember", "recall", "forget", "memory_history"}
+	want := []string{"list_predicates", "remember", "recall", "forget", "explain", "memory_history"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("tools = %v, want %v", names, want)
 	}

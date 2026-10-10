@@ -136,3 +136,29 @@ func TestOpenTypedSurfaceDefinesPredicates(t *testing.T) {
 		t.Fatalf("instructions:\n%s", instr)
 	}
 }
+
+func TestExplainToolAndOutput(t *testing.T) {
+	s := newTextMCP(t, wordModel{})
+	if _, bad := step(t, s, "remember", `{"text":"I use helix."}`); bad {
+		t.Fatal("remember failed")
+	}
+	if _, bad := step(t, s, "explain", `{"question":"editor"}`); !bad {
+		t.Fatal("explain is reachable on the text surface")
+	}
+	s.memory.text = false
+	text, bad := step(t, s, "explain", `{"question":"which editor"}`)
+	if bad || !strings.Contains(text, `"memory":"user favorite editor: helix"`) || !strings.Contains(text, `"source_text":"I use helix."`) || !strings.Contains(text, `"change":"defined on first use"`) {
+		t.Fatalf("explain: %s", text)
+	}
+	var e []recall.Explanation
+	if err := json.Unmarshal([]byte(text), &e); err != nil || len(e) == 0 {
+		t.Fatalf("decode: %v", err)
+	}
+	var out strings.Builder
+	writeExplanation(&out, e[0])
+	for _, want := range []string{"user favorite editor: helix\n", `from: "I use helix."`, "favorite_editor defined on first use: single-valued string", "history:\n"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+}

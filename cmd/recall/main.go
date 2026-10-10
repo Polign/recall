@@ -4,6 +4,7 @@
 //
 //	recall mcp [-write] [-agent] [...]   serve the memory tools over stdio
 //	recall setup [-local | -url URL]     configure Recall, optionally install the Claude plugin
+//	recall explain <question>            say why each matching belief is held
 //	recall doctor                        check a configured Recall end to end
 //	recall skill                         print the agent guide
 package main
@@ -34,7 +35,7 @@ func main() {
 	backend := flag.String("backend", envOr("RECALL_BACKEND", setupBackend), "storage backend: "+strings.Join(recall.Backends(), ", ")+" (default $RECALL_BACKEND, then "+setupBackend+")")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Usage = func() {
-		fmt.Fprintln(flag.CommandLine.Output(), "Usage: recall [global flags] <command> [options]\n\nCommands: mcp, setup, doctor, skill\nAgent guide: recall skill (offline)\n\nGlobal flags:")
+		fmt.Fprintln(flag.CommandLine.Output(), "Usage: recall [global flags] <command> [options]\n\nCommands: mcp, explain, setup, doctor, skill\nAgent guide: recall skill (offline)\n\nGlobal flags:")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -63,12 +64,14 @@ func main() {
 	switch cmd {
 	case "mcp":
 		err = cmdMCP(c, url != "", args)
+	case "explain":
+		err = cmdExplain(c, url != "", args, os.Stdout)
 	case "setup", "doctor":
 		err = cmdRecall(append([]string{cmd}, args...), os.Stdout)
 	case "skill":
 		err = cmdSkill(args, os.Stdout)
 	default:
-		err = fmt.Errorf("unknown command %q (want mcp, setup, doctor, skill)", cmd)
+		err = fmt.Errorf("unknown command %q (want mcp, explain, setup, doctor, skill)", cmd)
 	}
 	if err != nil {
 		log.Fatal(err)
