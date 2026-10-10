@@ -1,6 +1,6 @@
 # Text-only memory: predicates become internal
 
-Status: phases 1, 2 and 3 built on branch `at/text-only-memory` (2026-10-09).
+Status: phases 1 to 6 built on branch `at/text-only-memory` (2026-10-09).
 
 ## Goal
 
@@ -166,6 +166,25 @@ paraphrase picks the right belief (the suite uses a stub selector).
   Replaced, EventID}`, `Client.ForgetText`. `RememberText` stays.
 - Python client mirrors the Go calls.
 
+Built (phase 4): `Client.Ask`/`AskAt` returning `Memory` sentences,
+`recall.Sentence`, `recall mcp -text` (three tools, no predicates anywhere,
+tested) and `recall mcp -open` (typed tools, open vocabulary, `cardinality`
+and `description` on remember). Changed from the plan: both are opt-in
+flags, not the new default. The Python client starts `recall mcp` (sometimes
+with `-extract-model`) and calls the typed tools, and its integration test
+expects unknown predicates to become notes, so switching surfaces by
+default would break it. The default flips once the Python client passes
+`-typed` (or the new flags) for a release. Without a model, `-text` keeps
+text as written instead of refusing. Not yet: the Python client mirror, and
+model-written sentence templates (answers use the predicate's words).
+
+Live check (local Qdrant, `ollama:qwen3:8b`): extraction reused starter
+predicates, coined `lives_in`, superseded helix with zed, and replayed
+restated text. It found two bugs, both fixed and tested: forget also
+withdrew the source texts (one held where the user lives), and recall told
+every fact twice (fact and source text). Writes took 24 to 82 s each with
+that thinking model.
+
 ### 5. `recall explain`
 
 Ships in the same release, not later. Given a question or an event id, it
@@ -174,6 +193,9 @@ landed on, which names were merged into that predicate, and the definition
 events (with cardinality changes) that decided the answer. CLI and an MCP
 tool behind `-typed`.
 
+Built: `Client.Explain`/`ExplainBelief`, `recall explain <question>` (text
+or `-json`), and an `explain` tool on the typed surface only.
+
 ### 6. Setup and defaults
 
 - `recall setup` finds `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, or a running
@@ -181,6 +203,15 @@ tool behind `-typed`.
   as text only.
 - Check whether Claude Code supports MCP sampling. If it does, the host's
   model can do extraction and setup needs no key.
+
+Built, changed from the plan: setup saves `-extract-model` when given
+(`none` clears it) but never picks one by itself. A hosted model receives
+and bills every remembered passage, and the live check showed a local
+thinking model adding 24 to 82 s per write, so the choice stays with the
+user; setup lists local Ollama models as a hint. New setups get an open
+vocabulary. Sampling: Claude Code does not support MCP sampling, and the
+MCP spec deprecated sampling (SEP 2577, 2026-07-28), per a docs check on
+2026-10-09, so a server-side model is required for the text surface.
 
 ### 7. Eval gate (paid, needs a cost estimate and a yes first)
 

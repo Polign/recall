@@ -62,12 +62,37 @@ does not determine how long memories are kept.
 | `remember` | Saves a fact or preference. A new value replaces an old one when its type allows only one current value. |
 | `recall` | Reads current memories or answers a query about an earlier time. Each memory lists the value it replaced, so a correction arrives with the answer. |
 | `memory_history` | Shows the statements and withdrawals behind a memory. |
+| `explain` | Says why each memory a question finds is held: the text it came from, the rules that fold it, and its history. |
 | `forget` | Withdraws a memory from current answers while preserving its history. |
 
 Start without `-write` to expose only the read tools. There is no separate
 correction tool: use `remember` with the same subject and predicate and the new
 value. Types that accept several values need an explicit `forget` to remove an
 old value.
+
+With `-open`, the agent is not limited to the listed kinds of memory: a
+predicate nothing has defined is defined by its first use, so no predicates
+file is needed. `remember` then also takes `cardinality` (`single` or `multi`)
+and `description` for a new one.
+
+## Text-only tools
+
+`recall mcp -text -extract-model <provider:model>` serves three tools with no
+predicates in them:
+
+| Tool | Takes | What it does |
+| --- | --- | --- |
+| `remember` | `text` | The server works out the statements in the text, files them, and keeps the text as the record. A newer statement replaces an older one. |
+| `recall` | `question` | Answers with current memories as sentences, each with what it replaced and how many days ago it was stated. |
+| `forget` | `text` | Withdraws the facts a description names, such as "my editor". The texts they came from stay. |
+
+The model is called on every `remember` and `forget`, so pick one that answers
+in a second or two: a local thinking model such as `qwen3:8b` took 24 to 82
+seconds per write in testing. Restating the same text replays the first
+extraction instead of calling the model again. Without `-extract-model`,
+`remember` keeps the text as written (searchable, but it replaces nothing)
+and `forget` reports that it needs a model. `recall setup -extract-model`
+saves the model, and the saved setup then serves these tools.
 
 ## Turning text into memories
 

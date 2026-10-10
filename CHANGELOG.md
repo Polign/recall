@@ -30,7 +30,20 @@
   replays it when the same text is remembered again, so a retried write files
   identically and restated text does not cost a model call.
 - `Client.ForgetText` withdraws the beliefs a request in words names, chosen
-  by a `Selector`; `model.Extractor` is one.
+  by a `Selector`; `model.Extractor` is one. It offers kept texts only when no
+  fact matches, so forgetting one fact never withdraws a text holding others.
+- `recall mcp -text` serves text-only tools, `remember(text)`,
+  `recall(question)` and `forget(text)`, with no predicates in any tool,
+  instruction or answer; it needs `-extract-model` to file statements and
+  implies `-open` unless `-predicates` is given. `recall mcp -open` keeps the
+  typed tools with an open vocabulary.
+- `recall setup -extract-model` saves a model, and the saved setup then serves
+  the text-only tools. New setups get an open vocabulary. Setup never picks a
+  model itself; without one it lists the local Ollama models it finds.
+- `Client.Ask` answers a question with current beliefs as sentences, leaving
+  out texts that statements were filed from. `Client.Explain` and
+  `recall explain <question>` (and an `explain` tool on the typed surface) say
+  why a belief is held.
 - Fold version `recall-fold-v3` for audit bundles whose registry log uses a
   retroactive definition, a merge, or a second automatic definition of one
   name. Other
