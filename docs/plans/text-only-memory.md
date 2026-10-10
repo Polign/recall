@@ -240,6 +240,17 @@ pick up. A first attempt without seeds coined 90 predicates for 167
 statements and was stopped; with the personal starter and the firmer
 rules, 98% of statements used a seed. Cost about $3.70.
 
+Full user-facts subset (267 questions, same setup; the fixed version is
+uf-rel012-ages, retrieved identically on this branch): fixed 217/267
+(81.3), open 212/267 (79.4), a 1.9-point gap with 7 questions gained and
+12 lost (exact McNemar p = 0.36; bootstrap 95% interval for the
+difference -5.2 to +1.1 points). By type: single-session-user 95.7 to
+94.3, preference 43.3 to 43.3, knowledge-update 85.7 to 83.1, temporal
+78.9 to 76.7, abstention 93.3 to 80.0 (2 of 15). nDCG@5 75.7 to 80.2.
+88,264 statements, 323 distinct predicates, 97% on a seed. This meets the
+ship bar (within 2 points); abstention is the one place to watch. Total
+phase 7 cost about $12.
+
 ### 8. Docs and site
 
 README, `docs/mcp.md`, `docs/reference.md`, the agent guide (`recall skill`),
