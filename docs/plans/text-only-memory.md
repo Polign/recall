@@ -227,6 +227,19 @@ tuning up, so this is the main accuracy risk, mostly in knowledge-update.
 - Ship bar: within 2 points of the fixed-vocabulary headline. Over 5 points
   means the matching threshold or the extraction prompt is wrong.
 
+Result (2026-10-10, 77 knowledge-update questions of the user-facts
+subset, gpt-4o-mini extraction, gpt-4o reader and judge; the fixed version
+is the knowledge-update rows of uf-rel012-ages, which this branch retrieves
+identically): fixed 66/77 (85.7), open 64/77 (83.1), a 2.6-point gap. Four
+questions flipped against the open version and two in its favor (exact
+McNemar p = 0.69), so the gap is within noise at this size; abstention went
+from 5/6 to 4/6. Session retrieval improved (nDCG@5 82.7 to 88.6). The
+losses are filing choices, not vocabulary sprawl: a record update filed as
+an event (`did`) instead of a `status`, and an update the extractor did not
+pick up. A first attempt without seeds coined 90 predicates for 167
+statements and was stopped; with the personal starter and the firmer
+rules, 98% of statements used a seed. Cost about $3.70.
+
 ### 8. Docs and site
 
 README, `docs/mcp.md`, `docs/reference.md`, the agent guide (`recall skill`),
