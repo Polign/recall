@@ -244,7 +244,9 @@ def stop_local_server(store: Path) -> None:
     one question's store is never shared, and a server left behind per
     question exhausts the machine within a few hundred questions."""
     import subprocess
-    subprocess.run(["pkill", "-f", f"fs:{store}/data"], check=False)
+    # The server was started with the absolute path; a relative LME_STORES
+    # would never match it and leave one server running per question.
+    subprocess.run(["pkill", "-f", f"fs:{store.resolve()}/data"], check=False)
 
 
 def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,

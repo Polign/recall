@@ -24,7 +24,7 @@ export OPENAI_API_KEY
 
 # The open version needs this branch's recall (RECALL_OPEN).
 (cd ../.. && go build -o eval/longmemeval/out/recall-branch ./cmd/recall)
-export LME_RECALL_BIN="$PWD/out/recall-branch" LME_STORES=out/stores
+export LME_RECALL_BIN="$PWD/out/recall-branch" LME_STORES="$PWD/out/stores"
 PY=.venv/bin/python
 
 "$PY" - <<'EOF'
