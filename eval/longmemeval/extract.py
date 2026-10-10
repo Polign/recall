@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from typing import Any
 
 import lme
@@ -54,17 +55,53 @@ EVENTS_RULE = ("- Whenever the user did, started, finished, bought, attended, jo
 PROMPT = PROMPT.replace("{events_rule}", EVENTS_RULE if os.environ.get("LME_EXTRACT_EVENTS") else "")
 
 
+# LME_OPEN_VOCAB=1 extracts against an open vocabulary, as Recall's open mode
+# does: the model sees the predicates used so far in this haystack, reuses
+# them, and coins new ones with a cardinality. Everything else in the prompt
+# (subjects, values, evidence, dates) stays as tuned, so a comparison with the
+# fixed registry measures the vocabulary alone.
+OPEN = bool(os.environ.get("LME_OPEN_VOCAB"))
+
+OPEN_PROMPT = (PROMPT
+    .replace("""Record facts as statements with these predicates only:
+{predicates}
+""", """Predicates already in use in this memory:
+{predicates}
+""")
+    .replace("""- Single-valued predicates (status, count, plan, location, relationship, date, duration, cost) keep only the newest value per subject, so a new value erases the old one. Never use them with subject "user" unless the fact describes the user as a whole (where the user lives, the user's job). "$30 book" and "$75 necklace" are two subjects, each with its own cost.
+- Use subject "user" for event, preference, and detail statements about the user's life in general.""",
+    """- predicate names the relation, in snake_case. Reuse a predicate from the list above whenever one fits, even when the session words it differently. Otherwise coin a new one, such as works_at, lives_in, or allergic_to. Name the relation, not the value.
+- For a predicate you coin, set cardinality to single when a new value for the same subject replaces the old one, and to multi when values add up. Give a one-line description. For a predicate from the list above, leave cardinality and description empty.
+- A single-valued predicate keeps only the newest value per subject, so a new value erases the old one. Never use one with subject "user" unless the fact describes the user as a whole (where the user lives, the user's job). "$30 book" and "$75 necklace" are two subjects, each with its own values.
+- Use subject "user" for facts about the user's life in general.""")
+    .replace('''Return JSON only: {{"statements": [{{"subject": "...", "predicate": "...", "value": "...", "evidence": "..."}}]}}''',
+             '''Return JSON only: {{"statements": [{{"subject": "...", "predicate": "...", "value": "...", "evidence": "...", "cardinality": "single, multi, or empty", "description": "..."}}]}}''')
+    .replace(EVENTS_RULE, ""))
+assert "with these predicates only" not in OPEN_PROMPT and "coin a new one" in OPEN_PROMPT and '"cardinality"' in OPEN_PROMPT
+
+
+def active_prompt() -> str:
+    return OPEN_PROMPT if OPEN else PROMPT
+
+
+def predicate_name(name: str) -> str:
+    """A predicate name the way Recall's open mode normalizes it."""
+    return "_".join(re.findall(r"[a-z0-9]+", name.lower()))
+
+
 def registry() -> dict[str, Any]:
     return json.loads(REGISTRY_PATH.read_text())
 
 
 def predicate_table(reg: dict[str, Any]) -> str:
+    if not reg:
+        return "(none yet)"
     return "\n".join(f"- {name} ({spec['cardinality']}-valued): {spec['description']}" for name, spec in reg.items())
 
 
 def cache_key(model: str) -> str:
     h = hashlib.sha256()
-    for part in (model, PROMPT, REGISTRY_PATH.read_text()):
+    for part in (model, active_prompt(), "open" if OPEN else REGISTRY_PATH.read_text()):
         h.update(part.encode())
         h.update(b"\0")
     return h.hexdigest()[:12]
@@ -83,12 +120,19 @@ def parse(raw: str) -> list[dict[str, Any]]:
     for s in data.get("statements") or []:
         if isinstance(s, dict) and all(isinstance(s.get(k), str) and s[k].strip()
                                        for k in ("subject", "predicate", "value", "evidence")):
-            out.append({k: s[k].strip() for k in ("subject", "predicate", "value", "evidence")})
+            st = {k: s[k].strip() for k in ("subject", "predicate", "value", "evidence")}
+            if OPEN:
+                st["predicate"] = predicate_name(st["predicate"])
+                card = str(s.get("cardinality") or "").strip().lower()
+                st["cardinality"] = card if card in ("single", "multi") else ""
+                st["description"] = str(s.get("description") or "").strip()
+            if st["predicate"]:
+                out.append(st)
     return out
 
 
 def extract(model: str, date: str, session_text: str, subjects: list[str], reg: dict[str, Any]) -> list[dict[str, Any]]:
-    prompt = PROMPT.format(date=date, predicates=predicate_table(reg),
+    prompt = active_prompt().format(date=date, predicates=predicate_table(reg),
                            subjects=", ".join(f'"{s}"' for s in subjects[-300:]) or "(none yet)",
                            session=session_text)
     raw = lme.complete(model, prompt, 2000, json_mode=True)
@@ -103,7 +147,7 @@ class Cache:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         meta = self.path.parent / "meta.json"
         if not meta.exists():
-            meta.write_text(json.dumps({"model": model, "prompt": PROMPT, "registry": registry()}, indent=2))
+            meta.write_text(json.dumps({"model": model, "prompt": active_prompt(), "registry": {} if OPEN else registry()}, indent=2))
         self.rows = {r["session_id"]: r["statements"] for r in lme.read_jsonl(self.path)}
 
     def get(self, sid: str) -> list[dict[str, Any]] | None:

@@ -137,7 +137,9 @@ def ingest_typed(client: Any, entry: dict[str, Any], rounds, extractor: str, sta
     round with no statements is still kept as its episode."""
     import extract
 
-    reg = extract.registry()
+    # The open vocabulary starts empty and grows with what the extractor
+    # coins, as an open Recall store's does; the fixed one is registry.json.
+    reg = {} if extract.OPEN else extract.registry()
     cache = extract.Cache(extractor, entry["question_id"])
     subjects: list[str] = []
     log = []
@@ -161,7 +163,14 @@ def ingest_typed(client: Any, entry: dict[str, Any], rounds, extractor: str, sta
                 valid.append({**st, "evidence": span})
             stats["proposed"] += len(statements)
             stats["bad_evidence"] += len(statements) - len(valid)
-            stats["unregistered"] += sum(st["predicate"] not in reg for st in valid)
+            if extract.OPEN:
+                for st in valid:
+                    if st["predicate"] not in reg:
+                        reg[st["predicate"]] = {"cardinality": st.get("cardinality") or "single",
+                                                "description": st.get("description") or ""}
+                        stats["coined"] = stats.get("coined", 0) + 1
+            else:
+                stats["unregistered"] += sum(st["predicate"] not in reg for st in valid)
             for st in valid:
                 if st["subject"] not in subjects:
                     subjects.append(st["subject"])
@@ -249,14 +258,22 @@ def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
     reg: dict[str, Any] = {}
     if method in ("recall-typed", "recall-linked"):
         import extract
-        env["POLIGN_PREDICATES"] = str(extract.REGISTRY_PATH)
-        reg = extract.registry()
+        if extract.OPEN:
+            # An empty registry with -open: every predicate is defined by
+            # the store as the extractor coins it.
+            empty = lme.HERE / "out" / "empty-registry.json"
+            empty.write_text("{}\n")
+            env["POLIGN_PREDICATES"] = str(empty)
+            env["RECALL_OPEN"] = "1"
+        else:
+            env["POLIGN_PREDICATES"] = str(extract.REGISTRY_PATH)
+            reg = extract.registry()
     # LME_STORES keeps each question's ingested store, so a run that only
     # changes the read side (engine search, reader prompt) reuses it instead
     # of writing the whole haystack again.
     stores = os.environ.get("LME_STORES")
     if stores:
-        store = Path(stores) / f"{method}-{extractor}{'-events' if os.environ.get('LME_EXTRACT_EVENTS') else ''}{'-embed' if EMBED_URL else ''}" / entry["question_id"]
+        store = Path(stores) / f"{method}-{extractor}{'-events' if os.environ.get('LME_EXTRACT_EVENTS') else ''}{'-embed' if EMBED_URL else ''}{'-open' if os.environ.get('LME_OPEN_VOCAB') else ''}" / entry["question_id"]
         if store.exists() and not (store / "ingest.jsonl").exists():
             shutil.rmtree(store, ignore_errors=True)  # left by an ingest that failed
         store.mkdir(parents=True, exist_ok=True)
@@ -280,6 +297,11 @@ def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
                 stats["index_wait_s"] = wait_for_text_index(store, log[-1]["event_id"], log[-1]["probe"])
                 if stores:
                     done.write_text("".join(json.dumps(r) + "\n" for r in log))
+
+            if os.environ.get("LME_OPEN_VOCAB") and method in ("recall-typed", "recall-linked"):
+                # What the store defined, so describe() knows which beliefs
+                # are single-valued.
+                reg = {e["predicate"]: e for e in client.predicates()}
 
             t1 = time.monotonic()
             # as_of="question" asks what was known on the question date, so a

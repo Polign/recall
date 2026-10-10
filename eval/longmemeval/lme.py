@@ -237,9 +237,21 @@ def complete(model: str, prompt: str, max_tokens: int, json_mode: bool = False) 
                 if "anthropic" not in _clients:
                     import anthropic
                     _clients["anthropic"] = anthropic.Anthropic()
-                r = _clients["anthropic"].messages.create(
-                    model=name, max_tokens=max_tokens, temperature=0,
-                    messages=[{"role": "user", "content": prompt}])
+                params: dict[str, Any] = {"model": name, "max_tokens": max_tokens,
+                                          "messages": [{"role": "user", "content": prompt}]}
+                if name.startswith("claude-sonnet-5-5"):
+                    # Sonnet 5.5 refuses sampling parameters and thinks by
+                    # default, which would spend the answer budget; this
+                    # turns thinking off, like the other readers.
+                    params["thinking"] = {"type": "between_tools"}
+                elif not name.startswith(("claude-opus-5", "claude-sonnet-5", "claude-fable", "claude-opus-4-7", "claude-opus-4-8")):
+                    params["temperature"] = 0
+                r = _clients["anthropic"].messages.create(**params)
+                with _usage_lock:
+                    u = USAGE[name]
+                    u["calls"] += 1
+                    u["prompt"] += r.usage.input_tokens or 0
+                    u["completion"] += r.usage.output_tokens or 0
                 return "".join(b.text for b in r.content if b.type == "text").strip()
             raise SystemExit(f"unknown provider {provider!r} in {model!r}")
         except SystemExit:
