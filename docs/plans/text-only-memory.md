@@ -1,6 +1,6 @@
 # Text-only memory: predicates become internal
 
-Status: phases 1 and 3 built on branch `at/text-only-memory` (2026-10-09).
+Status: phases 1, 2 and 3 built on branch `at/text-only-memory` (2026-10-09).
 
 ## Goal
 
@@ -106,6 +106,23 @@ a new predicate.
 Done when: a labeled synonym set (built from the cached LongMemEval
 extraction outputs, no new model calls) shows the chosen threshold's
 over-merge and under-merge rates, and the over-merge rate is under 1%.
+
+Built: matching in the process with the client's embedder and a cache,
+instead of a vector search over registry events (those embed JSON-heavy
+text, and search scores differ by backend). A match records a separate
+merge record (`alias_of`), so concurrent merges cannot overwrite each other;
+events written through a merged name keep it, which is also how decision 5
+(keep the raw relation) is met without an event format change.
+`Client.Merge` and `Client.Split` merge and undo by hand.
+`Config.MatchThreshold` defaults to 0.9.
+
+Measured (`eval/predicate-matching`, 25 same and 25 different pairs, built
+by hand instead of from LongMemEval outputs): at 0.9, nomic-embed-text
+merges 24% of synonyms with no wrong merges; at 0.85 it merges 40% but
+also `works_at` with `worked_at`. The lexical embedder merges nothing but
+reordered words. So name matching is a safety net and the extraction
+model's reuse of the shown vocabulary does most of the work. Open: measure
+how often the model reuses names, from phase 3 output.
 
 ### 3. Extraction coins predicates
 

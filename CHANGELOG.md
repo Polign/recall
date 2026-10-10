@@ -12,6 +12,13 @@
   proposal coins, and proposals may carry `cardinality` and `description`.
   When two clients define one name at once, the first recorded definition
   wins.
+- An open client matches a new predicate name to an existing one before
+  defining it, by embedding similarity at `Config.MatchThreshold` (default
+  0.9; negative turns it off), only within the same stored type and, when
+  the write names one, cardinality. A match is recorded as a merge, events
+  keep the name they were written under, and `Client.Split` undoes it.
+  `Client.Merge` merges two predicates by hand. `eval/predicate-matching`
+  measures the threshold.
 - `Client.Redefine` records a retroactive definition that applies to a
   predicate's whole history, so a wrong cardinality is corrected for present
   and as-of answers alike.
@@ -25,7 +32,8 @@
 - `Client.ForgetText` withdraws the beliefs a request in words names, chosen
   by a `Selector`; `model.Extractor` is one.
 - Fold version `recall-fold-v3` for audit bundles whose registry log uses a
-  retroactive definition or a second automatic definition of one name. Other
+  retroactive definition, a merge, or a second automatic definition of one
+  name. Other
   bundles are still written as `recall-fold-v2`, with unchanged checksums.
 
 ## [0.13.0] - 2026-10-09

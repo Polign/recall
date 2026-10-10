@@ -598,6 +598,18 @@ from the log at read time and nothing was deleted. Audit bundles that rely on
 a correction, or on two clients defining one name, are written as
 `recall-fold-v3`; others stay `recall-fold-v2`.
 
+Before defining a name, an open client compares it with the predicates in
+use, by the cosine of the embedder's vectors for the two names (and their
+descriptions when both have one). At or above `MatchThreshold` (default 0.9;
+negative turns it off), with the same stored type and, when the write names
+one, the same cardinality, the new name becomes an alias of the existing
+predicate and the write folds with it. The event keeps the name it was
+written under, so `client.Split(ctx, name)` undoes the match, and
+`client.Merge(ctx, name, into)` merges two predicates by hand. With the
+built-in lexical embedder only reordered words match ("editor favorite" and
+"favorite editor"); a model embedder catches more. See
+`eval/predicate-matching` for measured rates.
+
 A client without `Open` treats its registry as a closed set: it reads
 predicates other clients defined, but refuses to write them or to define new
 ones.
