@@ -275,6 +275,17 @@ func OpenVocabulary(ctx context.Context) bool {
 	return engine.OpenVocabulary(ctx)
 }
 
+// Memory is one belief told as a sentence, as Client.Ask returns it.
+type Memory = engine.Memory
+
+// Earlier is a value a Memory replaced.
+type Earlier = engine.Earlier
+
+// Sentence tells one statement in words, the way Client.Ask does.
+func Sentence(subject, predicate string, value any) string {
+	return engine.Sentence(subject, predicate, value)
+}
+
 // Selector picks which remembered statements a request in words is about,
 // for Client.ForgetText.
 type Selector = engine.Selector
