@@ -440,7 +440,7 @@ func (s *Store) Recall(q Query) ([]Belief, error) {
 	case q.RefersTo != "":
 		beliefs, err = s.recallReferrers(sc, q, limit, asOf)
 	case q.Text == "" && (q.Subject == "" || q.Predicate == ""):
-		beliefs, err = s.discover(sc, s.filters(sc, q), func(b Belief) bool { return matchesBelief(b, q) }, q.Predicate == RegistryPredicate, limit, asOf)
+		beliefs, err = s.discover(sc, s.filters(sc, q), func(b Belief) bool { return matchesBelief(b, q) }, q.Predicate == RegistryPredicate || q.Predicate == ExtractionPredicate, limit, asOf)
 	default:
 		beliefs, err = s.recallRanked(sc, q, limit, asOf)
 	}
@@ -765,7 +765,7 @@ func (s *Store) candidatePairs(sc *schema, q Query, limit int, asOf time.Time) (
 		rest = append(rest, found...)
 	}
 	events := append(first, rest...)
-	return rankCandidates(sc.candidates(events, q.Predicate == RegistryPredicate)), nil
+	return rankCandidates(sc.candidates(events, q.Predicate == RegistryPredicate || q.Predicate == ExtractionPredicate)), nil
 }
 
 // candidates prepares discovered events for grouping into pairs: each takes
@@ -774,7 +774,7 @@ func (s *Store) candidatePairs(sc *schema, q Query, limit int, asOf time.Time) (
 func (sc *schema) candidates(events []Event, registry bool) []Event {
 	out := make([]Event, 0, len(events))
 	for _, e := range events {
-		if !registry && isRegistryPair(pair{normalizeSubject(e.Subject), e.Predicate}) {
+		if !registry && isReservedPair(pair{normalizeSubject(e.Subject), e.Predicate}) {
 			continue
 		}
 		e.Predicate = sc.canonical(strings.TrimSpace(e.Predicate))

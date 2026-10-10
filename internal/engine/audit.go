@@ -141,7 +141,7 @@ func (s *Store) ExportAudit(q AuditRequest) (AuditBundle, error) {
 	}
 	b.Events = make([]Event, 0, len(events))
 	for _, e := range events {
-		if !isRegistryPair(pair{e.Subject, e.Predicate}) {
+		if !isReservedPair(pair{e.Subject, e.Predicate}) {
 			b.Events = append(b.Events, e)
 		}
 	}

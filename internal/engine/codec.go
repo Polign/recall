@@ -61,6 +61,11 @@ func eventID(subject, predicate string, value any, retraction bool, observedAt t
 // Text is the natural-language rendering an event is embedded from, so that
 // semantic recall searches the same statements exact recall filters.
 func (e Event) Text() string {
+	// An extraction record repeats its episode's words; given them, it would
+	// crowd the episode and its statements out of search results.
+	if e.Subject == ExtractionSubject {
+		return ExtractionSubject
+	}
 	if e.Retraction && e.Value == nil {
 		return e.Subject + " no longer has any " + strings.ReplaceAll(e.Predicate, "_", " ")
 	}

@@ -519,6 +519,13 @@ func isRegistryPair(p pair) bool {
 	return p.predicate == RegistryPredicate && p.subject == RegistrySubject
 }
 
+// isReservedPair reports a pair Recall keeps for itself: the registry's
+// history and the record of what each extraction proposed. Answers leave
+// them out unless a query names their predicate.
+func isReservedPair(p pair) bool {
+	return isRegistryPair(p) || p.predicate == ExtractionPredicate && p.subject == ExtractionSubject
+}
+
 // lenientValue normalizes a value named in a withdrawal. A value that no
 // longer passes the predicate's rules, such as an enum value since removed,
 // can still be held and must still be withdrawable.

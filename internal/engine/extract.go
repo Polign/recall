@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strconv"
@@ -39,6 +40,19 @@ type ExtractionResult struct {
 	// returns the existing note.
 	Episode *RememberResult `json:"episode,omitempty"`
 }
+
+// The proposals each model extraction made are recorded beside the episode
+// they came from, as an event about ExtractionSubject whose EvidenceID is the
+// episode. Remembering the same text again replays them instead of asking the
+// model again, so a write retried after a crash files the text exactly as the
+// first attempt did, and restating something files it the way it was filed
+// before. Replayed proposals still go through the fold, so restating "I
+// prefer vim" after a switch to zed makes vim current again. Answers leave
+// these records out.
+const (
+	ExtractionSubject   = "recall:extraction"
+	ExtractionPredicate = "extraction"
+)
 
 // DefaultSubject is who a note is about when the text yielded no proposal to
 // take a subject from.
@@ -96,9 +110,27 @@ func (c *Client) RememberTextAt(ctx context.Context, text string, extractor Extr
 		}
 		vocab = v
 	}
-	proposals, err := extractor.Extract(extractCtx, text, vocab)
+	// Statements the caller proposed are its own to repeat; only a model's
+	// extraction is recorded and replayed.
+	_, callerProposed := extractor.(ProposedStatements)
+	s, err := c.forContext(ctx)
 	if err != nil {
 		return out, err
+	}
+	var proposals []Proposal
+	replayed := false
+	if !callerProposed {
+		if proposals, replayed, err = s.recordedExtraction(text); err != nil {
+			return out, err
+		}
+	}
+	if !replayed {
+		if c.open {
+			extractCtx = context.WithValue(extractCtx, openVocabularyKey{}, true)
+		}
+		if proposals, err = extractor.Extract(extractCtx, text, vocab); err != nil {
+			return out, err
+		}
 	}
 	if len(proposals) > maxProposals {
 		return out, fmt.Errorf("recall: extractor exceeded %d proposals", maxProposals)
@@ -156,6 +188,11 @@ func (c *Client) RememberTextAt(ctx context.Context, text string, extractor Extr
 		return out, fmt.Errorf("recall: keeping the text failed before any statement was written: %w", err)
 	}
 	out.Episode = &episode
+	if !callerProposed && !replayed {
+		if err := s.recordExtraction(episode.Stored, proposals); err != nil {
+			return out, fmt.Errorf("recall: recording the extraction failed after the text was kept: %w", err)
+		}
+	}
 	if len(proposals) == 0 {
 		noteSubjects = []string{DefaultSubject}
 	}
@@ -266,4 +303,81 @@ func (p ProposedStatements) Extract(ctx context.Context, _ string, _ Registry) (
 		return nil, err
 	}
 	return append([]Proposal(nil), p...), nil
+}
+
+type openVocabularyKey struct{}
+
+// OpenVocabulary reports whether the client asking for an extraction accepts
+// predicates the extractor coins. A closed client files only the predicates
+// it offered.
+func OpenVocabulary(ctx context.Context) bool {
+	open, _ := ctx.Value(openVocabularyKey{}).(bool)
+	return open
+}
+
+// recordedExtraction returns the proposals recorded for the episode that
+// holds text, when one does. A recording whose evidence no longer quotes the
+// text exactly, which happens when the text differs only in case, is not
+// replayed.
+func (s *Store) recordedExtraction(text string) ([]Proposal, bool, error) {
+	sc, err := s.view()
+	if err != nil {
+		return nil, false, err
+	}
+	events, err := s.History(DefaultSubject, NotePredicate)
+	if err != nil {
+		return nil, false, err
+	}
+	episode := ""
+	for _, b := range sc.fold(NotePredicate, events, s.now()) {
+		if b.Value == text {
+			episode = b.EventID
+			break
+		}
+	}
+	if episode == "" {
+		return nil, false, nil
+	}
+	rows, _, err := s.db.List(s.collection, map[string]any{"subject": ExtractionSubject, "predicate": ExtractionPredicate, "evidence_id": episode}, 1)
+	if err != nil || len(rows) == 0 {
+		return nil, false, err
+	}
+	e, err := s.decodeEvent(rows[0].ID, rows[0].Metadata)
+	if err != nil {
+		return nil, false, err
+	}
+	raw, _ := e.Value.(string)
+	var proposals []Proposal
+	if err := json.Unmarshal([]byte(raw), &proposals); err != nil {
+		return nil, false, fmt.Errorf("%w: extraction record %q is malformed", ErrInvalidEvent, e.ID)
+	}
+	for _, p := range proposals {
+		if !strings.Contains(text, p.Evidence) {
+			return nil, false, nil
+		}
+	}
+	return proposals, true, nil
+}
+
+// recordExtraction keeps what a model proposed for an episode.
+func (s *Store) recordExtraction(episode Belief, proposals []Proposal) error {
+	if proposals == nil {
+		proposals = []Proposal{}
+	}
+	value, err := json.Marshal(proposals)
+	if err != nil {
+		return err
+	}
+	at := episode.ObservedAt
+	return s.append(Event{
+		ID:         eventID(ExtractionSubject, ExtractionPredicate, string(value), false, at),
+		Kind:       "fact",
+		Subject:    ExtractionSubject,
+		Predicate:  ExtractionPredicate,
+		Value:      string(value),
+		Confidence: 1,
+		Source:     "tool_result",
+		ObservedAt: at,
+		EvidenceID: episode.EventID,
+	})
 }
