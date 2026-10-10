@@ -44,6 +44,12 @@
   out texts that statements were filed from. `Client.Explain` and
   `recall explain <question>` (and an `explain` tool on the typed surface) say
   why a belief is held.
+- A `personal` starter registry of generic relations (`likes`, `did`, `owns`,
+  `relationship`, `plans`, `status`, `amount`, ...). An open server with no
+  predicates file starts from the coding and personal starters, and the
+  open-vocabulary extraction prompt asks the model to reuse them and to coin
+  only short relations with no value in the name.
+- `recall skill` explains both tool surfaces and open servers.
 - Fold version `recall-fold-v3` for audit bundles whose registry log uses a
   retroactive definition, a merge, or a second automatic definition of one
   name. Other

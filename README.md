@@ -104,8 +104,8 @@ A memory has a **subject**, a **predicate**, and a **typed value**:
 
 The registry defines which predicates an application accepts, their value types,
 and whether they hold one value or several. Recall includes
-[starter registries](docs/reference.md#starter-registries) for coding, support,
-sales, and voice agents. You can
+[starter registries](docs/reference.md#starter-registries) for coding, personal
+assistant, support, sales, and voice agents. You can
 [extend the registry](docs/reference.md#the-registry) for your application, and
 [change it later](docs/reference.md#changing-the-registry) without changing what
 the agent remembered before. A value can be text, a number, a boolean, an enum,
@@ -124,6 +124,39 @@ Recall validates those proposals against the registry before writing them. A
 statement that fits no predicate is kept as a [note](docs/reference.md#notes)
 instead of being dropped. Once you add a predicate for that kind of fact,
 `Promote` files each note under it and keeps the note in history.
+
+### Without a registry
+
+You don't have to define predicates at all. With an
+[open vocabulary](docs/reference.md#open-vocabulary), a write may name any
+predicate and its first use defines it, starting from the coding and personal
+starters. `recall explain "<question>"` shows, for each answer, the text it
+came from, the predicate it was filed under, the rules that decide it, and its
+history.
+
+With a model configured, the MCP server goes one step further and takes plain
+text, with no predicates in any tool or answer:
+
+```sh
+recall setup -extract-model anthropic:claude-haiku-4-5-20251001
+```
+
+```
+remember("I switched from helix to zed last week")
+recall("which editor do I use?")  ->  "user prefers editor: zed" (before: helix)
+forget("my editor")
+```
+
+The model decides how each statement is filed: which predicate, and whether a
+new value replaces the old one or adds to it. Once filed, replacement follows
+the predicate's rule as before, every filing is recorded, and a wrong one is
+corrected with one event (`Redefine`, `Merge`, `Split`) that every answer
+follows. The model is called on every `remember` and `forget`, and the text is
+sent to its provider. See [text-only tools](docs/mcp.md#text-only-tools).
+
+On the LongMemEval user-facts subset (267 questions, gpt-4o-mini extraction,
+gpt-4o reading and judging), an open vocabulary scored 79.4% against 81.3% for
+a hand-tuned registry, a difference within noise at that size (p = 0.36).
 
 ## Resuming an agent
 

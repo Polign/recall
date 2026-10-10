@@ -498,6 +498,7 @@ you can add to or trim.
 | Name | Written for | Examples |
 | --- | --- | --- |
 | `coding` | Coding agents. This is `DefaultRegistry()`. | `prefers_editor`, `uses_technology`, `project_constraint` |
+| `personal` | Assistants that remember a person. Generic relations, most of them multi-valued, so one predicate holds many facts; it seeds open vocabularies. | `likes`, `did`, `owns`, `relationship`, `status` |
 | `support` | Support agents, one subject per customer | `plan`, `open_issue`, `sentiment`, `escalated_to` |
 | `sales` | Sales and CRM agents, with people and accounts as subjects | `works_at`, `deal_stage`, `close_date`, `objection` |
 | `voice` | Voice agents, such as LiveKit or Vapi | `callback_number`, `reason_for_calling`, `consent_to_record` |
