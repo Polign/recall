@@ -70,3 +70,36 @@ func TestLocalKeyShape(t *testing.T) {
 		}
 	}
 }
+
+func TestDescribeSurface(t *testing.T) {
+	for cfg, want := range map[recallsetup.Config]string{
+		{ExtractModel: "ollama:qwen3:8b"}:   "text-only tools",
+		{Predicates: "/p.json", Open: true}: "predicates from /p.json",
+		{Open: true}:                        "defined on first use",
+		{}:                                  "starter predicates",
+	} {
+		if got := describeSurface(cfg); !strings.Contains(got, want) {
+			t.Errorf("%+v: %q, want it to mention %q", cfg, got, want)
+		}
+	}
+}
+
+func TestModelHintListsLocalOllamaModels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/tags" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `{"models":[{"name":"qwen3:8b","capabilities":["completion","tools"]},{"name":"nomic-embed-text","capabilities":["embedding"]}]}`)
+	}))
+	defer srv.Close()
+	t.Setenv("OLLAMA_HOST", strings.TrimPrefix(srv.URL, "http://"))
+	hint := modelHint()
+	if !strings.Contains(hint, "Local Ollama models found: qwen3:8b ") || strings.Contains(hint, "nomic-embed-text") {
+		t.Fatalf("hint: %s", hint)
+	}
+	t.Setenv("OLLAMA_HOST", "127.0.0.1:1")
+	if strings.Contains(modelHint(), "Local Ollama") {
+		t.Fatal("hint names models with no Ollama answering")
+	}
+}

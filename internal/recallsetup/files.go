@@ -18,6 +18,12 @@ type Config struct {
 	Key        string `json:"api_key,omitempty"`
 	Collection string `json:"collection"`
 	Predicates string `json:"predicates,omitempty"`
+	// ExtractModel is the provider:model that works out the statements in
+	// remembered text. With one, Recall serves the text-only tools.
+	ExtractModel string `json:"extract_model,omitempty"`
+	// Open lets writes define predicates, so no predicates file is needed.
+	// Setups made before it existed keep a closed vocabulary.
+	Open bool `json:"open,omitempty"`
 }
 
 type Runtime struct {

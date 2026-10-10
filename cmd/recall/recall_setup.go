@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -54,6 +55,7 @@ func cmdRecall(args []string, out io.Writer) error {
 	noPlugin := fs.Bool("no-plugin", false, "configure and check Recall without installing the Claude plugin")
 	claude := fs.String("claude", "", "Claude executable (otherwise auto-detected)")
 	server := fs.String("server", "", "Polign server executable (otherwise alongside this CLI)")
+	extractModel := fs.String("extract-model", "", "model that works out what remembered text says, as provider:model (anthropic:claude-haiku-4-5-20251001, openai:<model>, ollama:<model>); with one, Recall offers text-only tools. none clears a saved model")
 	if err := fs.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -72,7 +74,7 @@ func cmdRecall(args []string, out io.Writer) error {
 	}
 	*dir = absolute
 	if args[0] != "setup" {
-		if *endpoint != "" || *local || *collection != "" || *noPlugin || *claude != "" || *server != "" {
+		if *endpoint != "" || *local || *collection != "" || *noPlugin || *claude != "" || *server != "" || *extractModel != "" {
 			return fmt.Errorf("connection options belong to recall setup")
 		}
 		var cfg recallsetup.Config
@@ -82,6 +84,7 @@ func cmdRecall(args []string, out io.Writer) error {
 		switch args[0] {
 		case "doctor":
 			fmt.Fprintf(out, "Configured CLI: %s\nDoctor version: %s\nConfiguration: %s\nCollection: %s\n", cfg.Executable, version, *dir, cfg.Collection)
+			fmt.Fprintln(out, describeSurface(cfg))
 			if path, err := exec.LookPath("recall"); err == nil && path != cfg.Executable {
 				fmt.Fprintf(out, "PATH selects %s; Recall uses the saved executable above.\n", path)
 			}
@@ -106,13 +109,16 @@ func cmdRecall(args []string, out io.Writer) error {
 			if err != nil {
 				return err
 			}
-			mem, err := newMemoryRuntime(c, cfg.Collection, cfg.Predicates, "", false)
+			spec := envOr("POLIGN_EXTRACT_MODEL", cfg.ExtractModel)
+			text := spec != ""
+			mem, err := newMemoryRuntime(c, cfg.Collection, cfg.Predicates, "", cfg.Predicates == "" && (cfg.Open || text))
 			if err != nil {
 				return err
 			}
-			if mem.extractor, err = newExtractor(os.Getenv("POLIGN_EXTRACT_MODEL")); err != nil {
-				return fmt.Errorf("POLIGN_EXTRACT_MODEL: %w", err)
+			if mem.extractor, err = newExtractor(spec); err != nil {
+				return fmt.Errorf("extraction model %q: %w", spec, err)
 			}
+			mem.text = text
 			s := &mcpServer{api: c, collection: cfg.Collection, memory: mem, write: true, enc: json.NewEncoder(os.Stdout)}
 			return s.serve(context.Background(), os.Stdin)
 		default:
@@ -160,6 +166,17 @@ func cmdRecall(args []string, out io.Writer) error {
 		cfg.Key = os.Getenv("POLIGN_API_KEY")
 		cfg.Collection = envOr("POLIGN_COLLECTION", "recall_lexical_v1")
 		cfg.Predicates = os.Getenv("POLIGN_PREDICATES")
+		cfg.Open = true
+	}
+	switch *extractModel {
+	case "":
+	case "none":
+		cfg.ExtractModel = ""
+	default:
+		if _, err := newExtractor(*extractModel); err != nil {
+			return fmt.Errorf("-extract-model: %w", err)
+		}
+		cfg.ExtractModel = *extractModel
 	}
 	if *endpoint != "" {
 		cfg.URL = *endpoint
@@ -262,6 +279,10 @@ func cmdRecall(args []string, out io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(out, "Recall connected: %s\nCollection: %s\nConfiguration: %s\n", c.base, cfg.Collection, *dir)
+	fmt.Fprintln(out, describeSurface(cfg))
+	if cfg.ExtractModel == "" {
+		fmt.Fprintln(out, modelHint())
+	}
 	if cfg.URL == "" {
 		fmt.Fprintf(out, "Local data: %s\nThe local server starts automatically when Recall connects.\n", filepath.Join(*dir, "data"))
 	}
@@ -629,4 +650,65 @@ func localServerPath(exe string) string {
 		}
 	}
 	return beside // checkRecallBinary reports it missing, naming where it looked
+}
+
+// describeSurface says which tools a saved setup serves, and why.
+func describeSurface(cfg recallsetup.Config) string {
+	switch {
+	case cfg.ExtractModel != "":
+		return "Extraction model: " + cfg.ExtractModel + " (text-only tools: remember, recall, forget)"
+	case cfg.Predicates != "":
+		return "Extraction model: none (typed tools, predicates from " + cfg.Predicates + ")"
+	case cfg.Open:
+		return "Extraction model: none (typed tools; the agent names predicates and new ones are defined on first use)"
+	}
+	return "Extraction model: none (typed tools with the starter predicates)"
+}
+
+// modelHint tells a setup without a model what one would add, naming the
+// local Ollama models it can see. Setup never picks one itself: a hosted
+// model receives every remembered passage and bills each one, and a local
+// one can add seconds to every write, so the choice is the user's.
+func modelHint() string {
+	hint := "To let Recall work out facts from text itself, and use text-only tools with no predicates in them, run setup again with -extract-model, for example -extract-model anthropic:claude-haiku-4-5-20251001 (reads ANTHROPIC_API_KEY where Claude runs)."
+	if models := ollamaModels(); len(models) > 0 {
+		hint += " Local Ollama models found: " + strings.Join(models, ", ") + " (use -extract-model ollama:<name>)."
+	}
+	return hint
+}
+
+// ollamaModels lists the local Ollama models that generate text, if Ollama
+// answers within a moment.
+func ollamaModels() []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	host := envOr("OLLAMA_HOST", "localhost:11434")
+	if !strings.Contains(host, "://") {
+		host = "http://" + host
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(host, "/")+"/api/tags", nil)
+	if err != nil || !strings.HasPrefix(req.URL.Scheme, "http") {
+		return nil
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	var tags struct {
+		Models []struct {
+			Name         string   `json:"name"`
+			Capabilities []string `json:"capabilities"`
+		} `json:"models"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&tags) != nil {
+		return nil
+	}
+	var out []string
+	for _, m := range tags.Models {
+		if slices.Contains(m.Capabilities, "completion") {
+			out = append(out, m.Name)
+		}
+	}
+	return out
 }
