@@ -262,3 +262,61 @@ type failing struct{}
 func (failing) complete(context.Context, string, string, map[string]any) (string, error) {
 	panic("no request expected")
 }
+
+// openCtx is the context an open client hands its extractor.
+func openCtx() context.Context {
+	var got context.Context
+	c, err := recall.NewClient(recall.Config{Backend: nopBackend{}, Collection: "m", Embedder: recall.LexicalEmbedder{}, Open: true})
+	if err != nil {
+		panic(err)
+	}
+	_, _ = c.RememberText(context.Background(), "x", ctxGrabber(func(ctx context.Context) { got = ctx }))
+	return got
+}
+
+func TestOpenVocabularyExtraction(t *testing.T) {
+	const text = "I've been coding for 12 years. My editor is neovim."
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []struct {
+				Role, Content string
+			} `json:"messages"`
+			ResponseFormat struct {
+				JSONSchema struct {
+					Schema map[string]any `json:"schema"`
+				} `json:"json_schema"`
+			} `json:"response_format"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		system := body.Messages[0].Content
+		if !strings.Contains(system, "Predicates already in use:\n- location") || !strings.Contains(system, "coin a new one") {
+			t.Errorf("system prompt:\n%s", system)
+		}
+		items := body.ResponseFormat.JSONSchema.Schema["properties"].(map[string]any)["statements"].(map[string]any)["items"].(map[string]any)
+		if _, fixed := items["properties"].(map[string]any)["predicate"].(map[string]any)["enum"]; fixed {
+			t.Error("an open schema restricts the predicate to a list")
+		}
+		reply := `{"statements":[
+ {"subject":"user","predicate":"years_coding","value":"12","evidence":"coding for 12 years","cardinality":"single","description":"How many years the subject has been programming","value_type":"number"},
+ {"subject":"user","predicate":"prefers_editor","value":"neovim","evidence":"My editor is neovim.","cardinality":"","description":"","value_type":""}]}`
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": reply}, "finish_reason": "stop"}}})
+	}))
+	defer srv.Close()
+	e, err := NewExtractor(Config{Provider: "openai", Model: "m1", BaseURL: srv.URL + "/v1", APIKey: "k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := openCtx()
+	if !recall.OpenVocabulary(ctx) {
+		t.Fatal("an open client's extraction context does not say so")
+	}
+	got, err := e.Extract(ctx, text, registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Value != float64(12) || got[0].Cardinality != "single" || got[0].Description == "" || got[1].Value != "neovim" {
+		t.Fatalf("proposals: %+v", got)
+	}
+}

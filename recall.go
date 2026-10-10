@@ -268,6 +268,21 @@ func ObservedAt(ctx context.Context) time.Time {
 	return engine.ObservedAt(ctx)
 }
 
+// OpenVocabulary reports whether the client asking for an extraction has an
+// open vocabulary (Config.Open), so an extractor may coin predicates instead
+// of choosing only from the registry it is given.
+func OpenVocabulary(ctx context.Context) bool {
+	return engine.OpenVocabulary(ctx)
+}
+
+// ExtractionSubject and ExtractionPredicate name the reserved events that
+// record what each model extraction proposed, so that remembering the same
+// text again replays them. Answers leave them out.
+const (
+	ExtractionSubject   = engine.ExtractionSubject
+	ExtractionPredicate = engine.ExtractionPredicate
+)
+
 // DefaultSubject is who a note is about when the text yielded no proposal to
 // take a subject from.
 const DefaultSubject = engine.DefaultSubject
