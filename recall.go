@@ -286,6 +286,12 @@ func Sentence(subject, predicate string, value any) string {
 	return engine.Sentence(subject, predicate, value)
 }
 
+// Explanation says why one belief is held, as Client.Explain returns it.
+type Explanation = engine.Explanation
+
+// Rule is one recorded predicate definition in an Explanation.
+type Rule = engine.Rule
+
 // Selector picks which remembered statements a request in words is about,
 // for Client.ForgetText.
 type Selector = engine.Selector
