@@ -275,6 +275,13 @@ func OpenVocabulary(ctx context.Context) bool {
 	return engine.OpenVocabulary(ctx)
 }
 
+// Selector picks which remembered statements a request in words is about,
+// for Client.ForgetText.
+type Selector = engine.Selector
+
+// ForgetTextResult reports what Client.ForgetText withdrew.
+type ForgetTextResult = engine.ForgetTextResult
+
 // ExtractionSubject and ExtractionPredicate name the reserved events that
 // record what each model extraction proposed, so that remembering the same
 // text again replays them. Answers leave them out.

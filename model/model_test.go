@@ -320,3 +320,27 @@ func TestOpenVocabularyExtraction(t *testing.T) {
 		t.Fatalf("proposals: %+v", got)
 	}
 }
+
+func TestSelect(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []struct{ Role, Content string } `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if !strings.Contains(body.Messages[1].Content, "Request: forget my editor") || !strings.Contains(body.Messages[1].Content, "0. user prefers editor zed") {
+			t.Errorf("user message:\n%s", body.Messages[1].Content)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": `{"forget":[0]}`}, "finish_reason": "stop"}}})
+	}))
+	defer srv.Close()
+	e, err := NewExtractor(Config{Provider: "openai", Model: "m1", BaseURL: srv.URL + "/v1", APIKey: "k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.Select(context.Background(), "forget my editor", []recall.Belief{{Subject: "user", Predicate: "prefers_editor", Value: "zed"}, {Subject: "user", Predicate: "lives_in", Value: "Lisbon"}})
+	if err != nil || len(got) != 1 || got[0] != 0 {
+		t.Fatalf("Select = %v, %v", got, err)
+	}
+}
