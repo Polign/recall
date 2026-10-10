@@ -246,7 +246,7 @@ def stop_local_server(store: Path) -> None:
     import subprocess
     # The server was started with the absolute path; a relative LME_STORES
     # would never match it and leave one server running per question.
-    subprocess.run(["pkill", "-f", f"fs:{store.resolve()}/data"], check=False)
+    subprocess.run(["pkill", "-f", f"fs:{os.path.abspath(store)}/data"], check=False)
 
 
 def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
