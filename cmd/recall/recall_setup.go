@@ -106,7 +106,7 @@ func cmdRecall(args []string, out io.Writer) error {
 			if err != nil {
 				return err
 			}
-			mem, err := newMemoryRuntime(c, cfg.Collection, cfg.Predicates, "")
+			mem, err := newMemoryRuntime(c, cfg.Collection, cfg.Predicates, "", false)
 			if err != nil {
 				return err
 			}
@@ -312,7 +312,7 @@ func checkRecall(c *api, cfg recallsetup.Config) error {
 			return fmt.Errorf("database is not ready at %s; check the URL and server: %w", c.base, err)
 		}
 	}
-	mem, err := newMemoryRuntime(c, cfg.Collection, cfg.Predicates, "")
+	mem, err := newMemoryRuntime(c, cfg.Collection, cfg.Predicates, "", false)
 	if err != nil {
 		return err
 	}

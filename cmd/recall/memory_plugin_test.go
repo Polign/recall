@@ -30,7 +30,7 @@ func TestMemoryPluginDefaultsExtractionAndMaterialization(t *testing.T) {
 	connect := func() *mcpServer {
 		t.Helper()
 		api := &api{base: ts.URL}
-		m, err := newMemoryRuntime(api, "recall_lexical_v1", "", "")
+		m, err := newMemoryRuntime(api, "recall_lexical_v1", "", "", false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -94,7 +94,7 @@ func TestMemoryPluginTypedForget(t *testing.T) {
 		t.Fatal(err)
 	}
 	api := &api{base: base}
-	mem, err := newMemoryRuntime(api, "test", p, "")
+	mem, err := newMemoryRuntime(api, "test", p, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}

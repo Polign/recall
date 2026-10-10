@@ -154,7 +154,7 @@ func TestConcurrentMCPMemoryKeepsEmbeddingErrorsPerRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	apiClient := &api{base: ts.URL}
-	memory, err := newMemoryRuntime(apiClient, "memories", predicates, embedder.URL)
+	memory, err := newMemoryRuntime(apiClient, "memories", predicates, embedder.URL, false)
 	if err != nil {
 		t.Fatal(err)
 	}

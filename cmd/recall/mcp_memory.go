@@ -27,6 +27,9 @@ func (s *mcpServer) memoryTools() []mcpTool {
 	if !s.memoryEnabled() {
 		return nil
 	}
+	if s.memory.text {
+		return append(s.textTools(), s.agentTools()...)
+	}
 	subject := map[string]any{
 		"type":        "string",
 		"description": "who or what the statement is about, usually \"user\" or an entity name",
@@ -34,6 +37,9 @@ func (s *mcpServer) memoryTools() []mcpTool {
 	predicate := map[string]any{
 		"type":        "string",
 		"description": "the relation, which must be one from list_predicates; unregistered predicates are refused. When none fits, use note with the statement as the value",
+	}
+	if s.memory.open {
+		predicate["description"] = "the relation in snake_case. Reuse one from list_predicates when it fits; a new name is defined by its first use, single-valued unless cardinality says multi"
 	}
 	tools := []mcpTool{
 		{
@@ -130,6 +136,19 @@ func (s *mcpServer) memoryTools() []mcpTool {
 			}, "subject", "predicate"),
 		},
 	}
+	if s.memory.open {
+		for i := range tools {
+			switch tools[i].Name {
+			case "list_predicates":
+				tools[i].Description = "List the predicates in use, with each one's cardinality (single-valued predicates supersede, multi-valued ones accumulate) and value type. Reuse one when it fits before naming a new one, so one relation is not split across two names."
+			case "remember":
+				tools[i].Description = strings.Replace(tools[i].Description, "Use list_predicates first. Never drop a statement because no predicate fits: in typed mode use predicate note with the statement as the value; in text mode propose the predicate you would want, and the whole text is kept as a note and the proposal reported under unfiled.", "Reuse a predicate from list_predicates when one fits; otherwise name a new one, and give cardinality multi when its values add up rather than replace each other.", 1)
+				props := tools[i].InputSchema["properties"].(map[string]any)
+				props["cardinality"] = map[string]any{"type": "string", "enum": []string{"single", "multi"}, "description": "for a predicate this write defines: single (a new value replaces the old, the default) or multi (values add up). Ignored for a predicate already in use"}
+				props["description"] = map[string]any{"type": "string", "description": "for a predicate this write defines: one line saying what it records"}
+			}
+		}
+	}
 	out := make([]mcpTool, 0, len(tools))
 	for _, tool := range tools {
 		if tool.Name == "remember" {
@@ -170,11 +189,19 @@ func (s *mcpServer) runMemoryTool(ctx context.Context, name string, args json.Ra
 		if !s.write {
 			return "", true, fmt.Errorf("this server is read-only; it was started without -write")
 		}
-	case "list_predicates", "recall", "memory_history":
+	case "recall":
+	case "list_predicates", "memory_history":
+		if s.memory.text {
+			return "", false, nil
+		}
 	default:
 		return "", false, nil
 	}
 	m := s.memory.forRequest(ctx)
+	if m.text {
+		out, err := m.runTextTool(name, args)
+		return out, true, err
+	}
 	var out string
 	var err error
 	switch name {
@@ -224,6 +251,10 @@ func (m *memoryRuntime) toolRemember(args json.RawMessage) (string, error) {
 		Confidence *float64           `json:"confidence"`
 		Source     string             `json:"source"`
 		ObservedAt string             `json:"observed_at"`
+		// Cardinality and Description define a predicate the write names
+		// for the first time, on an open server.
+		Cardinality string `json:"cardinality"`
+		Description string `json:"description"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", err
@@ -269,7 +300,8 @@ func (m *memoryRuntime) toolRemember(args json.RawMessage) (string, error) {
 		return "", fmt.Errorf("statements requires original text")
 	}
 	if m.client != nil {
-		res, err := m.client.Remember(m.ctx, recall.RememberRequest{Subject: a.Subject, Predicate: a.Predicate, Value: a.Value, Kind: a.Kind, Confidence: a.Confidence, Source: a.Source, ObservedAt: observedAt})
+		res, err := m.client.Remember(m.ctx, recall.RememberRequest{Subject: a.Subject, Predicate: a.Predicate, Value: a.Value, Kind: a.Kind, Confidence: a.Confidence, Source: a.Source, ObservedAt: observedAt,
+			Cardinality: recall.Cardinality(a.Cardinality), Description: a.Description})
 		if err != nil {
 			return "", err
 		}
@@ -532,11 +564,15 @@ type memoryRuntime struct {
 	// extractor proposes statements for text remembered without any; nil
 	// unless the server was given a model.
 	extractor recall.Extractor
+	// open lets writes define predicates (recall mcp -open or -text).
+	open bool
+	// text serves the text-only tools (recall mcp -text).
+	text bool
 }
 
 func (m *memoryRuntime) forRequest(ctx context.Context) *memoryRuntime {
 	if m.client != nil {
-		return &memoryRuntime{client: m.client, ctx: ctx, extractor: m.extractor}
+		return &memoryRuntime{client: m.client, ctx: ctx, extractor: m.extractor, open: m.open, text: m.text}
 	}
 	if m.newStore == nil {
 		return m
@@ -545,7 +581,10 @@ func (m *memoryRuntime) forRequest(ctx context.Context) *memoryRuntime {
 }
 
 // newMemoryRuntime wires recall to the database c names.
-func newMemoryRuntime(c *api, collection, predicatesPath, embedURL string) (*memoryRuntime, error) {
+//
+// With open, writes may define predicates and the registry only seeds the
+// vocabulary.
+func newMemoryRuntime(c *api, collection, predicatesPath, embedURL string, open bool) (*memoryRuntime, error) {
 	registry := recall.DefaultRegistry()
 	if predicatesPath != "" {
 		raw, err := readFileTrimmed(predicatesPath)
@@ -569,11 +608,11 @@ func newMemoryRuntime(c *api, collection, predicatesPath, embedURL string) (*mem
 	if err != nil {
 		return nil, err
 	}
-	client, err := recall.NewClient(recall.Config{Backend: backend, Collection: collection, Registry: registry, Embedder: embedder, Materialize: true})
+	client, err := recall.NewClient(recall.Config{Backend: backend, Collection: collection, Registry: registry, Embedder: embedder, Materialize: true, Open: open})
 	if err != nil {
 		return nil, err
 	}
-	return &memoryRuntime{client: client, backend: backend, ctx: context.Background()}, nil
+	return &memoryRuntime{client: client, backend: backend, ctx: context.Background(), open: open}, nil
 }
 
 // newExtractor builds the model extractor named by spec, such as
@@ -595,6 +634,9 @@ func (s *mcpServer) memoryInstructions() string {
 	if !s.memoryEnabled() {
 		return ""
 	}
+	if s.memory.text {
+		return s.textInstructions()
+	}
 	var b strings.Builder
 	b.WriteString("\n\nThis server also remembers things durably, in collection " + s.collection + ".\n")
 	if s.write {
@@ -609,7 +651,11 @@ func (s *mcpServer) memoryInstructions() string {
 	b.WriteString("replaced under replaced; tell the user about a correction when it matters to the answer. The full ")
 	b.WriteString("chain stays readable through memory_history. Nothing is deleted, so recall with as_of answers what ")
 	b.WriteString("was believed earlier.\n")
-	b.WriteString("Predicates are a closed set. These are the ones that exist:\n")
+	if s.memory.open {
+		b.WriteString("These predicates are in use. Reuse one when it fits; otherwise name a new one in snake_case, and it is defined by its first use:\n")
+	} else {
+		b.WriteString("Predicates are a closed set. These are the ones that exist:\n")
+	}
 	b.WriteString(s.memory.registry().PromptTable())
 	b.WriteString("When a statement is worth keeping and no other predicate fits, remember it with predicate " +
 		recall.NotePredicate + " and the statement in the user's words as the value. Never drop it. " +
@@ -628,6 +674,15 @@ func readFileTrimmed(path string) ([]byte, error) {
 }
 
 func (m *memoryRuntime) registry() recall.Registry {
+	if m.client != nil && m.open {
+		ctx := m.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		if vocab, err := m.client.Vocabulary(ctx); err == nil {
+			return vocab
+		}
+	}
 	if m.client != nil {
 		return m.client.Registry()
 	}

@@ -12,7 +12,7 @@ import (
 // typed metadata and lease routes a deployment uses.
 func newAgentMCP(t *testing.T, url string) *mcpServer {
 	t.Helper()
-	mem, err := newMemoryRuntime(&api{base: url}, "memory", "", "")
+	mem, err := newMemoryRuntime(&api{base: url}, "memory", "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}

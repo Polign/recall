@@ -97,6 +97,8 @@ func cmdMCP(c *api, urlGiven bool, args []string) error {
 	predicates := fs.String("predicates", os.Getenv("POLIGN_PREDICATES"), "predicate registry JSON file; omitted uses the 15-predicate starter registry")
 	embedURL := fs.String("embed-url", os.Getenv("POLIGN_EMBED_URL"), "optional embedding service; omitted uses built-in lexical feature hashing (dedicated collection required)")
 	extractModel := fs.String("extract-model", os.Getenv("POLIGN_EXTRACT_MODEL"), "model that works out the statements in text remembered without any, as provider:model: anthropic:claude-opus-5-5, openai:<model>, or ollama:<model> (default $POLIGN_EXTRACT_MODEL; keys from ANTHROPIC_API_KEY or OPENAI_API_KEY)")
+	text := fs.Bool("text", false, "serve text-only tools: remember(text), recall(question), forget(text), with no predicates in them. The server works out what text says with -extract-model; without one, text is kept as written and nothing replaces anything. Implies -open unless -predicates is given")
+	open := fs.Bool("open", false, "let writes define predicates: a predicate nothing has defined is defined by its first use, so no predicates file is needed")
 	agent := fs.Bool("agent", false, "also expose the agent resume tools (agent_resume, update_working_state, record_turn, ...); requires -write")
 	dir := fs.String("config-dir", recallHome(), "configuration written by recall setup, used when no server URL is given (default $POLIGN_RECALL_HOME, then ~/.config/polign/recall)")
 	// polign mcp took -memory-only; recall serves nothing else.
@@ -138,13 +140,14 @@ func cmdMCP(c *api, urlGiven bool, args []string) error {
 		}
 		*collection = "recall_lexical_v1"
 	}
-	mem, err := newMemoryRuntime(c, *collection, *predicates, *embedURL)
+	mem, err := newMemoryRuntime(c, *collection, *predicates, *embedURL, *open || *text && *predicates == "")
 	if err != nil {
 		return fmt.Errorf("mcp: memory: %w", err)
 	}
 	if mem.extractor, err = newExtractor(*extractModel); err != nil {
 		return fmt.Errorf("mcp: -extract-model: %w", err)
 	}
+	mem.text = *text
 	s := &mcpServer{api: c, collection: *collection, write: *write, memory: mem, enc: json.NewEncoder(os.Stdout)}
 	if *agent {
 		if !*write {
