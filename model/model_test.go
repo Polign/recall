@@ -107,6 +107,12 @@ func (g ctxGrabber) Extract(ctx context.Context, _ string, _ recall.Registry) ([
 
 type nopBackend struct{ recall.Backend }
 
+// List answers that nothing is stored, which is all RememberTextAt reads
+// before it asks the extractor.
+func (nopBackend) List(context.Context, string, map[string]any, int) ([]recall.StoredVector, int, error) {
+	return nil, 0, nil
+}
+
 func TestChatCompletions(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer k" {
