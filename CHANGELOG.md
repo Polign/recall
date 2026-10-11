@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+Memory no longer stops at the predicate a fact was filed under. A statement
+can end a belief filed elsewhere, reads show the same value wherever it is
+held, and nothing is withdrawn by guesswork: every correction is either a
+registry rule or an explicit statement, and what cannot be withdrawn is
+reported rather than dropped.
+
 ### Added
 
 - Exclusions: a registry entry lists the predicates it contradicts value
@@ -12,48 +18,50 @@
   read, so it covers statements written before the pairing was declared, and
   no model is asked. `list_predicates` shows what each predicate excludes.
 - `historical` on a registry entry marks a predicate that records what
-  happened (`did` in the `personal` starter). Its values are never withdrawn
-  by a correction, only by forgetting. The `personal` starter pairs `likes`
-  with `dislikes` and marks `did` historical.
-- Audit bundles that rely on exclusions are written as `recall-fold-v4`;
-  others keep their older version.
-- Corrections across predicates. `RememberRequest.Replaces` (and
-  `Proposal.Replaces`) name beliefs of the same subject, under any
-  predicate, that a statement makes untrue: "dislikes mangoes" replacing
-  "likes mangoes". Each one still believed is withdrawn by a retraction in
-  its own history linked to the statement (`Event.ReplacedBy`); the new
-  belief lists it under `Replaced` with its `Predicate` (`Event.Replaces`
-  keeps the snapshot), and `RememberResult.Superseded` reports it. Beliefs
-  that do not hold, notes, and beliefs stated later are listed in
+  happened. Its values are never withdrawn by a correction, through an
+  exclusion or `Replaces`, only by forgetting. The `personal` starter pairs
+  `likes` with `dislikes` and marks `did` historical.
+- Explicit corrections: `RememberRequest.Replaces` (and `Proposal.Replaces`)
+  name beliefs of the same subject, under any predicate, that a statement
+  makes untrue. Each one still believed is withdrawn by a retraction in its
+  own history linked to the statement (`Event.ReplacedBy`); the new belief
+  lists it under `Replaced` with its `Predicate` (`Event.Replaces` keeps the
+  snapshot), and `RememberResult.Superseded` reports it. Beliefs that do not
+  hold, notes, later statements, and historical predicates are listed in
   `RememberResult.Unreplaced` instead. Restating a belief with a correction
   writes it again with the correction, which also completes an interrupted
   write.
-- `RememberRequest.Related` returns `RememberResult.Related`: current beliefs
-  of the subject under other predicates that may conflict, same value first,
-  then closest in meaning. The MCP `remember` tool returns them on every
-  typed write and accepts `replaces`.
-- `RememberText` offers the extractor the beliefs closest to the text
-  through `recall.KnownBeliefs(ctx)`; the `model` extractor lists them and
-  the model copies the ones the text makes untrue into `replaces`. Copies
-  that match no listed belief are dropped.
-- Read-time safety net: each belief a client read returns lists under
+- `RememberRequest.Related` returns `RememberResult.Related`: the subject's
+  current beliefs under other predicates that may conflict, same value
+  first, then closest in meaning. The MCP `remember` tool returns them on
+  every typed write and accepts `replaces`, so the agent decides and confirms.
+  No model proposes corrections: measured on real conversations, one asked
+  to judge which existing beliefs a text makes untrue was wrong about nine
+  times in ten.
+- Reads across predicates: each belief a client read returns lists under
   `Belief.Elsewhere` the subject's current beliefs under other predicates
-  holding the same value, whatever its capitalization, so a correction that
-  was never linked is still visible. `Ask` and the MCP text tools report it
-  as `also`; the MCP `recall` tool returns `elsewhere`. Covers the first 10
-  typed beliefs, runs the lookups side by side, uses the materialized cache,
-  and never fails a read. `Query.NoElsewhere` turns it off.
-- Events carry a derived `value_key` metadata field (not part of the event or
-  its digest); the Qdrant backend indexes it in new collections.
+  holding the same value, whatever its capitalization. `Ask` and the MCP
+  text tools report it as `also`; the MCP `recall` tool returns `elsewhere`.
+  Covers the first 10 typed beliefs, runs the lookups side by side, uses the
+  materialized cache, and never fails a read. `Query.NoElsewhere` turns it
+  off.
+- The model extractor files a statement that denies, reverses, or ends
+  something under the predicate that contradicts the earlier one, with the
+  same value wording, instead of coining a negated predicate.
 - `Client.Ask` tells an earlier belief from another predicate whole ("user
   likes: mangoes").
+- Events carry a derived `value_key` metadata field (not part of the event or
+  its digest); the Qdrant backend indexes it in new collections.
+- `eval/corrections`: 40 corrections across predicates and 28 lookalikes,
+  run through the product path with any extraction model.
 - Python: `remember(..., replaces=[...])`, `RememberResult.related` and
   `unreplaced`, `PriorValue.predicate`, `Belief.elsewhere`, `Memory.also`.
 
 ### Changed
 
-- Audit bundles containing corrections are `recall-event-v3`, checksummed
-  with the new `DigestV4`; others are still written as `recall-event-v2`.
+- Audit bundles that rely on exclusions are written as `recall-fold-v4`, and
+  bundles containing correction links are `recall-event-v3`, checksummed with
+  the new `DigestV4`. Others keep their older versions.
 
 ## [0.14.0] - 2026-10-10
 

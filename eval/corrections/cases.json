@@ -1,0 +1,961 @@
+[
+ {
+  "id": "mango",
+  "kind": "correction",
+  "setup": "I love mangoes.",
+  "say": "I can't stand mangoes anymore.",
+  "gone": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "mango"
+   }
+  ]
+ },
+ {
+  "id": "sushi",
+  "kind": "correction",
+  "setup": "Sushi is one of my favorite foods.",
+  "say": "I've gone off raw fish completely, no more sushi for me.",
+  "gone": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "sushi"
+   }
+  ]
+ },
+ {
+  "id": "steak",
+  "kind": "correction",
+  "setup": "I really enjoy a good steak.",
+  "say": "I became vegetarian in March.",
+  "gone": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "steak"
+   }
+  ]
+ },
+ {
+  "id": "coffee",
+  "kind": "correction",
+  "setup": "I love my morning coffee.",
+  "say": "I quit caffeine entirely last month.",
+  "gone": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "coffee"
+   }
+  ]
+ },
+ {
+  "id": "civic",
+  "kind": "correction",
+  "setup": "I drive a Honda Civic that I own.",
+  "say": "I traded in my Honda Civic for an e-bike.",
+  "gone": [
+   {
+    "predicates": [
+     "owns"
+    ],
+    "word": "civic"
+   }
+  ]
+ },
+ {
+  "id": "mochi",
+  "kind": "correction",
+  "setup": "We have a cat named Mochi.",
+  "say": "Mochi passed away last week, so we have no pets now.",
+  "gone": [
+   {
+    "predicates": [
+     "owns",
+     "relationship"
+    ],
+    "word": "mochi"
+   }
+  ]
+ },
+ {
+  "id": "japan",
+  "kind": "correction",
+  "setup": "We're planning a trip to Japan in the fall.",
+  "say": "We cancelled the Japan trip.",
+  "gone": [
+   {
+    "predicates": [
+     "plans"
+    ],
+    "word": "japan"
+   }
+  ]
+ },
+ {
+  "id": "marathon",
+  "kind": "correction",
+  "setup": "I'm training to run a marathon.",
+  "say": "I've given up on running a marathon, my knees can't take it.",
+  "gone": [
+   {
+    "predicates": [
+     "goal",
+     "plans"
+    ],
+    "word": "marathon"
+   }
+  ]
+ },
+ {
+  "id": "running",
+  "kind": "correction",
+  "setup": "I enjoy running in the mornings.",
+  "say": "I don't run anymore since the knee surgery.",
+  "gone": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "run"
+   }
+  ]
+ },
+ {
+  "id": "sarah",
+  "kind": "correction",
+  "setup": "My girlfriend Sarah is a nurse.",
+  "say": "Sarah and I broke up.",
+  "gone": [
+   {
+    "predicates": [
+     "relationship"
+    ],
+    "word": "sarah"
+   }
+  ]
+ },
+ {
+  "id": "jazz",
+  "kind": "correction",
+  "setup": "I love listening to jazz.",
+  "say": "Honestly jazz bores me now.",
+  "gone": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "jazz"
+   }
+  ]
+ },
+ {
+  "id": "house",
+  "kind": "correction",
+  "setup": "We plan to buy a house next year.",
+  "say": "We decided to keep renting instead of buying a house.",
+  "gone": [
+   {
+    "predicates": [
+     "plans",
+     "goal"
+    ],
+    "word": "house"
+   }
+  ]
+ },
+ {
+  "id": "piano-own",
+  "kind": "correction",
+  "setup": "I have an old upright piano at home.",
+  "say": "We gave the piano away to make room for the baby.",
+  "gone": [
+   {
+    "predicates": [
+     "owns"
+    ],
+    "word": "piano"
+   }
+  ]
+ },
+ {
+  "id": "spicy",
+  "kind": "correction",
+  "setup": "I love spicy food.",
+  "say": "My doctor told me to avoid spicy food, and I don't enjoy it anymore.",
+  "gone": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "spic"
+   }
+  ]
+ },
+ {
+  "id": "spanish",
+  "kind": "correction",
+  "setup": "I'm working on learning Spanish.",
+  "say": "I stopped learning Spanish and switched to French.",
+  "gone": [
+   {
+    "predicates": [
+     "goal",
+     "plans"
+    ],
+    "word": "spanish"
+   }
+  ]
+ },
+ {
+  "id": "tea",
+  "kind": "correction",
+  "setup": "I like drinking tea.",
+  "say": "I avoid tea these days.",
+  "gone": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "tea"
+   }
+  ]
+ },
+ {
+  "id": "horror",
+  "kind": "correction",
+  "setup": "I love horror movies.",
+  "say": "Horror movies give me nightmares now, so I avoid them.",
+  "gone": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "horror"
+   }
+  ]
+ },
+ {
+  "id": "iphone",
+  "kind": "correction",
+  "setup": "I have an iPhone 13.",
+  "say": "I switched to a Pixel and gave my iPhone to my brother.",
+  "gone": [
+   {
+    "predicates": [
+     "owns"
+    ],
+    "word": "iphone"
+   }
+  ]
+ },
+ {
+  "id": "berlin",
+  "kind": "correction",
+  "setup": "I plan to attend the conference in Berlin in June.",
+  "say": "I won't be going to the Berlin conference after all.",
+  "gone": [
+   {
+    "predicates": [
+     "plans"
+    ],
+    "word": "berlin"
+   }
+  ]
+ },
+ {
+  "id": "chocolate",
+  "kind": "correction",
+  "setup": "I like chocolate.",
+  "say": "I found out I'm allergic to chocolate, so I avoid it.",
+  "gone": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "chocolate"
+   }
+  ]
+ },
+ {
+  "id": "mushroom",
+  "kind": "correction",
+  "setup": "I really dislike mushrooms.",
+  "say": "I've come around on mushrooms, I like them now.",
+  "gone": [
+   {
+    "predicates": [
+     "dislikes"
+    ],
+    "word": "mushroom"
+   }
+  ]
+ },
+ {
+  "id": "cilantro",
+  "kind": "correction",
+  "setup": "I hate cilantro.",
+  "say": "Cilantro has grown on me, I enjoy it now.",
+  "gone": [
+   {
+    "predicates": [
+     "dislikes"
+    ],
+    "word": "cilantro"
+   }
+  ]
+ },
+ {
+  "id": "beer",
+  "kind": "correction",
+  "setup": "I like craft beer.",
+  "say": "I've been sober for six months now.",
+  "gone": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "beer"
+   }
+  ]
+ },
+ {
+  "id": "boat",
+  "kind": "correction",
+  "setup": "We own a small sailboat.",
+  "say": "We got rid of the sailboat last summer.",
+  "gone": [
+   {
+    "predicates": [
+     "owns"
+    ],
+    "word": "boat"
+   }
+  ]
+ },
+ {
+  "id": "golf",
+  "kind": "correction",
+  "setup": "I enjoy playing golf.",
+  "say": "I hate golf now after that awful tournament.",
+  "gone": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "golf"
+   }
+  ]
+ },
+ {
+  "id": "denver",
+  "kind": "correction",
+  "setup": "We plan to move to Denver.",
+  "say": "We're staying in Austin, the Denver move is off.",
+  "gone": [
+   {
+    "predicates": [
+     "plans"
+    ],
+    "word": "denver"
+   }
+  ]
+ },
+ {
+  "id": "jake",
+  "kind": "correction",
+  "setup": "My roommate Jake is a chef.",
+  "say": "Jake moved out and I live alone now.",
+  "gone": [
+   {
+    "predicates": [
+     "relationship"
+    ],
+    "word": "jake"
+   }
+  ]
+ },
+ {
+  "id": "cats",
+  "kind": "correction",
+  "setup": "I love cats.",
+  "say": "I'm allergic to cats, so I avoid them.",
+  "gone": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "cat"
+   }
+  ]
+ },
+ {
+  "id": "gym",
+  "kind": "correction",
+  "setup": "I have a gym membership at Equinox.",
+  "say": "I cancelled my Equinox gym membership.",
+  "gone": [
+   {
+    "predicates": [
+     "owns"
+    ],
+    "word": "equinox"
+   }
+  ]
+ },
+ {
+  "id": "tiktok",
+  "kind": "correction",
+  "setup": "I like scrolling TikTok.",
+  "say": "I deleted TikTok, I can't stand it anymore.",
+  "gone": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "tiktok"
+   }
+  ]
+ },
+ {
+  "id": "piano-plan",
+  "kind": "correction",
+  "setup": "I plan to learn piano this year.",
+  "say": "I don't plan to learn piano anymore.",
+  "gone": [
+   {
+    "predicates": [
+     "plans",
+     "goal"
+    ],
+    "word": "piano"
+   }
+  ]
+ },
+ {
+  "id": "milk",
+  "kind": "correction",
+  "setup": "I like a glass of milk with dinner.",
+  "say": "I'm lactose intolerant now and avoid milk.",
+  "gone": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "milk"
+   }
+  ]
+ },
+ {
+  "id": "hiking",
+  "kind": "correction",
+  "setup": "I enjoy hiking on weekends.",
+  "say": "After the injury I can't hike, and I've stopped enjoying it.",
+  "gone": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "hik"
+   }
+  ]
+ },
+ {
+  "id": "kindle",
+  "kind": "correction",
+  "setup": "I have a Kindle for reading.",
+  "say": "My Kindle broke and I threw it away.",
+  "gone": [
+   {
+    "predicates": [
+     "owns"
+    ],
+    "word": "kindle"
+   }
+  ]
+ },
+ {
+  "id": "weight",
+  "kind": "correction",
+  "setup": "My goal is to lose 10 pounds.",
+  "say": "I hit my weight goal last week.",
+  "gone": [
+   {
+    "predicates": [
+     "goal"
+    ],
+    "word": "pound"
+   }
+  ]
+ },
+ {
+  "id": "pizza",
+  "kind": "correction",
+  "setup": "Pizza is my favorite food.",
+  "say": "I don't eat pizza anymore since going gluten-free.",
+  "gone": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "pizza"
+   }
+  ]
+ },
+ {
+  "id": "maria-dinner",
+  "kind": "correction",
+  "setup": "I plan to have dinner with Maria on Friday.",
+  "say": "Maria cancelled our Friday dinner.",
+  "gone": [
+   {
+    "predicates": [
+     "plans"
+    ],
+    "word": "maria"
+   }
+  ]
+ },
+ {
+  "id": "tom",
+  "kind": "correction",
+  "setup": "My husband Tom is a teacher.",
+  "say": "Tom and I divorced last year.",
+  "gone": [
+   {
+    "predicates": [
+     "relationship"
+    ],
+    "word": "tom"
+   }
+  ]
+ },
+ {
+  "id": "netflix",
+  "kind": "correction",
+  "setup": "I have a Netflix subscription.",
+  "say": "I cancelled Netflix.",
+  "gone": [
+   {
+    "predicates": [
+     "owns"
+    ],
+    "word": "netflix"
+   }
+  ]
+ },
+ {
+  "id": "snow",
+  "kind": "correction",
+  "setup": "I love snowboarding.",
+  "say": "I've lost interest in snowboarding completely.",
+  "gone": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "snowboard"
+   }
+  ]
+ },
+ {
+  "id": "t-mango",
+  "kind": "trap",
+  "setup": "I love mangoes.",
+  "say": "I also like papayas.",
+  "kept": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "mango"
+   }
+  ]
+ },
+ {
+  "id": "t-steak",
+  "kind": "trap",
+  "setup": "I really enjoy a good steak.",
+  "say": "I had a salad for lunch.",
+  "kept": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "steak"
+   }
+  ]
+ },
+ {
+  "id": "t-civic",
+  "kind": "trap",
+  "setup": "I drive a Honda Civic that I own.",
+  "say": "I bought an e-bike too.",
+  "kept": [
+   {
+    "predicates": [
+     "owns"
+    ],
+    "word": "civic"
+   }
+  ]
+ },
+ {
+  "id": "t-coffee",
+  "kind": "trap",
+  "setup": "I love my morning coffee.",
+  "say": "I drink green tea in the afternoon.",
+  "kept": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "coffee"
+   }
+  ]
+ },
+ {
+  "id": "t-japan",
+  "kind": "trap",
+  "setup": "We're planning a trip to Japan in the fall.",
+  "say": "We're also planning a trip to Peru.",
+  "kept": [
+   {
+    "predicates": [
+     "plans"
+    ],
+    "word": "japan"
+   }
+  ]
+ },
+ {
+  "id": "t-running",
+  "kind": "trap",
+  "setup": "I enjoy running in the mornings.",
+  "say": "I started swimming twice a week.",
+  "kept": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "run"
+   }
+  ]
+ },
+ {
+  "id": "t-emma",
+  "kind": "trap",
+  "setup": "My sister Emma lives in Boston.",
+  "say": "My brother Sam visited last week.",
+  "kept": [
+   {
+    "predicates": [
+     "relationship"
+    ],
+    "word": "emma"
+   }
+  ]
+ },
+ {
+  "id": "t-jazz",
+  "kind": "trap",
+  "setup": "I love listening to jazz.",
+  "say": "I've been listening to a lot of classical music lately.",
+  "kept": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "jazz"
+   }
+  ]
+ },
+ {
+  "id": "t-mushroom",
+  "kind": "trap",
+  "setup": "I really dislike mushrooms.",
+  "say": "I like truffle oil on fries.",
+  "kept": [
+   {
+    "predicates": [
+     "dislikes"
+    ],
+    "word": "mushroom"
+   }
+  ]
+ },
+ {
+  "id": "t-cat",
+  "kind": "trap",
+  "setup": "We have a cat named Mochi.",
+  "say": "We adopted a dog named Rex.",
+  "kept": [
+   {
+    "predicates": [
+     "owns",
+     "relationship"
+    ],
+    "word": "mochi"
+   }
+  ]
+ },
+ {
+  "id": "t-marathon",
+  "kind": "trap",
+  "setup": "I'm training to run a marathon.",
+  "say": "I ran a 10K last weekend.",
+  "kept": [
+   {
+    "predicates": [
+     "goal",
+     "plans"
+    ],
+    "word": "marathon"
+   }
+  ]
+ },
+ {
+  "id": "t-pizza",
+  "kind": "trap",
+  "setup": "Pizza is my favorite food.",
+  "say": "I tried gluten-free pasta and liked it.",
+  "kept": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "pizza"
+   }
+  ]
+ },
+ {
+  "id": "t-beer",
+  "kind": "trap",
+  "setup": "I like craft beer.",
+  "say": "I like wine too.",
+  "kept": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "beer"
+   }
+  ]
+ },
+ {
+  "id": "t-acme",
+  "kind": "trap",
+  "setup": "I work at Acme as an engineer.",
+  "say": "I joined a book club.",
+  "kept": [
+   {
+    "predicates": [
+     "works_at"
+    ],
+    "word": "acme"
+   }
+  ]
+ },
+ {
+  "id": "t-seattle",
+  "kind": "trap",
+  "setup": "I live in Seattle.",
+  "say": "I visited Portland last weekend.",
+  "kept": [
+   {
+    "predicates": [
+     "lives_in"
+    ],
+    "word": "seattle"
+   }
+  ]
+ },
+ {
+  "id": "t-tea",
+  "kind": "trap",
+  "setup": "I like drinking tea.",
+  "say": "I avoid sugary drinks.",
+  "kept": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "tea"
+   }
+  ]
+ },
+ {
+  "id": "t-iphone",
+  "kind": "trap",
+  "setup": "I have an iPhone 13.",
+  "say": "My wife got a Pixel.",
+  "kept": [
+   {
+    "predicates": [
+     "owns"
+    ],
+    "word": "iphone"
+   }
+  ]
+ },
+ {
+  "id": "t-golf",
+  "kind": "trap",
+  "setup": "I enjoy playing golf.",
+  "say": "I watched tennis on TV last night.",
+  "kept": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "golf"
+   }
+  ]
+ },
+ {
+  "id": "t-denver",
+  "kind": "trap",
+  "setup": "We plan to move to Denver.",
+  "say": "We looked at schools in Denver.",
+  "kept": [
+   {
+    "predicates": [
+     "plans"
+    ],
+    "word": "denver"
+   }
+  ]
+ },
+ {
+  "id": "t-hiking",
+  "kind": "trap",
+  "setup": "I enjoy hiking on weekends.",
+  "say": "It rained all weekend so we stayed in.",
+  "kept": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "hik"
+   }
+  ]
+ },
+ {
+  "id": "t-kid-mango",
+  "kind": "trap",
+  "setup": "I love mangoes.",
+  "say": "My daughter can't stand mangoes.",
+  "kept": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "mango"
+   }
+  ]
+ },
+ {
+  "id": "t-coworker-sushi",
+  "kind": "trap",
+  "setup": "Sushi is one of my favorite foods.",
+  "say": "My coworker hates sushi.",
+  "kept": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "sushi"
+   }
+  ]
+ },
+ {
+  "id": "t-friend-golf",
+  "kind": "trap",
+  "setup": "I enjoy playing golf.",
+  "say": "My friend Dave quit golf for good.",
+  "kept": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "golf"
+   }
+  ]
+ },
+ {
+  "id": "t-mango-candy",
+  "kind": "trap",
+  "setup": "I love mangoes.",
+  "say": "I dislike mango-flavored candy.",
+  "kept": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "mango"
+   }
+  ]
+ },
+ {
+  "id": "t-coffee-shop",
+  "kind": "trap",
+  "setup": "I love my morning coffee.",
+  "say": "I hate the coffee shop near my office.",
+  "kept": [
+   {
+    "predicates": [
+     "likes"
+    ],
+    "word": "coffee"
+   }
+  ]
+ },
+ {
+  "id": "t-did-bike",
+  "kind": "trap",
+  "setup": "I rode my bike to work today.",
+  "say": "I don't ride my bike anymore.",
+  "kept": [
+   {
+    "predicates": [
+     "did"
+    ],
+    "word": "bike"
+   }
+  ]
+ },
+ {
+  "id": "t-did-kindle",
+  "kind": "trap",
+  "setup": "I bought a Kindle last week.",
+  "say": "I threw my Kindle away.",
+  "kept": [
+   {
+    "predicates": [
+     "did"
+    ],
+    "word": "kindle"
+   }
+  ]
+ },
+ {
+  "id": "t-did-japan",
+  "kind": "trap",
+  "setup": "I visited Japan in 2019.",
+  "say": "I never want to go to Japan again.",
+  "kept": [
+   {
+    "predicates": [
+     "did"
+    ],
+    "word": "japan"
+   }
+  ]
+ }
+]
