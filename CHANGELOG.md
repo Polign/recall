@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.15.0] - 2026-10-11
 
 Memory no longer stops at the predicate a fact was filed under. A statement
 can end a belief filed elsewhere, reads show the same value wherever it is
