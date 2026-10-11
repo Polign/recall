@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,18 +39,39 @@ const (
 	// another. A bundle whose registry log uses neither
 	// folds the same under v2 and is still written as v2, so its checksum
 	// and older verifiers are unaffected.
-	FoldVersion = "recall-fold-v3"
-	// foldVersionV2 is written for bundles that do not need v3's rules.
+	//
+	// v4 adds exclusions: a value asserted under a predicate withdraws the
+	// same value under the predicates it excludes, except historical ones.
+	// A bundle whose registry declares none folds the same under v3 and is
+	// still written as v3 (or v2).
+	FoldVersion = "recall-fold-v4"
+	// foldVersionV3 is written for bundles that need v3's registry rules
+	// but declare no exclusions.
+	foldVersionV3 = "recall-fold-v3"
+	// foldVersionV2 is written for bundles that need neither.
 	foldVersionV2 = "recall-fold-v2"
 )
 
 // foldVersionFor is the oldest fold version that replays a registry log
 // correctly.
-func foldVersionFor(log []Event) string {
-	if usesFoldV3(log) {
+func foldVersionFor(log []Event, registry Registry) string {
+	if usesExclusions(registry) {
 		return FoldVersion
 	}
+	if usesFoldV3(log) {
+		return foldVersionV3
+	}
 	return foldVersionV2
+}
+
+// usesExclusions reports a registry in which any predicate excludes another.
+func usesExclusions(registry Registry) bool {
+	for _, p := range registry {
+		if len(p.Excludes) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // usesFoldV3 reports a registry log that folds differently under v3: one
@@ -126,7 +148,7 @@ func (s *Store) ExportAudit(q AuditRequest) (AuditBundle, error) {
 	}
 	// The bundle carries every predicate its events can be read under, which
 	// includes any the store's log defines and this client's registry omits.
-	b := AuditBundle{Version: AuditVersion, EventVersion: EventVersion, FoldVersion: foldVersionFor(sc.log),
+	b := AuditBundle{Version: AuditVersion, EventVersion: EventVersion, FoldVersion: foldVersionFor(sc.log, sc.bundleRegistry()),
 		Scope: AuditScope{Subject: normalizeSubject(q.Scope.Subject), Predicate: sc.canonical(strings.TrimSpace(q.Scope.Predicate))},
 		AsOf:  q.AsOf.UTC(), Registry: sc.bundleRegistry(), RegistryLog: sc.log,
 	}
@@ -139,6 +161,21 @@ func (s *Store) ExportAudit(q AuditRequest) (AuditBundle, error) {
 	events, err := s.ExportEvents(Export{Subject: b.Scope.Subject, Predicate: b.Scope.Predicate})
 	if err != nil {
 		return AuditBundle{}, err
+	}
+	// A predicate's beliefs depend on the events of the predicates that
+	// exclude it, so a bundle scoped to one carries those too.
+	if b.Scope.Predicate != "" {
+		for _, ex := range sc.excluders(b.Scope.Predicate) {
+			more, err := s.ExportEvents(Export{Subject: b.Scope.Subject, Predicate: ex})
+			if err != nil {
+				return AuditBundle{}, err
+			}
+			events = append(events, more...)
+		}
+		if len(events) > MaxExport {
+			return AuditBundle{}, fmt.Errorf("%w: read %d events (maximum %d)", ErrIncompleteHistory, len(events), MaxExport)
+		}
+		SortEvents(events)
 	}
 	b.Events = make([]Event, 0, len(events))
 	for _, e := range events {
@@ -212,7 +249,11 @@ func (b AuditBundle) Replay() ([]Belief, error) {
 	})
 	out := make([]Belief, 0)
 	for _, p := range keys {
-		out = append(out, sc.fold(p.predicate, groups[p], b.AsOf)...)
+		events := groups[p]
+		for _, ex := range sc.excluders(p.predicate) {
+			events = append(append([]Event(nil), events...), groups[pair{p.subject, ex}]...)
+		}
+		out = append(out, sc.fold(p.predicate, events, b.AsOf)...)
 	}
 	return out, nil
 }
@@ -230,9 +271,12 @@ func (b AuditBundle) validateHeader() error {
 		if v.what == "event" && v.got == eventVersionV1 {
 			continue
 		}
-		if v.what == "fold" && v.got == foldVersionV2 {
-			if usesFoldV3(b.RegistryLog) {
-				return invalid(fmt.Sprintf("fold version %q cannot replay this registry log, which needs %q", v.got, FoldVersion))
+		if v.what == "fold" && (v.got == foldVersionV2 || v.got == foldVersionV3) {
+			if usesExclusions(b.Registry) {
+				return invalid(fmt.Sprintf("fold version %q cannot replay this registry, which declares exclusions and needs %q", v.got, FoldVersion))
+			}
+			if v.got == foldVersionV2 && usesFoldV3(b.RegistryLog) {
+				return invalid(fmt.Sprintf("fold version %q cannot replay this registry log, which needs %q", v.got, foldVersionV3))
 			}
 			continue
 		}
@@ -288,7 +332,8 @@ func (b AuditBundle) checksum() (string, error) {
 		// An event written under a former name belongs to the predicate that
 		// owns that name now.
 		owner := b.Registry.canonical(e.Predicate)
-		if b.Scope.Subject != "" && e.Subject != b.Scope.Subject || b.Scope.Predicate != "" && owner != b.Scope.Predicate {
+		inScope := owner == b.Scope.Predicate || slices.Contains(b.Registry.ExcludedBy(b.Scope.Predicate), owner)
+		if b.Scope.Subject != "" && e.Subject != b.Scope.Subject || b.Scope.Predicate != "" && !inScope {
 			return "", fmt.Errorf("%w: event %q is outside scope", ErrInvalidAudit, e.ID)
 		}
 		p, ok := b.Registry[owner]

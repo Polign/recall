@@ -200,8 +200,8 @@ func TestAuditFoldVersionFollowsRegistryRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b.FoldVersion != FoldVersion {
-		t.Fatalf("redefined log exported as %q, want %q", b.FoldVersion, FoldVersion)
+	if b.FoldVersion != foldVersionV3 {
+		t.Fatalf("redefined log exported as %q, want %q", b.FoldVersion, foldVersionV3)
 	}
 	got, err := b.Replay()
 	if err != nil || len(got) != 2 {

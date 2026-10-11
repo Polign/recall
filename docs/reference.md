@@ -532,6 +532,8 @@ What each kind of change does:
 | Rename | Add the new name with the old name in `aliases`, and remove the old entry | Both names are one history. Old events answer under the new name, and a write to the old name is stored under the new one. |
 | Change cardinality | Change `cardinality` | Applies from the moment it is recorded. Earlier events keep the old rule. |
 | Correct a definition | `client.Redefine(ctx, name, recall.Predicate{Cardinality: "multi"})` | Applies to the whole history, as-of reads included. Use it when the old rule was wrong, not when the facts changed. |
+| Declare that two predicates contradict each other | Add one to the other's `excludes` | Applies to the whole history. See [Exclusions](#exclusions). |
+| Protect a predicate from corrections | Set `historical` | Its values are never withdrawn by a correction, only by forgetting. |
 | Widen or narrow an enum | Edit `allowed` | Applies to new writes. Values already stored stay readable and can be forgotten. |
 | Change the stored type, such as number to string | Not supported | `SyncRegistry` refuses it. Register a new predicate. |
 | Split one predicate into two | Not a registry change | Remember each fact again under the right predicate. Which half an old event belongs to is a decision about that event. |
@@ -564,6 +566,55 @@ behaves as before: the client's own registry is the only rule.
 
 A predicate that is recorded in the store but missing from a client's registry
 can be read by that client, under its recorded definition, but not written.
+
+### Exclusions
+
+Some predicates contradict each other value by value: liking mangoes and
+disliking mangoes cannot both be true, nor can owning a piano and having
+given it away. A predicate lists the ones it contradicts under `excludes`,
+and Recall treats a value stated under either as replacing the same value
+under the other. The later statement wins.
+
+```json
+{
+  "likes":     {"cardinality": "multi", "value_type": "string", "description": "Something the subject likes", "excludes": ["dislikes"]},
+  "dislikes":  {"cardinality": "multi", "value_type": "string", "description": "Something the subject dislikes"},
+  "owns":      {"cardinality": "multi", "value_type": "string", "description": "Something the subject owns"},
+  "gave_away": {"cardinality": "multi", "value_type": "string", "description": "Something the subject gave away", "excludes": ["owns"], "historical": true}
+}
+```
+
+With this registry, "likes mangoes" followed by "dislikes mangoes" leaves
+mangoes under `dislikes` only. The answer lists the old value under
+`replaced`, with `predicate` set to `likes`, and `RememberResult.Superseded`
+reports it at the write. Saying "likes mangoes" again moves it back. Other
+values are not touched: "likes bananas" stays. Forgetting the dislike does
+not bring the like back; nothing is liked until it is stated again.
+
+This is a rule, not a judgment: it fires only on the same subject and the
+same value (ignoring case) under predicates the registry pairs. No model is
+asked. A conflict between different values, such as going vegetarian and
+liking steak, is not resolved here; reads show such things under
+`Elsewhere` and `Related`, and whoever knows records the correction with
+`Replaces`.
+
+The pairing is worked out when the log is read, so it applies to statements
+written before `excludes` was set, and `AsOf` reads still show what held
+then. Declare it on either side; it holds both ways. A predicate may exclude
+several others, both predicates must store the same kind of value, and
+`note` excludes nothing. The `personal` starter pairs `likes` with
+`dislikes`.
+
+A `historical` predicate records something that happened: `did` in the
+`personal` starter. What happened cannot become untrue, so its values are
+never withdrawn by a correction, whether through an exclusion or through
+`Replaces`; a historical predicate may still withdraw others (giving the
+piano away ends owning it, and owning one again later does not unwrite the
+giving). Forget still works on it, for a record that was wrong.
+
+Audit bundles whose registry declares an exclusion are written as
+`recall-fold-v4`, and a bundle scoped to one predicate includes the events
+of the predicates that exclude it.
 
 ### Open vocabulary
 

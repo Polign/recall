@@ -82,7 +82,11 @@ func (s *Store) materializedBeliefs(p pair, asOf time.Time) ([]Belief, error) {
 			!asOf.Before(cached.asOf) && (cached.nextEvent.IsZero() || asOf.Before(cached.nextEvent)) {
 			return append([]Belief(nil), cached.beliefs...), nil
 		}
-		events, err := s.History(p.subject, p.predicate)
+		sc, err := s.view()
+		if err != nil {
+			return nil, err
+		}
+		_, events, err := s.foldHistory(sc, p.subject, p.predicate)
 		if err != nil {
 			return nil, err
 		}

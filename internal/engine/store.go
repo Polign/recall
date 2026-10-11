@@ -230,7 +230,7 @@ func (s *Store) remember(kind, subject, predicate string, value any, confidence 
 		return zero, fmt.Errorf(`source must be "user_stated", "agent_inferred", or "tool_result", got %q`, source)
 	}
 
-	events, err := s.History(subject, predicate)
+	own, events, err := s.foldHistory(sc, subject, predicate)
 	if err != nil {
 		return zero, err
 	}
@@ -250,7 +250,7 @@ func (s *Store) remember(kind, subject, predicate string, value any, confidence 
 		}
 	}
 
-	if len(events) >= MaxHistoryEvents {
+	if len(own) >= MaxHistoryEvents {
 		return zero, fmt.Errorf("%w: maximum %d events reached", ErrIncompleteHistory, MaxHistoryEvents)
 	}
 
@@ -273,12 +273,26 @@ func (s *Store) remember(kind, subject, predicate string, value any, confidence 
 	if err := s.append(ev); err != nil {
 		return zero, err
 	}
+	s.invalidateExcluders(sc, subject, predicate)
 
 	// What this statement displaced, reported for the agent's benefit. It is
 	// derived from the fold, not from any field written on the old events.
 	var superseded []Belief
 	if sc.cardAt(predicate, now) == Single {
 		superseded = held
+	}
+	// The same value held under a predicate this one excludes is withdrawn
+	// by this statement; the fold decides that, so it is read back here.
+	for _, ex := range sc.withdraws(predicate) {
+		theirs, err := s.foldPair(pair{subject, ex}, now.Add(-time.Nanosecond))
+		if err != nil {
+			return zero, err
+		}
+		for _, b := range theirs {
+			if ValueKey(b.Value) == ValueKey(value) {
+				superseded = append(superseded, b)
+			}
+		}
 	}
 	stored := beliefOf(ev)
 	stored.Predicate = predicate
@@ -335,7 +349,7 @@ func (s *Store) forgetValue(subject, predicate string, typed any) (int, error) {
 		typed = value
 	}
 
-	events, err := s.History(subject, predicate)
+	own, events, err := s.foldHistory(sc, subject, predicate)
 	if err != nil {
 		return 0, err
 	}
@@ -362,7 +376,7 @@ func (s *Store) forgetValue(subject, predicate string, typed any) (int, error) {
 		return 0, nil
 	}
 
-	if len(events) >= MaxHistoryEvents {
+	if len(own) >= MaxHistoryEvents {
 		return 0, fmt.Errorf("%w: maximum %d events reached", ErrIncompleteHistory, MaxHistoryEvents)
 	}
 
@@ -380,6 +394,7 @@ func (s *Store) forgetValue(subject, predicate string, typed any) (int, error) {
 	if err := s.append(ev); err != nil {
 		return 0, err
 	}
+	s.invalidateExcluders(sc, subject, predicate)
 	return withdrawn, nil
 }
 
@@ -658,11 +673,47 @@ func writeInstant(events []Event, now time.Time) time.Time {
 }
 
 func (s *Store) foldPair(p pair, asOf time.Time) ([]Belief, error) {
-	events, err := s.History(p.subject, p.predicate)
+	sc, err := s.view()
+	if err != nil {
+		return nil, err
+	}
+	_, events, err := s.foldHistory(sc, p.subject, p.predicate)
 	if err != nil {
 		return nil, err
 	}
 	return s.foldEvents(p, events, asOf)
+}
+
+// foldHistory reads what a pair's fold needs: its own history and, for each
+// predicate that excludes this one, that predicate's history for the same
+// subject. own is the pair's history alone; all is everything, oldest first.
+func (s *Store) foldHistory(sc *schema, subject, predicate string) (own, all []Event, err error) {
+	own, err = s.History(subject, predicate)
+	if err != nil {
+		return nil, nil, err
+	}
+	ex := sc.excluders(sc.canonical(s.predicateName(predicate)))
+	if len(ex) == 0 {
+		return own, own, nil
+	}
+	all = append(make([]Event, 0, 2*len(own)), own...)
+	for _, name := range ex {
+		other, err := s.History(subject, name)
+		if err != nil {
+			return nil, nil, err
+		}
+		all = append(all, other...)
+	}
+	SortEvents(all)
+	return own, all, nil
+}
+
+// invalidateExcluders drops the cached folds of the pairs this predicate
+// excludes, which a write to this pair changes as surely as its own.
+func (s *Store) invalidateExcluders(sc *schema, subject, predicate string) {
+	for _, name := range sc.withdraws(predicate) {
+		s.materialized.invalidate(pair{normalizeSubject(subject), name})
+	}
 }
 
 // foldEvents folds one pair's complete history under the store's schema.

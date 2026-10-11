@@ -45,7 +45,7 @@ func (s *mcpServer) memoryTools() []mcpTool {
 		{
 			Name:        "list_predicates",
 			Title:       "List what can be remembered",
-			Description: "List the predicates this memory accepts, with each one's cardinality (single-valued predicates supersede, multi-valued ones accumulate) and value type. The set is closed: call this before remembering anything, because an unregistered predicate is refused rather than invented. The note predicate takes anything worth keeping that no other predicate fits, so nothing has to be dropped.",
+			Description: "List the predicates this memory accepts, with each one's cardinality (single-valued predicates supersede, multi-valued ones accumulate), value type, what each excludes (stating a value under a predicate replaces the same value under the predicates it excludes, as dislikes does for likes), and whether it is historical (records what happened; never replaced). The set is closed: call this before remembering anything, because an unregistered predicate is refused rather than invented. The note predicate takes anything worth keeping that no other predicate fits, so nothing has to be dropped.",
 			InputSchema: schema(map[string]any{}),
 		},
 		{
@@ -232,10 +232,12 @@ func (s *mcpServer) runMemoryTool(ctx context.Context, name string, args json.Ra
 func (m *memoryRuntime) toolListPredicates() (string, error) {
 	reg := m.registry()
 	type entry struct {
-		Predicate   string `json:"predicate"`
-		Cardinality string `json:"cardinality"`
-		ValueType   string `json:"value_type"`
-		Description string `json:"description"`
+		Predicate   string   `json:"predicate"`
+		Cardinality string   `json:"cardinality"`
+		ValueType   string   `json:"value_type"`
+		Description string   `json:"description"`
+		Excludes    []string `json:"excludes,omitempty"`
+		Historical  bool     `json:"historical,omitempty"`
 	}
 	out := make([]entry, 0, len(reg))
 	for _, name := range reg.Names() {
@@ -244,7 +246,7 @@ func (m *memoryRuntime) toolListPredicates() (string, error) {
 		if vt == "" {
 			vt = "string"
 		}
-		out = append(out, entry{name, p.Cardinality, vt, p.Description})
+		out = append(out, entry{name, p.Cardinality, vt, p.Description, reg.ExcludedBy(name), p.Historical})
 	}
 	text, err := marshal(out)
 	return text, err

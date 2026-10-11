@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,6 +39,19 @@ type Predicate struct {
 	// under this predicate's name. Renaming a predicate is giving the new
 	// name the old one as an alias.
 	Aliases []string `json:"aliases,omitempty"`
+	// Excludes names predicates this one contradicts value for value, such
+	// as likes for dislikes, or owns for gave_away. Stating a value under
+	// one of them withdraws the same value from the other, so the later
+	// statement wins and the earlier one reads as replaced. Declared on
+	// either side, it holds both ways, and it applies to the whole log,
+	// including events written before it was declared.
+	Excludes []string `json:"excludes,omitempty"`
+	// Historical marks a predicate that records something that happened,
+	// such as did or bought. What happened cannot become untrue, so its
+	// values are never withdrawn by a correction: not by an excluding
+	// predicate, and not by Replaces. Forget still works, for a record that
+	// was wrong.
+	Historical bool `json:"historical,omitempty"`
 }
 
 // Value types a predicate may declare.
@@ -73,6 +87,7 @@ func storageClass(valueType string) string {
 func (p Predicate) clone() Predicate {
 	p.Allowed = append([]string(nil), p.Allowed...)
 	p.Aliases = append([]string(nil), p.Aliases...)
+	p.Excludes = append([]string(nil), p.Excludes...)
 	return p
 }
 
@@ -187,6 +202,53 @@ func (r Registry) Validate() error {
 			aliasOf[a] = name
 		}
 	}
+	return r.validateExclusions()
+}
+
+// ExcludedBy lists the predicates that contradict name value for value,
+// declared on either side, sorted.
+func (r Registry) ExcludedBy(name string) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(q string) {
+		if q != name && !seen[q] {
+			seen[q] = true
+			out = append(out, q)
+		}
+	}
+	if p, ok := r[name]; ok {
+		for _, q := range p.Excludes {
+			add(q)
+		}
+	}
+	for other, p := range r {
+		if slices.Contains(p.Excludes, name) {
+			add(other)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// validateExclusions checks that each excluded predicate is another
+// registered predicate storing the same kind of value.
+func (r Registry) validateExclusions() error {
+	for _, name := range r.Names() {
+		for _, q := range r[name].Excludes {
+			other, ok := r[q]
+			switch {
+			case q == name:
+				return fmt.Errorf("predicate registry: %q cannot exclude itself", name)
+			case name == NotePredicate || q == NotePredicate:
+				return fmt.Errorf("predicate registry: %q cannot exclude or be excluded", NotePredicate)
+			case !ok:
+				return fmt.Errorf("predicate registry: %q excludes %q, which is not a registered predicate", name, q)
+			case storageClass(other.valueType()) != storageClass(r[name].valueType()):
+				return fmt.Errorf("predicate registry: %q stores %s values and excludes %q, which stores %s; they must hold the same kind of value",
+					name, r[name].valueType(), q, other.valueType())
+			}
+		}
+	}
 	return nil
 }
 
@@ -228,9 +290,23 @@ func (r Registry) PromptTable() string {
 	var b strings.Builder
 	for _, name := range r.Names() {
 		p := r[name]
-		fmt.Fprintf(&b, "- %s (%s-valued %s): %s%s\n", name, p.Cardinality, p.valueType(), p.Description, valueHint(p))
+		fmt.Fprintf(&b, "- %s (%s-valued %s): %s%s%s\n", name, p.Cardinality, p.valueType(), p.Description, valueHint(p), r.exclusionHint(name))
 	}
 	return b.String()
+}
+
+// exclusionHint tells an agent that a value stated here withdraws it from
+// the excluded predicates, so it does not also forget the old one by hand,
+// and that a historical predicate is never withdrawn.
+func (r Registry) exclusionHint(name string) string {
+	out := ""
+	if ex := r.ExcludedBy(name); len(ex) > 0 {
+		out += ". Contradicts " + strings.Join(ex, ", ") + ": stating a value here replaces the same value there"
+	}
+	if r[name].Historical {
+		out += ". Records what happened; never replaced"
+	}
+	return out
 }
 
 // valueHint tells an agent what a typed value has to look like, for the types

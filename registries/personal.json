@@ -17,7 +17,8 @@
   "did": {
     "cardinality": "multi",
     "value_type": "string",
-    "description": "Something the subject did or that happened, with its date when known"
+    "description": "Something the subject did or that happened, with its date when known",
+    "historical": true
   },
   "dislikes": {
     "cardinality": "multi",
@@ -32,7 +33,10 @@
   "likes": {
     "cardinality": "multi",
     "value_type": "string",
-    "description": "Something the subject likes, enjoys, or prefers"
+    "description": "Something the subject likes, enjoys, or prefers",
+    "excludes": [
+      "dislikes"
+    ]
   },
   "lives_in": {
     "cardinality": "single",

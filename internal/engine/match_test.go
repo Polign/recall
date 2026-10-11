@@ -141,7 +141,7 @@ func TestManualMergeAndConcurrentMerges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b.FoldVersion != FoldVersion {
+	if b.FoldVersion != foldVersionV3 {
 		t.Fatalf("merged log exported as %q", b.FoldVersion)
 	}
 	got, err := b.Replay()

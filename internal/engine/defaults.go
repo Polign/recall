@@ -56,6 +56,18 @@ func many(valueType, description string) Predicate {
 	return Predicate{Cardinality: "multi", ValueType: valueType, Description: description}
 }
 
+// excluding declares the predicates p contradicts value for value.
+func excluding(p Predicate, names ...string) Predicate {
+	p.Excludes = names
+	return p
+}
+
+// historical marks p as recording what happened, never withdrawn.
+func historical(p Predicate) Predicate {
+	p.Historical = true
+	return p
+}
+
 func oneOf(description string, allowed ...string) Predicate {
 	return Predicate{Cardinality: "single", ValueType: typeEnum, Description: description, Allowed: allowed}
 }
@@ -141,9 +153,9 @@ var starters = map[string]func() Registry{
 			"date":         one(typeString, "When the subject happens, happened, or is due"),
 			"relationship": many(typeString, "A person in the subject's life and how they are related, such as sister Emma"),
 			"owns":         many(typeString, "Something the subject owns or has"),
-			"likes":        many(typeString, "Something the subject likes, enjoys, or prefers"),
+			"likes":        excluding(many(typeString, "Something the subject likes, enjoys, or prefers"), "dislikes"),
 			"dislikes":     many(typeString, "Something the subject dislikes or avoids"),
-			"did":          many(typeString, "Something the subject did or that happened, with its date when known"),
+			"did":          historical(many(typeString, "Something the subject did or that happened, with its date when known")),
 			"plans":        many(typeString, "Something the subject plans or intends to do"),
 			"goal":         many(typeString, "Something the subject is working toward"),
 			"detail":       many(typeString, "Another fact about the subject worth keeping"),

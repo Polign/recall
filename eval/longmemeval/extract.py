@@ -109,9 +109,21 @@ def predicate_table(reg: dict[str, Any]) -> str:
     return "\n".join(f"- {name} ({spec['cardinality']}-valued): {spec['description']}" for name, spec in reg.items())
 
 
+def seeds_for_key() -> str:
+    """The seeds file as the extractor sees it. Registry fields the prompt
+    never shows, such as excludes, are left out, so adding one does not
+    throw away paid extractions. Without such fields this is the file's own
+    text, which keeps keys made before the stripping valid."""
+    data = json.loads(SEEDS_PATH.read_text())
+    for spec in data.values():
+        spec.pop("excludes", None)
+        spec.pop("historical", None)
+    return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+
+
 def cache_key(model: str) -> str:
     h = hashlib.sha256()
-    for part in (model, active_prompt(), SEEDS_PATH.read_text() if OPEN else REGISTRY_PATH.read_text()):
+    for part in (model, active_prompt(), seeds_for_key() if OPEN else REGISTRY_PATH.read_text()):
         h.update(part.encode())
         h.update(b"\0")
     return h.hexdigest()[:12]

@@ -323,12 +323,62 @@ func (sc *schema) cardAt(predicate string, at time.Time) Cardinality {
 
 // fold reduces one pair's events, which may be stored under several names,
 // to beliefs named by the predicate that owns them now.
+//
+// When other predicates exclude this one, their events may be mixed in (see
+// foldHistory); they withdraw the values they assert here.
 func (sc *schema) fold(predicate string, events []Event, asOf time.Time) []Belief {
-	beliefs := foldWith(events, func(at time.Time) Cardinality { return sc.cardAt(predicate, at) }, asOf)
+	var opp *opposed
+	if ex := sc.excluders(predicate); len(ex) > 0 {
+		opp = &opposed{
+			by: func(e Event) string {
+				name := sc.canonical(strings.TrimSpace(e.Predicate))
+				if slices.Contains(ex, name) {
+					return name
+				}
+				return ""
+			},
+			cardAt: func(name string, at time.Time) Cardinality { return sc.cardAt(name, at) },
+			mutual: func(name string) bool { return !sc.reg[name].Historical },
+		}
+	}
+	beliefs := foldOpposed(events, func(at time.Time) Cardinality { return sc.cardAt(predicate, at) }, opp, asOf)
 	for i := range beliefs {
 		beliefs[i].Predicate = predicate
 	}
 	return beliefs
+}
+
+// excluders lists the readable predicates whose values withdraw this one's,
+// sorted. A historical predicate has none: what happened is never withdrawn,
+// though it may still withdraw others.
+func (sc *schema) excluders(predicate string) []string {
+	if sc.reg[predicate].Historical {
+		return nil
+	}
+	var out []string
+	for _, name := range sc.reg.ExcludedBy(predicate) {
+		name = sc.canonical(name)
+		if _, ok := sc.reg[name]; ok && name != predicate && !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// withdraws lists the readable predicates whose same value this one's
+// statements withdraw: those it excludes, or that exclude it, that are not
+// historical. It is excluders seen from the other side.
+func (sc *schema) withdraws(predicate string) []string {
+	var out []string
+	for _, name := range sc.reg.ExcludedBy(predicate) {
+		name = sc.canonical(name)
+		if p, ok := sc.reg[name]; ok && name != predicate && !p.Historical && !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // registryLog caches the schema one client or store reads under, and the
@@ -558,7 +608,8 @@ func (s *Store) appendDefinition(log []Event, rec registryRecord) (Event, error)
 
 func sameDefinition(a, b Predicate) bool {
 	return a.Cardinal() == b.Cardinal() && a.valueType() == b.valueType() && a.Description == b.Description &&
-		slices.Equal(a.Allowed, b.Allowed) && slices.Equal(sorted(a.Aliases), sorted(b.Aliases))
+		slices.Equal(a.Allowed, b.Allowed) && slices.Equal(sorted(a.Aliases), sorted(b.Aliases)) &&
+		slices.Equal(sorted(a.Excludes), sorted(b.Excludes)) && a.Historical == b.Historical
 }
 
 func sorted(in []string) []string {

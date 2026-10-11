@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Exclusions: a registry entry lists the predicates it contradicts value
+  for value under `excludes` (`likes` and `dislikes`, `owns` and `gave_away`).
+  A value stated under one replaces the same value under the other; the
+  later statement wins, and the displaced value is reported under `replaced`
+  and `superseded` with its `predicate`. It is a rule applied when the log is
+  read, so it covers statements written before the pairing was declared, and
+  no model is asked. `list_predicates` shows what each predicate excludes.
+- `historical` on a registry entry marks a predicate that records what
+  happened (`did` in the `personal` starter). Its values are never withdrawn
+  by a correction, only by forgetting. The `personal` starter pairs `likes`
+  with `dislikes` and marks `did` historical.
+- Audit bundles that rely on exclusions are written as `recall-fold-v4`;
+  others keep their older version.
+- Python: `PriorValue.predicate`.
+
 ## [0.14.0] - 2026-10-10
 
 ### Added

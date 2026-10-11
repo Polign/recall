@@ -79,6 +79,9 @@ type Belief struct {
 
 // PriorValue is a value that a newer assertion displaced.
 type PriorValue struct {
+	// Predicate is set when the displaced value was held under another
+	// predicate than this one: likes mangoes, replaced by dislikes mangoes.
+	Predicate  string    `json:"predicate,omitempty"`
 	Value      any       `json:"value"`
 	Source     string    `json:"source"`
 	ObservedAt time.Time `json:"observed_at"`
@@ -118,6 +121,32 @@ func Fold(events []Event, card Cardinality, asOf time.Time) []Belief {
 // until the next assertion replaces them, and one that went from single to
 // multi keeps its value and accumulates from there.
 func foldWith(events []Event, cardAt func(time.Time) Cardinality, asOf time.Time) []Belief {
+	return foldOpposed(events, cardAt, nil, asOf)
+}
+
+// opposed describes the predicates that exclude the one being folded, whose
+// events are mixed into the log handed to foldOpposed.
+type opposed struct {
+	// by names the excluding predicate an event belongs to, or "" for an
+	// event of the predicate being folded.
+	by func(Event) string
+	// cardAt is an excluding predicate's cardinality at an instant.
+	cardAt func(name string, at time.Time) Cardinality
+	// mutual reports whether assertions here withdraw the excluding
+	// predicate's values in turn. They do not when it is historical: owning
+	// the piano again does not unwrite having given it away.
+	mutual func(name string) bool
+}
+
+// foldOpposed is foldWith for a predicate that other predicates exclude. An
+// assertion of a value under an excluding predicate withdraws that value
+// here, exactly like a targeted retraction, and an assertion here reports the
+// excluded value it displaced in Replaced. Each excluding predicate is folded
+// alongside, under its own cardinality and retractions, only to know what it
+// held at each instant; its beliefs are not returned. Withdrawing a value on
+// the excluding side never revives one here: what was displaced stays
+// displaced until it is stated again.
+func foldOpposed(events []Event, cardAt func(time.Time) Cardinality, opp *opposed, asOf time.Time) []Belief {
 	if asOf.IsZero() {
 		asOf = time.Now()
 	}
@@ -155,7 +184,35 @@ func foldWith(events []Event, cardAt func(time.Time) Cardinality, asOf time.Time
 
 	held := map[string]Belief{}
 	var order []string
+	// against is what each excluding predicate holds, by name and value key.
+	against := map[string]map[string]Belief{}
 	for _, e := range ordered {
+		if name := opposedName(opp, e); name != "" {
+			theirs := against[name]
+			if theirs == nil {
+				theirs = map[string]Belief{}
+				against[name] = theirs
+			}
+			switch {
+			case e.Retraction && e.Value == nil:
+				clear(theirs)
+			case e.Retraction:
+				delete(theirs, ValueKey(e.Value))
+			default:
+				k := ValueKey(e.Value)
+				if _, ok := held[k]; ok {
+					delete(held, k)
+					order = slices.DeleteFunc(order, func(v string) bool { return v == k })
+				}
+				if opp.cardAt(name, e.ObservedAt) != Multi {
+					clear(theirs)
+				}
+				b := beliefOf(e)
+				b.Predicate = name
+				theirs[k] = b
+			}
+			continue
+		}
 		// A retraction removes one value or, with no value, all of them. A
 		// targeted retraction of a value that is not held changes nothing, so
 		// withdrawing a superseded value leaves the newer assertion intact,
@@ -192,6 +249,14 @@ func foldWith(events []Event, cardAt func(time.Time) Cardinality, asOf time.Time
 			order = order[:0]
 			seen = false
 		}
+		for _, name := range sortedKeys(against) {
+			if was, ok := against[name][k]; ok && opp.mutual(name) {
+				prior := priorOf(was)
+				prior.Predicate = name
+				b.Replaced = append(append([]PriorValue(nil), b.Replaced...), prior)
+				delete(against[name], k)
+			}
+		}
 		if !seen {
 			order = append(order, k)
 		}
@@ -215,6 +280,22 @@ func foldWith(events []Event, cardAt func(time.Time) Cardinality, asOf time.Time
 	if len(out) == 0 {
 		return nil
 	}
+	return out
+}
+
+func opposedName(opp *opposed, e Event) string {
+	if opp == nil {
+		return ""
+	}
+	return opp.by(e)
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
 	return out
 }
 

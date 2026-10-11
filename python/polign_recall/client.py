@@ -34,6 +34,9 @@ class PriorValue:
     source: str
     observed_at: str
     event_id: str
+    # Set when the value was held under another predicate (likes mangoes,
+    # replaced by dislikes mangoes); empty for the same predicate.
+    predicate: str = ""
 
 
 @dataclass(frozen=True)
