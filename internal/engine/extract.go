@@ -22,6 +22,9 @@ type Proposal struct {
 	// predicate that is already defined.
 	Cardinality string `json:"cardinality,omitempty"`
 	Description string `json:"description,omitempty"`
+	// Replaces names beliefs of the same subject that this statement makes
+	// untrue, under any predicate. See RememberRequest.Replaces.
+	Replaces []BeliefRef `json:"replaces,omitempty"`
 }
 
 type Extractor interface {
@@ -206,7 +209,7 @@ func (c *Client) RememberTextAt(ctx context.Context, text string, extractor Extr
 		confidence := 0.8
 		r, err := c.Remember(ctx, RememberRequest{Subject: p.Subject, Predicate: p.Predicate, Value: p.Value, Kind: kind, Source: "agent_inferred", Confidence: &confidence,
 			ObservedAt: observedAt, Evidence: p.Evidence, EvidenceID: episode.Stored.EventID,
-			Cardinality: Cardinality(p.Cardinality), Description: p.Description})
+			Cardinality: Cardinality(p.Cardinality), Description: p.Description, Replaces: p.Replaces})
 		if err != nil {
 			return out, fmt.Errorf("recall: proposal %d failed after %d completed writes: %w", i, len(out.Results), err)
 		}

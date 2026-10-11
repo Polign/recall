@@ -22,7 +22,13 @@ const (
 	// EventVersion identifies the typed Event fields recorded in a bundle.
 	// v2 adds Evidence and EvidenceID, and its bundles are checksummed with
 	// DigestV3, which covers them. v1 bundles still replay and verify.
-	EventVersion = "recall-event-v2"
+	//
+	// v3 adds Replaces and ReplacedBy, the links a correction across
+	// predicates writes, and its bundles are checksummed with DigestV4. A
+	// bundle with no such links is still written as v2.
+	EventVersion = "recall-event-v3"
+	// eventVersionV2 is written for bundles with no correction links.
+	eventVersionV2 = "recall-event-v2"
 	// eventVersionV1 predates evidence; its checksum uses DigestV2.
 	eventVersionV1 = "recall-event-v1"
 	// FoldVersion identifies observation-time ordering and the current single
@@ -183,11 +189,25 @@ func (s *Store) ExportAudit(q AuditRequest) (AuditBundle, error) {
 			b.Events = append(b.Events, e)
 		}
 	}
+	if !hasCorrections(b.Events) {
+		b.EventVersion = eventVersionV2
+	}
 	b.Digest, err = b.checksum()
 	if err != nil {
 		return AuditBundle{}, err
 	}
 	return b, nil
+}
+
+// hasCorrections reports events carrying the links a correction across
+// predicates writes, which only v3 bundles record.
+func hasCorrections(events []Event) bool {
+	for _, e := range events {
+		if len(e.Replaces) > 0 || e.ReplacedBy != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // ExportAudit exports without requiring an embedder and honors cancellation.
@@ -268,7 +288,7 @@ func (b AuditBundle) validateHeader() error {
 		{"event", b.EventVersion, EventVersion},
 		{"fold", b.FoldVersion, FoldVersion},
 	} {
-		if v.what == "event" && v.got == eventVersionV1 {
+		if v.what == "event" && (v.got == eventVersionV1 || v.got == eventVersionV2) {
 			continue
 		}
 		if v.what == "fold" && (v.got == foldVersionV2 || v.got == foldVersionV3) {
@@ -316,7 +336,13 @@ func (b AuditBundle) checksum() (string, error) {
 	if len(b.Events) > MaxExport {
 		return "", fmt.Errorf("%w: more than %d events", ErrInvalidAudit, MaxExport)
 	}
-	digest, err := DigestV3(b.Events)
+	digest, err := DigestV4(b.Events)
+	if b.EventVersion != EventVersion && hasCorrections(b.Events) {
+		return "", fmt.Errorf("%w: events carry correction links, which %s bundles cannot record", ErrInvalidAudit, b.EventVersion)
+	}
+	if b.EventVersion == eventVersionV2 {
+		digest, err = DigestV3(b.Events)
+	}
 	if b.EventVersion == eventVersionV1 {
 		for _, e := range b.Events {
 			if e.Evidence != "" || e.EvidenceID != "" {
@@ -379,26 +405,30 @@ func (b AuditBundle) checksum() (string, error) {
 // remains the legacy, case-insensitive checksum for existing exports. It does
 // not cover Evidence or EvidenceID; DigestV3 does.
 func DigestV2(events []Event) (string, error) {
-	return digestTyped(events, false)
+	return digestTyped(events, 2)
 }
 
 // DigestV3 is DigestV2 that also covers each event's Evidence and EvidenceID,
 // so an export cannot alter what a statement was drawn from undetected.
 func DigestV3(events []Event) (string, error) {
-	return digestTyped(events, true)
+	return digestTyped(events, 3)
 }
 
-func digestTyped(events []Event, withEvidence bool) (string, error) {
+// DigestV4 is DigestV3 that also covers each event's Replaces and
+// ReplacedBy, so an export cannot alter what a correction withdrew.
+func DigestV4(events []Event) (string, error) {
+	return digestTyped(events, 4)
+}
+
+func digestTyped(events []Event, version int) (string, error) {
+	withEvidence := version >= 3
 	ordered := append([]Event(nil), events...)
 	for i := range ordered {
 		ordered[i].ObservedAt = ordered[i].ObservedAt.UTC()
 	}
 	SortEvents(ordered)
 	h := sha256.New()
-	label, prefix := "recall-events-digest-v2", "sha256:v2:"
-	if withEvidence {
-		label, prefix = "recall-events-digest-v3", "sha256:v3:"
-	}
+	label, prefix := fmt.Sprintf("recall-events-digest-v%d", version), fmt.Sprintf("sha256:v%d:", version)
 	hashFields(h, label, strconv.Itoa(len(ordered)))
 	seen := make(map[string]bool, len(ordered))
 	for _, e := range ordered {
@@ -432,6 +462,13 @@ func digestTyped(events []Event, withEvidence bool) (string, error) {
 			// boundaries are fixed and no two logs share a digest.
 			hashFields(h, e.Evidence, e.EvidenceID)
 		}
+		if version >= 4 {
+			replaces := ""
+			if len(e.Replaces) > 0 {
+				replaces = encodeReplaces(e.Replaces)
+			}
+			hashFields(h, replaces, e.ReplacedBy)
+		}
 	}
 	return prefix + hex.EncodeToString(h.Sum(nil)), nil
 }
@@ -440,9 +477,9 @@ func digestTyped(events []Event, withEvidence bool) (string, error) {
 // Legacy verification intentionally retains its original identity semantics.
 func VerifyDigest(events []Event, expected string) error {
 	var actual string
-	if strings.HasPrefix(expected, "sha256:v2:") || strings.HasPrefix(expected, "sha256:v3:") {
+	if v := typedDigestVersion(expected); v != 0 {
 		var err error
-		actual, err = digestTyped(events, strings.HasPrefix(expected, "sha256:v3:"))
+		actual, err = digestTyped(events, v)
 		if err != nil {
 			return err
 		}
@@ -455,6 +492,16 @@ func VerifyDigest(events []Event, expected string) error {
 		return ErrDigestMismatch
 	}
 	return nil
+}
+
+// typedDigestVersion reads the version from a typed digest's prefix, or 0.
+func typedDigestVersion(digest string) int {
+	for _, v := range []int{2, 3, 4} {
+		if strings.HasPrefix(digest, fmt.Sprintf("sha256:v%d:", v)) {
+			return v
+		}
+	}
+	return 0
 }
 
 func floatBits(v float64) string { return fmt.Sprintf("%016x", math.Float64bits(v)) }

@@ -113,6 +113,11 @@ func (nopBackend) List(context.Context, string, map[string]any, int) ([]recall.S
 	return nil, 0, nil
 }
 
+// Search finds nothing, for the related beliefs RememberTextAt looks up.
+func (nopBackend) Search(context.Context, string, []float32, int, map[string]any) ([]recall.Hit, error) {
+	return nil, nil
+}
+
 func TestChatCompletions(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer k" {

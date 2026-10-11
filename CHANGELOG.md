@@ -17,7 +17,30 @@
   with `dislikes` and marks `did` historical.
 - Audit bundles that rely on exclusions are written as `recall-fold-v4`;
   others keep their older version.
-- Python: `PriorValue.predicate`.
+- Corrections across predicates. `RememberRequest.Replaces` (and
+  `Proposal.Replaces`) name beliefs of the same subject, under any
+  predicate, that a statement makes untrue: "dislikes mangoes" replacing
+  "likes mangoes". Each one still believed is withdrawn by a retraction in
+  its own history linked to the statement (`Event.ReplacedBy`); the new
+  belief lists it under `Replaced` with its `Predicate` (`Event.Replaces`
+  keeps the snapshot), and `RememberResult.Superseded` reports it. Beliefs
+  that do not hold, notes, and beliefs stated later are listed in
+  `RememberResult.Unreplaced` instead. Restating a belief with a correction
+  writes it again with the correction, which also completes an interrupted
+  write.
+- `RememberRequest.Related` returns `RememberResult.Related`: current beliefs
+  of the subject under other predicates that may conflict, same value first,
+  then closest in meaning. The MCP `remember` tool returns them on every
+  typed write and accepts `replaces`.
+- `Client.Ask` tells an earlier belief from another predicate whole ("user
+  likes: mangoes").
+- Python: `remember(..., replaces=[...])`, `RememberResult.related` and
+  `unreplaced`, `PriorValue.predicate`.
+
+### Changed
+
+- Audit bundles containing corrections are `recall-event-v3`, checksummed
+  with the new `DigestV4`; others are still written as `recall-event-v2`.
 
 ## [0.14.0] - 2026-10-10
 

@@ -41,6 +41,12 @@ func (s *mcpServer) memoryTools() []mcpTool {
 	if s.memory.open {
 		predicate["description"] = "the relation in snake_case. Reuse one from list_predicates when it fits; a new name is defined by its first use, single-valued unless cardinality says multi"
 	}
+	replaces := map[string]any{
+		"type":        "array",
+		"maxItems":    16,
+		"description": "beliefs of the same subject, under any predicate, that this statement makes untrue now, each named by predicate and value as recall returned it. Each one still believed is withdrawn and listed under the new belief's replaced. Leave out beliefs that can still be true alongside it; a single-valued predicate's own older value needs no listing.",
+		"items":       schema(map[string]any{"predicate": map[string]any{"type": "string"}, "value": map[string]any{"type": []string{"string", "number", "boolean"}}}, "predicate", "value"),
+	}
 	tools := []mcpTool{
 		{
 			Name:        "list_predicates",
@@ -51,10 +57,11 @@ func (s *mcpServer) memoryTools() []mcpTool {
 		{
 			Name:        "remember",
 			Title:       "Remember a statement",
-			Description: "Record a typed statement (subject, predicate, value), or extract facts from free text by passing text plus statements you propose. When the server has an extraction model, text alone is enough and the server proposes the statements. Each statement requires subject, predicate, value, and evidence quoting the text. Use list_predicates first. Never drop a statement because no predicate fits: in typed mode use predicate note with the statement as the value; in text mode propose the predicate you would want, and the whole text is kept as a note and the proposal reported under unfiled. Text with no statements at all is also kept as a note. Text mode validates all proposals before writes; a backend failure reports completed results and is not atomic. A single-valued predicate replaces whatever was believed before, a multi-valued one adds to it, and restating something already believed changes nothing. Nothing is ever overwritten: the previous statement stays readable through memory_history.",
+			Description: "Record a typed statement (subject, predicate, value), or extract facts from free text by passing text plus statements you propose. When the server has an extraction model, text alone is enough and the server proposes the statements. Each statement requires subject, predicate, value, and evidence quoting the text. Use list_predicates first. Never drop a statement because no predicate fits: in typed mode use predicate note with the statement as the value; in text mode propose the predicate you would want, and the whole text is kept as a note and the proposal reported under unfiled. Text with no statements at all is also kept as a note. Text mode validates all proposals before writes; a backend failure reports completed results and is not atomic. A single-valued predicate replaces whatever was believed before, a multi-valued one adds to it, and restating something already believed changes nothing. A statement can also correct beliefs under other predicates: name them in replaces (a dislike of mangoes replaces liking them; leaving a job replaces works_at). A typed remember answers with related, the subject's current beliefs under other predicates that may conflict; when the new statement makes any of them untrue, remember it again with those in replaces. Nothing is ever overwritten: the previous statement stays readable through memory_history.",
 			InputSchema: schema(map[string]any{
 				"text":       map[string]any{"type": "string", "maxLength": 32768, "description": "Original text the statements come from. Required with statements; on a server with an extraction model it may be given alone. Cannot be combined with top-level typed fields."},
-				"statements": map[string]any{"type": "array", "maxItems": 32, "description": "Your proposed facts from text; registry validation and the fold decide what is stored.", "items": schema(map[string]any{"subject": subject, "predicate": predicate, "value": map[string]any{"type": []string{"string", "number", "boolean"}}, "evidence": map[string]any{"type": "string", "description": "Exact quote from text supporting this fact"}}, "subject", "predicate", "value", "evidence")},
+				"statements": map[string]any{"type": "array", "maxItems": 32, "description": "Your proposed facts from text; registry validation and the fold decide what is stored.", "items": schema(map[string]any{"subject": subject, "predicate": predicate, "value": map[string]any{"type": []string{"string", "number", "boolean"}}, "evidence": map[string]any{"type": "string", "description": "Exact quote from text supporting this fact"}, "replaces": replaces}, "subject", "predicate", "value", "evidence")},
+				"replaces":   replaces,
 				"subject":    subject,
 				"predicate":  predicate,
 				"value": map[string]any{
@@ -267,6 +274,9 @@ func (m *memoryRuntime) toolRemember(args json.RawMessage) (string, error) {
 		// for the first time, on an open server.
 		Cardinality string `json:"cardinality"`
 		Description string `json:"description"`
+		// Replaces names beliefs under any predicate that the statement
+		// makes untrue.
+		Replaces []recall.BeliefRef `json:"replaces"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", err
@@ -286,6 +296,9 @@ func (m *memoryRuntime) toolRemember(args json.RawMessage) (string, error) {
 	if _, textMode := fields["text"]; textMode {
 		_, dated := fields["observed_at"]
 		_, proposed := fields["statements"]
+		if _, ok := fields["replaces"]; ok {
+			return "", fmt.Errorf("in text mode, replaces belongs on each statement, not beside the text")
+		}
 		if len(fields) != 1+btoi(dated)+btoi(proposed) {
 			return "", fmt.Errorf("text mode takes text, statements, and observed_at only; propose facts with quoted evidence using list_predicates")
 		}
@@ -313,7 +326,7 @@ func (m *memoryRuntime) toolRemember(args json.RawMessage) (string, error) {
 	}
 	if m.client != nil {
 		res, err := m.client.Remember(m.ctx, recall.RememberRequest{Subject: a.Subject, Predicate: a.Predicate, Value: a.Value, Kind: a.Kind, Confidence: a.Confidence, Source: a.Source, ObservedAt: observedAt,
-			Cardinality: recall.Cardinality(a.Cardinality), Description: a.Description})
+			Cardinality: recall.Cardinality(a.Cardinality), Description: a.Description, Replaces: a.Replaces, Related: true})
 		if err != nil {
 			return "", err
 		}
@@ -321,6 +334,9 @@ func (m *memoryRuntime) toolRemember(args json.RawMessage) (string, error) {
 	}
 	if !observedAt.IsZero() {
 		return "", fmt.Errorf("observed_at requires the context-aware memory client")
+	}
+	if len(a.Replaces) > 0 {
+		return "", fmt.Errorf("replaces requires the context-aware memory client")
 	}
 	if a.Kind == "" {
 		a.Kind = "fact"

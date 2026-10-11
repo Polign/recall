@@ -45,6 +45,16 @@ type Event struct {
 	// written by RememberText. Both are empty for a statement made directly.
 	Evidence   string `json:"evidence,omitempty"`
 	EvidenceID string `json:"evidence_id,omitempty"`
+	// Replaces, on an assertion, records the beliefs under other predicates
+	// (or other values) that this statement made untrue when it was made:
+	// "dislikes mangoes" replacing "likes mangoes". Each one was withdrawn by
+	// a retraction in its own history whose ReplacedBy names this event, so
+	// every history still folds on its own; this snapshot is what lets the
+	// new belief say what it corrected.
+	Replaces []PriorValue `json:"replaces,omitempty"`
+	// ReplacedBy, on a retraction, is the event whose statement withdrew the
+	// value: a correction, not a request to forget.
+	ReplacedBy string `json:"replaced_by,omitempty"`
 }
 
 // Belief is a statement that holds at some instant: the result of folding a
@@ -256,6 +266,11 @@ func foldOpposed(events []Event, cardAt func(time.Time) Cardinality, opp *oppose
 				b.Replaced = append(append([]PriorValue(nil), b.Replaced...), prior)
 				delete(against[name], k)
 			}
+		}
+		// A correction across predicates says what it corrected, beside what
+		// it displaced under its own.
+		if len(e.Replaces) > 0 {
+			b.Replaced = append(append([]PriorValue(nil), b.Replaced...), e.Replaces...)
 		}
 		if !seen {
 			order = append(order, k)

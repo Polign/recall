@@ -63,7 +63,13 @@ func (c *Client) AskAt(ctx context.Context, question string, asOf time.Time) ([]
 		}
 		m := Memory{Text: Sentence(b.Subject, b.Predicate, b.Value), Since: b.ObservedAt, EventID: b.EventID}
 		for _, p := range b.Replaced {
-			m.Before = append(m.Before, Earlier{Text: valueText(p.Value), Since: p.ObservedAt})
+			text := valueText(p.Value)
+			// A correction across predicates names what it corrected
+			// whole: "user likes: mangoes", not just "mangoes".
+			if p.Predicate != "" && p.Predicate != b.Predicate {
+				text = Sentence(b.Subject, p.Predicate, p.Value)
+			}
+			m.Before = append(m.Before, Earlier{Text: text, Since: p.ObservedAt})
 		}
 		out = append(out, m)
 	}

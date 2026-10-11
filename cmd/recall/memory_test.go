@@ -20,10 +20,20 @@ import (
 func memoryHTTP(t *testing.T, db *fakeMemoryDB, pageCap int) *httptest.Server {
 	t.Helper()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/watermark"):
+			// No revision: the client folds uncached, as against an older server.
+			http.NotFound(w, r)
+			return
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/query"):
+			// Nothing indexed, so a search for related beliefs finds none.
+			_ = json.NewEncoder(w).Encode(map[string]any{"hits": []any{}})
+			return
+		}
 		switch r.Method {
 		case http.MethodGet:
 			if r.URL.Query().Get("typed") != "true" {
-				t.Error("listing omitted typed metadata")
+				t.Errorf("listing omitted typed metadata: %s %s", r.Method, r.URL)
 			}
 			var filter map[string]any
 			if err := json.Unmarshal([]byte(r.URL.Query().Get("filter")), &filter); err != nil {

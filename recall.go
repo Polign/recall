@@ -276,6 +276,10 @@ func OpenVocabulary(ctx context.Context) bool {
 	return engine.OpenVocabulary(ctx)
 }
 
+// BeliefRef names a belief of a statement's own subject by its predicate and
+// value, for RememberRequest.Replaces and Proposal.Replaces.
+type BeliefRef = engine.BeliefRef
+
 // Memory is one belief told as a sentence, as Client.Ask returns it.
 type Memory = engine.Memory
 

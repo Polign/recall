@@ -2,6 +2,7 @@ package engine
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -102,6 +103,14 @@ func (e Event) Metadata() map[string]any {
 	if e.EvidenceID != "" {
 		md["evidence_id"] = e.EvidenceID
 	}
+	// Stored as one JSON string, because a backend's metadata need not hold
+	// lists of objects.
+	if len(e.Replaces) > 0 {
+		md["replaces"] = encodeReplaces(e.Replaces)
+	}
+	if e.ReplacedBy != "" {
+		md["replaced_by"] = e.ReplacedBy
+	}
 	// The searchable text, for a database that indexes one metadata field
 	// lexically. The evidence is part of it, so a statement is also found by
 	// the words it was drawn from. Decoding ignores it: the event's fields are
@@ -132,7 +141,45 @@ func EventFromMetadata(id string, m map[string]any) Event {
 		ObservedAt: parseTime(str("observed_at")),
 		Evidence:   str("evidence"),
 		EvidenceID: str("evidence_id"),
+		Replaces:   decodeReplaces(str("replaces")),
+		ReplacedBy: str("replaced_by"),
 	}
+}
+
+// replacedRecord is one PriorValue as stored, with its instant in the fixed
+// storage layout.
+type replacedRecord struct {
+	Predicate  string `json:"predicate"`
+	Value      any    `json:"value"`
+	Source     string `json:"source"`
+	ObservedAt string `json:"observed_at"`
+	EventID    string `json:"event_id"`
+}
+
+func encodeReplaces(prior []PriorValue) string {
+	recs := make([]replacedRecord, len(prior))
+	for i, p := range prior {
+		recs[i] = replacedRecord{p.Predicate, p.Value, p.Source, formatTime(p.ObservedAt), p.EventID}
+	}
+	raw, _ := json.Marshal(recs)
+	return string(raw)
+}
+
+// decodeReplaces reads a stored replaces field. Anything malformed decodes
+// to nil here; DecodeEvent rejects it.
+func decodeReplaces(raw string) []PriorValue {
+	if raw == "" {
+		return nil
+	}
+	var recs []replacedRecord
+	if err := json.Unmarshal([]byte(raw), &recs); err != nil {
+		return nil
+	}
+	out := make([]PriorValue, len(recs))
+	for i, r := range recs {
+		out[i] = PriorValue{Predicate: r.Predicate, Value: r.Value, Source: r.Source, ObservedAt: parseTime(r.ObservedAt), EventID: r.EventID}
+	}
+	return out
 }
 
 // ErrInvalidEvent means a stored record cannot safely participate in a fold.
@@ -200,6 +247,31 @@ func DecodeEvent(id string, m map[string]any) (Event, error) {
 	}
 	if e.Evidence != "" && e.Retraction {
 		return invalid("evidence")
+	}
+	if raw, present := m["replaces"]; present {
+		_, ok := raw.(string)
+		if !ok || e.Retraction || len(e.Replaces) == 0 {
+			return invalid("replaces")
+		}
+		for _, p := range e.Replaces {
+			if !predicateName.MatchString(p.Predicate) || p.EventID == "" || p.ObservedAt.IsZero() || !validSources[p.Source] {
+				return invalid("replaces")
+			}
+			switch v := p.Value.(type) {
+			case string:
+				if strings.TrimSpace(v) == "" {
+					return invalid("replaces")
+				}
+			case float64, bool:
+			default:
+				return invalid("replaces")
+			}
+		}
+	}
+	if raw, present := m["replaced_by"]; present {
+		if v, ok := raw.(string); !ok || strings.TrimSpace(v) == "" || !e.Retraction || e.Value == nil {
+			return invalid("replaced_by")
+		}
 	}
 	return e, nil
 }

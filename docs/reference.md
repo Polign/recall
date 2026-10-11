@@ -122,6 +122,60 @@ replaced:    vim, user_stated, 2026-08-30T17:02:44Z
 multi-valued predicate never replaces anything, and a value restated without
 change keeps the correction it made.
 
+### Corrections across predicates
+
+Predicates are filing labels, not walls. A statement under one predicate can
+make a belief under another untrue: disliking mangoes ends liking them,
+going vegetarian ends liking steak, selling the car ends owning it. A
+statement names what it corrects in `Replaces`, each one by predicate and
+value:
+
+```go
+res, err := client.Remember(ctx, recall.RememberRequest{
+	Subject: "user", Predicate: "dislikes", Value: "mangoes",
+	Replaces: []recall.BeliefRef{{Predicate: "likes", Value: "mangoes"}},
+})
+```
+
+Each named belief that still holds is withdrawn by a retraction in its own
+history, at the moment of the correction and linked to the statement that
+made it (`ReplacedBy`). The new belief lists it under `Replaced`, with its
+`Predicate`, and `res.Superseded` reports it. A read about `likes` no longer
+returns mangoes, a read about `dislikes` says it replaced `likes: mangoes`, and
+an `AsOf` read from before the correction still shows the like.
+
+Recall decides nothing about meaning here. Whoever heard the statement, an
+agent or a person, says what it corrects; Recall checks each one and
+applies it the same way every time:
+
+- A named belief that does not hold, was stated after the correction, is a
+  note, or is under a `historical` predicate is not withdrawn. It is listed
+  in `res.Unreplaced` and the statement is stored anyway. Notes are the
+  record of what was said and historical predicates record what happened,
+  so a correction never withdraws either.
+- Only beliefs of the statement's own subject can be named.
+- Restating something already believed writes nothing, unless the
+  restatement corrects something. Then it is written with its correction.
+  That is also how a write that stopped between the statement and its
+  retractions is completed: remember it again.
+
+To help the caller decide, `RememberRequest{Related: true}` returns
+`res.Related`: the subject's current beliefs under other predicates that may
+conflict, those with the same value first, then those closest in meaning.
+The MCP `remember` tool always returns them. An agent that sees one the
+statement makes untrue remembers the statement again with it in `replaces`.
+
+`RememberText` applies the `replaces` each proposed statement carries, for a
+caller that proposes statements after reading memory. The `model` extractor
+proposes none: asked which existing beliefs a text makes untrue, a model
+retired true ones about nine times in ten on real conversations, so Recall
+does not let one decide. What Recall does on its own is the rule in
+[Exclusions](#exclusions): a value stated under a predicate ends the same
+value under the predicates it excludes.
+
+Audit bundles that contain corrections are written as `recall-event-v3`,
+checksummed with `DigestV4`; bundles without them keep `recall-event-v2`.
+
 Forgetting records a retraction rather than deleting data. A targeted retraction
 withdraws only that value: vim → emacs → retract vim leaves emacs current.
 Retracting the current value never revives one that was superseded. Clearing a

@@ -122,6 +122,30 @@ type RememberResult struct {
 	Stored     Belief   `json:"stored"`
 	Existing   bool     `json:"already_known,omitempty"`
 	Superseded []Belief `json:"superseded,omitempty"`
+	// Unreplaced lists the beliefs a statement named in Replaces that were
+	// not believed when it was made, so nothing was withdrawn for them.
+	Unreplaced []BeliefRef `json:"unreplaced,omitempty"`
+	// Related lists current beliefs about the same subject, under other
+	// predicates, that may contradict the statement: those with the same
+	// value and those closest in meaning. It is filled only on request
+	// (RememberRequest.Related). A belief listed here that the statement
+	// makes untrue is corrected by remembering the statement again with it
+	// in Replaces.
+	Related []Belief `json:"related,omitempty"`
+}
+
+// BeliefRef names a belief of the statement's own subject by what it says.
+type BeliefRef struct {
+	Predicate string `json:"predicate"`
+	Value     any    `json:"value"`
+}
+
+// correction is one belief a statement withdraws, with the history it is
+// withdrawn from.
+type correction struct {
+	predicate string
+	belief    Belief
+	events    []Event
 }
 
 // Remember records one statement.
@@ -152,6 +176,9 @@ type provenance struct {
 	// for the first time.
 	cardinality Cardinality
 	description string
+	// replaces names beliefs of the same subject that the statement makes
+	// untrue, under any predicate.
+	replaces []BeliefRef
 }
 
 // MaxObservationSkew is how far past the writer's clock an observation time
@@ -240,13 +267,25 @@ func (s *Store) remember(kind, subject, predicate string, value any, confidence 
 	// pins that, and Superseded below is only meaningful at this same ceiling.
 	now = disambiguateInstant(events, now)
 	held := sc.fold(predicate, events, now)
+	corrections, unreplaced, err := s.resolveReplaces(sc, subject, predicate, value, from.replaces, now)
+	if err != nil {
+		return zero, err
+	}
 
 	// Idempotence lives here rather than in the id: stating what is already
 	// believed is not new information, and appending it would add an event
-	// that changes no answer.
+	// that changes no answer. A restatement that corrects something is new
+	// information, so it is written, carrying the correction like any
+	// statement: that is how a correction is added to something said
+	// before, and how a write that crashed between the statement and its
+	// retractions is completed.
+	known := false
 	for _, b := range held {
 		if ValueKey(b.Value) == ValueKey(value) {
-			return RememberResult{Stored: b, Existing: true}, nil
+			if len(corrections) == 0 {
+				return RememberResult{Stored: b, Existing: true, Unreplaced: unreplaced}, nil
+			}
+			known = true
 		}
 	}
 
@@ -270,15 +309,24 @@ func (s *Store) remember(kind, subject, predicate string, value any, confidence 
 		Evidence:   from.evidence,
 		EvidenceID: from.evidenceID,
 	}
+	for _, c := range corrections {
+		prior := priorOf(c.belief)
+		prior.Predicate = c.predicate
+		ev.Replaces = append(ev.Replaces, prior)
+	}
 	if err := s.append(ev); err != nil {
 		return zero, err
 	}
 	s.invalidateExcluders(sc, subject, predicate)
+	withdrawn, err := s.withdraw(corrections, ev.ID, source, now)
+	if err != nil {
+		return zero, fmt.Errorf("recall: the statement was stored but its corrections were not all written; remember it again to complete them: %w", err)
+	}
 
 	// What this statement displaced, reported for the agent's benefit. It is
 	// derived from the fold, not from any field written on the old events.
 	var superseded []Belief
-	if sc.cardAt(predicate, now) == Single {
+	if sc.cardAt(predicate, now) == Single && !known {
 		superseded = held
 	}
 	// The same value held under a predicate this one excludes is withdrawn
@@ -294,9 +342,94 @@ func (s *Store) remember(kind, subject, predicate string, value any, confidence 
 			}
 		}
 	}
+	superseded = append(superseded, withdrawn...)
 	stored := beliefOf(ev)
 	stored.Predicate = predicate
-	return RememberResult{Stored: stored, Superseded: superseded}, nil
+	stored.Replaced = append(stored.Replaced, ev.Replaces...)
+	return RememberResult{Stored: stored, Existing: known, Superseded: superseded, Unreplaced: unreplaced}, nil
+}
+
+// resolveReplaces finds the beliefs a statement names as made untrue by it.
+// A named belief that is not held at the statement's instant, that was stated
+// after it, that is a note, or that is historical is reported as unreplaced
+// rather than failing the write: the statement is still true. Naming the statement itself, or a
+// value its own single-valued predicate already replaces, does nothing.
+func (s *Store) resolveReplaces(sc *schema, subject, predicate string, value any, refs []BeliefRef, now time.Time) ([]correction, []BeliefRef, error) {
+	var out []correction
+	var unreplaced []BeliefRef
+	seen := map[string]bool{}
+	for _, ref := range refs {
+		name := sc.canonical(s.predicateName(ref.Predicate))
+		spec, ok := sc.reg[name]
+		// A note is the record of what was said, and a historical predicate
+		// records what happened; neither becomes untrue.
+		if !ok || name == NotePredicate || spec.Historical {
+			unreplaced = append(unreplaced, ref)
+			continue
+		}
+		v, err := lenientValue(name, spec, coerceValue(spec, ref.Value))
+		if err != nil {
+			unreplaced = append(unreplaced, ref)
+			continue
+		}
+		if name == predicate && (ValueKey(v) == ValueKey(value) || sc.cardAt(predicate, now) == Single) {
+			continue
+		}
+		key := name + "\x00" + ValueKey(v)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		events, err := s.History(subject, name)
+		if err != nil {
+			return nil, nil, err
+		}
+		var found *Belief
+		for _, b := range sc.fold(name, events, now) {
+			if ValueKey(b.Value) == ValueKey(v) && b.ObservedAt.Before(now) {
+				b := b
+				found = &b
+				break
+			}
+		}
+		if found == nil {
+			unreplaced = append(unreplaced, ref)
+			continue
+		}
+		if len(events) >= MaxHistoryEvents {
+			return nil, nil, fmt.Errorf("%w: maximum %d events reached for %s", ErrIncompleteHistory, MaxHistoryEvents, name)
+		}
+		out = append(out, correction{predicate: name, belief: *found, events: events})
+	}
+	return out, unreplaced, nil
+}
+
+// withdraw appends, for each correction, a retraction of the corrected value
+// in its own history, at the instant of the statement that corrected it and
+// linked to that statement. Each history therefore folds on its own, and an
+// as-of read before the correction still sees the old belief.
+func (s *Store) withdraw(corrections []correction, by, source string, now time.Time) ([]Belief, error) {
+	var out []Belief
+	for _, c := range corrections {
+		at := disambiguateInstant(c.events, now)
+		ev := Event{
+			ID:         eventID(c.belief.Subject, c.predicate, c.belief.Value, true, at),
+			Kind:       c.belief.Kind,
+			Subject:    c.belief.Subject,
+			Predicate:  c.predicate,
+			Value:      c.belief.Value,
+			Confidence: 1,
+			Source:     source,
+			Retraction: true,
+			ObservedAt: at,
+			ReplacedBy: by,
+		}
+		if err := s.append(ev); err != nil {
+			return out, err
+		}
+		out = append(out, c.belief)
+	}
+	return out, nil
 }
 
 // Forget withdraws a belief by appending a retraction.

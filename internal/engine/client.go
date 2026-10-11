@@ -172,6 +172,17 @@ type RememberRequest struct {
 	// Both are ignored for a predicate that is already defined.
 	Cardinality Cardinality
 	Description string
+	// Replaces names beliefs of the same subject, under any predicate, that
+	// this statement makes untrue: "dislikes mangoes" replacing "likes
+	// mangoes", "lives_in Portland" replacing "moved_to Seattle". Each one
+	// still believed is withdrawn by a retraction in its own history, linked
+	// to this statement, and listed in the answer's replaced. A single-valued
+	// predicate's own old value is replaced without being named here.
+	Replaces []BeliefRef
+	// Related asks for RememberResult.Related: the subject's current beliefs
+	// under other predicates that may contradict this statement. The lookup
+	// is advice: if it fails, Related is left empty and the write stands.
+	Related bool
 }
 
 // ForgetRequest selects exactly one typed Value or All=true. False and numeric
@@ -197,8 +208,18 @@ func (c *Client) Remember(ctx context.Context, q RememberRequest) (RememberResul
 	if kind == "" {
 		kind = "fact"
 	}
-	return s.remember(kind, q.Subject, q.Predicate, q.Value, confidence, q.Source,
-		provenance{observedAt: q.ObservedAt, evidence: q.Evidence, evidenceID: q.EvidenceID, cardinality: q.Cardinality, description: q.Description})
+	res, err := s.remember(kind, q.Subject, q.Predicate, q.Value, confidence, q.Source,
+		provenance{observedAt: q.ObservedAt, evidence: q.Evidence, evidenceID: q.EvidenceID, cardinality: q.Cardinality, description: q.Description, replaces: q.Replaces})
+	if err != nil || !q.Related {
+		return res, err
+	}
+	// The statement is stored by now. Related beliefs are advice for the
+	// caller, so a failed lookup leaves them out rather than reporting a
+	// write that succeeded as failed.
+	if related, err := s.related(res.Stored, relatedLimit); err == nil {
+		res.Related = related
+	}
+	return res, nil
 }
 
 // Forget appends a targeted or blanket retraction.

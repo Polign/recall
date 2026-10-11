@@ -83,11 +83,20 @@ class RememberResult:
     stored: Belief
     already_known: bool
     superseded: tuple[Belief, ...]
+    # Current beliefs of the same subject, under other predicates, that may
+    # contradict the statement. When it makes any of them untrue, remember it
+    # again with those in `replaces`.
+    related: tuple[Belief, ...] = ()
+    # Beliefs named in `replaces` that were not believed, so nothing was
+    # withdrawn for them, each as {"predicate": ..., "value": ...}.
+    unreplaced: tuple[dict[str, Any], ...] = ()
 
     @classmethod
     def decode(cls, data: dict[str, Any]) -> RememberResult:
         return cls(_belief(data["stored"]), data.get("already_known", False),
-                   tuple(_belief(b) for b in data.get("superseded", [])))
+                   tuple(_belief(b) for b in data.get("superseded") or []),
+                   tuple(_belief(b) for b in data.get("related") or []),
+                   tuple(data.get("unreplaced") or []))
 
 
 @dataclass(frozen=True)
@@ -548,7 +557,8 @@ class Client:
                  statements: Sequence[Mapping[str, Any]] | None = None,
                  kind: str | None = None, confidence: float | None = None,
                  source: str | None = None,
-                 observed_at: str | datetime | None = None) -> RememberResult | ExtractionResult | TextResult:
+                 observed_at: str | datetime | None = None,
+                 replaces: Sequence[Mapping[str, Any]] | None = None) -> RememberResult | ExtractionResult | TextResult:
         """Record a typed statement, or the statements in a piece of text.
 
         In text mode, pass `statements` your agent proposes, or leave them out
@@ -561,11 +571,18 @@ class Client:
         imported conversation; omitted means now. A statement dated before a
         later one for the same subject and predicate is kept as history and
         does not replace it. The server refuses times in the future.
+
+        `replaces` names beliefs of the same subject, under any predicate,
+        that a typed statement makes untrue, each as {"predicate": ...,
+        "value": ...}: remember("user", "dislikes", "mangoes",
+        replaces=[{"predicate": "likes", "value": "mangoes"}]). A typed
+        result lists under `related` the beliefs that may need it. In text
+        mode each proposed statement may carry its own "replaces".
         """
         dated = {"observed_at": _instant(observed_at, "observed_at")} if observed_at is not None else {}
         if self._text:
             if text is None or statements is not None or value is not _MISSING or any(
-                    x is not None for x in (subject, predicate, kind, confidence, source)):
+                    x is not None for x in (subject, predicate, kind, confidence, source, replaces)):
                 raise ValueError("a text client remembers text alone: remember(text=...)")
             data = self._tool("remember", {"text": text, **dated})
             return TextResult(tuple(Remembered(r.get("text", ""), tuple(r.get("replaces") or ()),
@@ -573,8 +590,8 @@ class Client:
                                     for r in data.get("remembered") or ()),
                               bool(data.get("kept_as_text")))
         if text is not None:
-            if any(x is not None for x in (subject, predicate, kind, confidence, source)) or value is not _MISSING:
-                raise ValueError("text mode cannot be combined with typed fields")
+            if any(x is not None for x in (subject, predicate, kind, confidence, source, replaces)) or value is not _MISSING:
+                raise ValueError("text mode cannot be combined with typed fields; put replaces on each statement")
             proposed = {"statements": list(statements)} if statements is not None else {}
             data = self._tool("remember", {"text": text, **proposed, **dated})
             return ExtractionResult(tuple(data.get("proposals") or []),
@@ -587,6 +604,8 @@ class Client:
             raise ValueError("typed remember requires subject, predicate, and value")
         args = {"subject": subject, "predicate": predicate, "value": value, **dated}
         args.update({k: v for k, v in {"kind": kind, "confidence": confidence, "source": source}.items() if v is not None})
+        if replaces is not None:
+            args["replaces"] = [{"predicate": r["predicate"], "value": r["value"]} for r in replaces]
         return RememberResult.decode(self._tool("remember", args))
 
     def ask(self, question: str, *, as_of: str | datetime | None = None) -> list[Memory]:

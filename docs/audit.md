@@ -73,6 +73,12 @@ adds `evidence` and `evidence_id`, and its bundles are checksummed with
 `DigestV3`. Bundles declaring `recall-event-v1` still replay and verify with
 `DigestV2`; a v1 bundle carrying evidence is refused.
 
+`recall-event-v3` adds `replaces` and `replaced_by`, the links a correction
+across predicates writes, and its bundles are checksummed with `DigestV4`. A
+bundle is written as v3 only when an event carries one of them; otherwise it
+is written as v2 and checksums as before. A v1 or v2 bundle carrying them is
+refused.
+
 `recall-fold-v3` adds two registry rules: a retroactive definition (from
 `Client.Redefine`) governs the predicate's history before it, and an
 automatic definition of a name that is already defined is ignored. A bundle
@@ -87,8 +93,10 @@ rewritten or assigned a new event ID by this feature.
 string identity. It intentionally does not detect `Neovim` changing to `neovim`.
 `DigestV2(events)` returns `sha256:v2:<hex>` and covers exact typed event fields
 except evidence. `DigestV3(events)` returns `sha256:v3:<hex>` and also covers
-each event's `evidence` and `evidence_id`. `VerifyDigest(events, expected)`
-dispatches between the three formats, preserving legacy verification. The golden fixtures in `testdata` were computed separately
+each event's `evidence` and `evidence_id`. `DigestV4(events)` returns
+`sha256:v4:<hex>` and also covers `replaces` and `replaced_by`.
+`VerifyDigest(events, expected)` dispatches between the four formats,
+preserving legacy verification. The golden fixtures in `testdata` were computed separately
 using Python SHA-256 and IEEE-754 packing.
 
 Both new hashes use a stream of length-prefixed UTF-8 fields: decimal byte
@@ -113,7 +121,10 @@ event count. Each sorted event contributes these fields:
 
 `DigestV3` starts its stream with `recall-events-digest-v3` instead and, after
 field 10, adds two more for every event, empty or not: 11, evidence, and 12,
-evidence ID, as exact strings.
+evidence ID, as exact strings. `DigestV4` starts with
+`recall-events-digest-v4` and adds, after field 12, two more: 13, `replaces`
+as its stored JSON string (empty when there is none), and 14, the
+`replaced_by` event ID.
 
 This distinguishes positive and negative zero and preserves string case and
 whitespace. It hashes logical Event fields, not JSON source bytes: equivalent
@@ -122,8 +133,8 @@ time zones and JSON property orders produce the same checksum. Derived
 
 The bundle checksum stream contains, in order: bundle version, event version,
 fold version, scope subject, scope predicate, as-of time in the same canonical
-UTC format, the full event digest (`sha256:v3:` for `recall-event-v2`,
-`sha256:v2:` for `recall-event-v1`), and the decimal registry entry
+UTC format, the full event digest (`sha256:v4:` for `recall-event-v3`, `sha256:v3:` for
+`recall-event-v2`, `sha256:v2:` for `recall-event-v1`), and the decimal registry entry
 count. Registry entries follow sorted by name, contributing name, cardinality,
 value type, and description as exact strings. An omitted/default value type
 (`""`) remains distinct from an explicit `"string"`. The checksum is prefixed
