@@ -96,6 +96,9 @@ func (e Event) Metadata() map[string]any {
 	// field a type the filter language cannot compare.
 	if e.Value != nil {
 		md["value"] = e.Value
+		// The value's identity, for finding one value under every predicate
+		// whatever its capitalization. Derived, like observed_ms.
+		md["value_key"] = ValueKey(e.Value)
 	}
 	if e.Evidence != "" {
 		md["evidence"] = e.Evidence

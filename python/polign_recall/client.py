@@ -58,6 +58,10 @@ class Belief:
     # What this belief replaced when it was stated, one step back: the
     # correction, delivered with the answer. Empty when it replaced nothing.
     replaced: tuple[PriorValue, ...] = ()
+    # The subject's current beliefs under other predicates that hold the same
+    # value, such as a dislike beside a like; each PriorValue names its
+    # predicate.
+    elsewhere: tuple[PriorValue, ...] = ()
     # Whole days between when this was stated and the moment asked about
     # (as_of, or today). None from a server that does not send it.
     days_ago: int | None = None
@@ -144,6 +148,8 @@ class Memory:
     since: str
     days_ago: int
     before: tuple[Earlier, ...] = ()
+    # What else is believed about the same thing in other words.
+    also: tuple[Earlier, ...] = ()
 
 
 def _known(cls: type, data: Any) -> dict[str, Any]:
@@ -157,9 +163,10 @@ def _known(cls: type, data: Any) -> dict[str, Any]:
 
 def _belief(data: Any) -> Belief:
     known = _known(Belief, data)
-    known["replaced"] = tuple(
-        PriorValue(**{"value": "", "source": "", "observed_at": "", "event_id": "", **_known(PriorValue, p)})
-        for p in known.get("replaced") or ())
+    for name in ("replaced", "elsewhere"):
+        known[name] = tuple(
+            PriorValue(**{"value": "", "source": "", "observed_at": "", "event_id": "", **_known(PriorValue, p)})
+            for p in known.get(name) or ())
     return Belief(**{"subject": "", "predicate": "", "value": "", "confidence": 0.0, "source": "",
                      "kind": "", "observed_at": "", "event_id": "", **known})
 
@@ -618,7 +625,8 @@ class Client:
             args["as_of"] = _instant(as_of, "as_of")
         data = self._tool("recall", args)
         return [Memory(m.get("text", ""), m.get("since", ""), int(m.get("days_ago", 0)),
-                       tuple(Earlier(e.get("text", ""), e.get("since", "")) for e in m.get("before") or ()))
+                       tuple(Earlier(e.get("text", ""), e.get("since", "")) for e in m.get("before") or ()),
+                       tuple(Earlier(e.get("text", ""), e.get("since", "")) for e in m.get("also") or ()))
                 for m in data.get("memories") or ()]
 
     def forget_text(self, text: str) -> list[str]:

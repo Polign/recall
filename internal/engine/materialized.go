@@ -45,6 +45,29 @@ type materializedEntry struct {
 type Materialization struct {
 	mu      sync.Mutex
 	entries map[pair]materializedEntry
+	// values caches which pairs of a subject have ever held a value, for
+	// Belief.Elsewhere, under the same revision rules as entries.
+	values map[valueKey]valueEntry
+}
+
+// valueKey is a subject and a value's identity.
+type valueKey struct{ subject, value string }
+
+type valueEntry struct {
+	watermark string
+	pairs     []pair
+	filledAt  time.Time
+}
+
+// invalidateValue drops the cached pairs for one subject and value, which a
+// write of that value changes.
+func (m *Materialization) invalidateValue(subject string, value any) {
+	if m == nil || value == nil {
+		return
+	}
+	m.mu.Lock()
+	delete(m.values, valueKey{subject, ValueKey(value)})
+	m.mu.Unlock()
 }
 
 // invalidate drops one pair's cached fold. A write knows exactly which pair it
@@ -132,4 +155,39 @@ func (b requestBackend) Watermark(collection string) (string, error) {
 		return "", ErrWatermarkUnsupported
 	}
 	return w.Watermark(b.ctx, collection)
+}
+
+// pairsHolding lists the pairs of subject with an event holding value, read
+// through the materialized view when the backend reports revisions, so a
+// repeated read costs no listing.
+func (s *Store) pairsHolding(subject string, value any) ([]pair, error) {
+	w, ok := s.db.(interface{ Watermark(string) (string, error) })
+	if !ok || s.materialized == nil {
+		return s.listPairsHolding(subject, value)
+	}
+	k := valueKey{subject, ValueKey(value)}
+	rev, err := w.Watermark(s.collection)
+	if err != nil || rev == "" {
+		return s.listPairsHolding(subject, value)
+	}
+	m := s.materialized
+	m.mu.Lock()
+	cached, exists := m.values[k]
+	m.mu.Unlock()
+	if exists && cached.watermark == rev && s.now().Sub(cached.filledAt) < materializeTTL {
+		return append([]pair(nil), cached.pairs...), nil
+	}
+	pairs, err := s.listPairsHolding(subject, value)
+	if err != nil {
+		return nil, err
+	}
+	if after, err := w.Watermark(s.collection); err == nil && after == rev {
+		m.mu.Lock()
+		if m.values == nil || len(m.values) >= 1024 {
+			m.values = make(map[valueKey]valueEntry)
+		}
+		m.values[k] = valueEntry{watermark: rev, pairs: append([]pair(nil), pairs...), filledAt: s.now()}
+		m.mu.Unlock()
+	}
+	return pairs, nil
 }

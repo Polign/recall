@@ -570,6 +570,9 @@ type Query struct {
 	// weeks ago", "last Saturday", "in March") as a hint to look at that
 	// span first. The hint only reorders candidates; it never drops any.
 	NoTimeHint bool
+	// NoElsewhere leaves Belief.Elsewhere empty, for a caller that does not
+	// want the extra lookups. Client reads otherwise fill it.
+	NoElsewhere bool
 }
 
 // Recall returns the beliefs that hold at the query's instant.
@@ -1083,6 +1086,7 @@ func (s *Store) append(e Event) error {
 		return err
 	}
 	s.materialized.invalidate(pair{normalizeSubject(e.Subject), strings.TrimSpace(e.Predicate)})
+	s.materialized.invalidateValue(normalizeSubject(e.Subject), e.Value)
 	return nil
 }
 

@@ -32,10 +32,23 @@
   of the subject under other predicates that may conflict, same value first,
   then closest in meaning. The MCP `remember` tool returns them on every
   typed write and accepts `replaces`.
+- `RememberText` offers the extractor the beliefs closest to the text
+  through `recall.KnownBeliefs(ctx)`; the `model` extractor lists them and
+  the model copies the ones the text makes untrue into `replaces`. Copies
+  that match no listed belief are dropped.
+- Read-time safety net: each belief a client read returns lists under
+  `Belief.Elsewhere` the subject's current beliefs under other predicates
+  holding the same value, whatever its capitalization, so a correction that
+  was never linked is still visible. `Ask` and the MCP text tools report it
+  as `also`; the MCP `recall` tool returns `elsewhere`. Covers the first 10
+  typed beliefs, runs the lookups side by side, uses the materialized cache,
+  and never fails a read. `Query.NoElsewhere` turns it off.
+- Events carry a derived `value_key` metadata field (not part of the event or
+  its digest); the Qdrant backend indexes it in new collections.
 - `Client.Ask` tells an earlier belief from another predicate whole ("user
   likes: mangoes").
 - Python: `remember(..., replaces=[...])`, `RememberResult.related` and
-  `unreplaced`, `PriorValue.predicate`.
+  `unreplaced`, `PriorValue.predicate`, `Belief.elsewhere`, `Memory.also`.
 
 ### Changed
 

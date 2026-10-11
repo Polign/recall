@@ -173,6 +173,32 @@ does not let one decide. What Recall does on its own is the rule in
 [Exclusions](#exclusions): a value stated under a predicate ends the same
 value under the predicates it excludes.
 
+#### When nobody linked the correction
+
+A correction can be missed: the data was written before this existed, there
+was no model, or the model did not see the conflict. Reads cover that case.
+Each belief a client read returns lists under `Elsewhere` the subject's
+current beliefs under other predicates that hold the same value, with each
+one's predicate and when it was stated:
+
+```text
+value:      mangoes            (likes, 2026-10-09T18:18:56Z)
+elsewhere:  dislikes mangoes   (2026-10-09T18:19:22Z)
+```
+
+The reader sees both and their dates instead of one predicate alone; the
+newer statement usually holds, and remembering it again with the older one
+in `Replaces` records the correction. `Ask` and the text tools say the same
+under `also`. Nothing is decided at read time: `Elsewhere` only reports.
+
+The lookup matches values whatever their capitalization, covers the first 10
+typed beliefs of an answer, runs side by side, and is cached with the other
+materialized reads. A lookup that fails leaves `Elsewhere` empty rather than
+failing the read. `Query{NoElsewhere: true}` turns it off. Events now carry a
+derived `value_key` metadata field for it (not part of the event or its
+checksum); events written earlier are found by their stored value. On
+Qdrant, `value_key` is indexed in collections created from this release on.
+
 Audit bundles that contain corrections are written as `recall-event-v3`,
 checksummed with `DigestV4`; bundles without them keep `recall-event-v2`.
 

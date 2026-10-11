@@ -18,6 +18,11 @@ type Memory struct {
 	Since time.Time `json:"since"`
 	// Before lists, as text, what this replaced, with when each was stated.
 	Before []Earlier `json:"before,omitempty"`
+	// Also lists, as text, what else is believed about the same subject and
+	// value under another wording, with when it was stated: "user likes:
+	// mangoes" beside "user dislikes: mangoes". The newer one is usually
+	// the one that holds.
+	Also []Earlier `json:"also,omitempty"`
 	// EventID identifies the statement, for history and audits.
 	EventID string `json:"event_id"`
 }
@@ -70,6 +75,9 @@ func (c *Client) AskAt(ctx context.Context, question string, asOf time.Time) ([]
 				text = Sentence(b.Subject, p.Predicate, p.Value)
 			}
 			m.Before = append(m.Before, Earlier{Text: text, Since: p.ObservedAt})
+		}
+		for _, p := range b.Elsewhere {
+			m.Also = append(m.Also, Earlier{Text: Sentence(b.Subject, p.Predicate, p.Value), Since: p.ObservedAt})
 		}
 		out = append(out, m)
 	}

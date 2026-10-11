@@ -219,6 +219,7 @@ var indexed = map[string]string{
 	"predicate":    "keyword",
 	"kind":         "keyword",
 	"observed_ms":  "float",
+	"value_key":    "keyword",
 	"recall_agent": "keyword",
 	"record":       "keyword",
 }

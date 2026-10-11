@@ -287,6 +287,13 @@ func (c *Client) Recall(ctx context.Context, q Query) ([]Belief, error) {
 		return nil, err
 	}
 	result, err := s.Recall(q)
+	if err == nil && !q.NoElsewhere {
+		asOf := q.AsOf
+		if asOf.IsZero() {
+			asOf = s.now().UTC()
+		}
+		result = s.attachElsewhere(result, asOf)
+	}
 	if err == nil {
 		err = ctx.Err()
 	}

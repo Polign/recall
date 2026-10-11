@@ -85,6 +85,12 @@ type Belief struct {
 	// is in the history. Empty when the belief displaced nothing, which is
 	// always the case for a multi-valued predicate.
 	Replaced []PriorValue `json:"replaced,omitempty"`
+	// Elsewhere lists the subject's current beliefs under other predicates
+	// that hold the same value, each with its predicate and when it was
+	// stated: dislikes mangoes beside likes mangoes. A correction that was
+	// never linked shows up here, so a reader is not answered from one
+	// predicate alone. Client reads fill it unless Query.NoElsewhere is set.
+	Elsewhere []PriorValue `json:"elsewhere,omitempty"`
 }
 
 // PriorValue is a value that a newer assertion displaced.

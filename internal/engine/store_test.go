@@ -3,6 +3,7 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -53,6 +54,13 @@ func (f *fakeDB) matching(filter map[string]any, limit int) []StoredVector {
 		ok := true
 		for k, want := range filter {
 			if r, isRange := want.(map[string]any); isRange {
+				if in, has := r["$in"].([]any); has {
+					ok = slices.ContainsFunc(in, func(v any) bool { return fmt.Sprint(rec.Metadata[k]) == fmt.Sprint(v) })
+					if !ok {
+						break
+					}
+					continue
+				}
 				got, _ := rec.Metadata[k].(float64)
 				if lo, has := r["$gte"].(float64); has && got < lo {
 					ok = false

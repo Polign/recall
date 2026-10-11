@@ -25,24 +25,12 @@ func (s *Store) related(b Belief, limit int) ([]Belief, error) {
 		out = append(out, c)
 	}
 
-	events, err := s.eventsMatching(map[string]any{"subject": b.Subject, "value": b.Value}, 200)
-	if nothingYet(err) {
-		return nil, nil
-	}
+	same, err := s.sameValue(b.Subject, b.Value, s.now())
 	if err != nil {
 		return nil, err
 	}
-	now := s.now()
-	for _, p := range dedupePairs(events) {
-		beliefs, err := s.pairBeliefs(p, now)
-		if err != nil {
-			return nil, err
-		}
-		for _, c := range beliefs {
-			if ValueKey(c.Value) == ValueKey(b.Value) {
-				add(c)
-			}
-		}
+	for _, c := range same {
+		add(c)
 	}
 
 	near, err := s.Recall(Query{Text: (Event{Subject: b.Subject, Predicate: b.Predicate, Value: b.Value}).Text(),
