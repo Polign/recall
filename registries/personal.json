@@ -4,6 +4,15 @@
     "value_type": "string",
     "description": "A price, cost, count, or other quantity the subject has now"
   },
+  "cancelled": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "Something the subject planned and then called off",
+    "excludes": [
+      "plans"
+    ],
+    "historical": true
+  },
   "date": {
     "cardinality": "single",
     "value_type": "string",
@@ -24,6 +33,15 @@
     "cardinality": "multi",
     "value_type": "string",
     "description": "Something the subject dislikes or avoids"
+  },
+  "gave_away": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "Something the subject gave away, sold, lost, or got rid of",
+    "excludes": [
+      "owns"
+    ],
+    "historical": true
   },
   "goal": {
     "cardinality": "multi",

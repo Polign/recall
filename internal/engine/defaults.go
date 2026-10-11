@@ -153,6 +153,8 @@ var starters = map[string]func() Registry{
 			"date":         one(typeString, "When the subject happens, happened, or is due"),
 			"relationship": many(typeString, "A person in the subject's life and how they are related, such as sister Emma"),
 			"owns":         many(typeString, "Something the subject owns or has"),
+			"gave_away":    historical(excluding(many(typeString, "Something the subject gave away, sold, lost, or got rid of"), "owns")),
+			"cancelled":    historical(excluding(many(typeString, "Something the subject planned and then called off"), "plans")),
 			"likes":        excluding(many(typeString, "Something the subject likes, enjoys, or prefers"), "dislikes"),
 			"dislikes":     many(typeString, "Something the subject dislikes or avoids"),
 			"did":          historical(many(typeString, "Something the subject did or that happened, with its date when known")),
