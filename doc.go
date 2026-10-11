@@ -1,6 +1,9 @@
-// Package recall is the typed agent-memory layer: a closed registry of
-// predicates, an append-only event log per subject, and the fold that turns
-// that log into what the agent believes, now or at any past instant.
+// Package recall is the typed agent-memory layer: a registry of predicates
+// that declares each one's cardinality, type, and which predicates contradict
+// it, an append-only event log per subject, and the fold that turns that log
+// into what the agent believes, now or at any past instant. The starter
+// registries cover personal, coding, support, sales, and voice agents; an
+// application adds its own predicates, or lets writes define them.
 //
 // The central decision is that a belief is derived, never mutated. An earlier
 // design flipped a record's status to "superseded" in a second write after

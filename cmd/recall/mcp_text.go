@@ -31,7 +31,7 @@ func (s *mcpServer) textTools() []mcpTool {
 		{
 			Name:        "recall",
 			Title:       "Recall",
-			Description: "Ask what is remembered, in words, before assuming anything about the user. Answers are what is believed now, as sentences. Each lists under before what it replaced and when, so a correction comes with the answer, and under also anything else believed about the same thing in other words, such as a later dislike beside a like; the newer statement usually holds. days_ago says how long ago it was stated. A time named in the question, such as \"last week\", is searched first. Pass as_of to ask what was believed at an earlier instant.",
+			Description: "Ask what is remembered, in words, before assuming anything about the user. Answers are what is believed now, as sentences. Each lists under before what it replaced and when, so a correction comes with the answer, and under elsewhere anything else believed about the same thing in other words, such as a later dislike beside a like; the newer statement usually holds. days_ago says how long ago it was stated. A time named in the question, such as \"last week\", is searched first. Pass as_of to ask what was believed at an earlier instant.",
 			InputSchema: schema(map[string]any{
 				"question": map[string]any{"type": "string", "description": "what you want to know"},
 				"as_of": map[string]any{
@@ -144,9 +144,9 @@ type recalled struct {
 	Since   string    `json:"since"`
 	DaysAgo int       `json:"days_ago"`
 	Before  []earlier `json:"before,omitempty"`
-	// Also is what else is believed about the same thing in other words,
+	// Elsewhere is what else is believed about the same thing in other words,
 	// such as a later dislike beside a like.
-	Also []earlier `json:"also,omitempty"`
+	Elsewhere []earlier `json:"elsewhere,omitempty"`
 }
 
 type earlier struct {
@@ -184,8 +184,8 @@ func (m *memoryRuntime) textRecall(args json.RawMessage) (string, error) {
 		for _, e := range mem.Before {
 			r.Before = append(r.Before, earlier{Text: e.Text, Since: day(e.Since)})
 		}
-		for _, e := range mem.Also {
-			r.Also = append(r.Also, earlier{Text: e.Text, Since: day(e.Since)})
+		for _, e := range mem.Elsewhere {
+			r.Elsewhere = append(r.Elsewhere, earlier{Text: e.Text, Since: day(e.Since)})
 		}
 		out = append(out, r)
 	}

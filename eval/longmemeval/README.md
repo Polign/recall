@@ -59,3 +59,14 @@ Useful flags on `run.py`:
 counted inside their type, as upstream does, and also on a line of their
 own. It also prints session recall and NDCG at 5 and 10 for the retrieval
 methods, leaving out abstention questions.
+
+## Corrections proposed by a model
+
+`retired.py` lists what a model-driven corrector retired in the `ku-correct`
+runs (branch `at/corrective-memory`, `ku_correct.sh`): for each retired
+belief, the statement that retired it, the words the model judged by, and
+the user turn they came from. `retired-judged.jsonl` is that list with a
+verdict per row, scored by hand against the conversation: of 35 retirements
+across 77 knowledge-update conversations, 1 was a real correction, 2 are
+unclear, and 32 retired a belief that was still true. The post at
+https://polign.com/model-judged-corrections reports it.

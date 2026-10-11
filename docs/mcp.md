@@ -5,18 +5,17 @@ Any host that supports MCP's stdio transport can launch the server and use its
 tools. The [Claude Code plugin](https://github.com/Polign/polign/tree/main/plugins/recall)
 is one ready-made integration.
 
-The development version of the Polign CLI also provides `polign recall skill`:
-an embedded agent guide covering setup, tool calls, correction rules, and history.
-It prints Markdown offline, without requiring a configured database. This command
-is pending a Polign release; it is not part of Polign 0.6.6.
+`recall skill` prints an agent guide covering setup, tool calls, correction
+rules, and history, as Markdown, offline, without a configured database.
 
 ## Connect to your memory backend
 
-Install [Polign v0.6.4 or later](https://github.com/Polign/polign#install) and
-start or connect to a Polign database. Configure your host to launch:
+`recall setup` does all of this for a local database. To connect by hand,
+install [Polign v0.8.0 or later](https://github.com/Polign/polign#install),
+start or connect to a Polign database, and configure your host to launch:
 
 ```sh
-polign mcp -memory-only -write
+recall mcp -write
 ```
 
 Set the connection environment for that process:
@@ -34,8 +33,8 @@ For hosts using the common `mcpServers` configuration format:
 {
   "mcpServers": {
     "recall": {
-      "command": "/absolute/path/to/polign",
-      "args": ["mcp", "-memory-only", "-write"],
+      "command": "/absolute/path/to/recall",
+      "args": ["mcp", "-write"],
       "env": {
         "POLIGN_URL": "http://127.0.0.1:23000",
         "POLIGN_COLLECTION": "recall_demo"

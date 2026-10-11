@@ -90,8 +90,8 @@ func TestAskSaysWhatElseIsBelieved(t *testing.T) {
 	}
 	for _, m := range memories {
 		if strings.Contains(m.Text, "likes: mangoes") && !strings.Contains(m.Text, "dislikes") {
-			if len(m.Also) != 1 || m.Also[0].Text != "user dislikes: mangoes" {
-				t.Fatalf("like's also = %+v", m.Also)
+			if len(m.Elsewhere) != 1 || m.Elsewhere[0].Text != "user dislikes: mangoes" {
+				t.Fatalf("like's elsewhere = %+v", m.Elsewhere)
 			}
 			return
 		}

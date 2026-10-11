@@ -1,19 +1,51 @@
 # Polign Recall
 
-**Agents remember things that stop being true.**
+Typed, durable memory for agents. Every fact is a record. Every correction is
+either a rule you declared or a statement the agent made. No model decides what
+to forget.
 
-Polign Recall gives agents typed memory with explicit correction rules and
-queryable history. When a fact changes, the new value replaces the old one by a
-rule, not by a model's judgment. The old value stays on record, so you can ask
-what an agent believed at any earlier moment and see why the answer changed.
+```sh
+pip install polign-recall          # Python client; brings the server with it
+go get github.com/Polign/recall    # Go
+recall mcp -write                  # MCP over stdio: remember, recall, forget, history
+```
 
-Agents share that memory across processes and sessions. One agent can record a
-preference, another can correct it, and both read the same current value and
-the same history.
+What a session looks like, with the personal starter registry:
 
-Recall can also [resume an agent from its records](#resuming-an-agent), not from
-a process or container snapshot, when the process crashes or moves to another
-machine.
+```text
+remember(user, likes, mangoes)
+remember(user, dislikes, mangoes)
+  -> superseded: [likes: mangoes]          # the registry says dislikes excludes likes
+
+recall(user, dislikes)
+  -> mangoes   replaced: [likes: mangoes]  # the correction arrives with the answer
+
+remember(user, goal, "run a marathon")
+remember(user, did,  "run a marathon")
+recall(user, goal)
+  -> run a marathon   elsewhere: [did: run a marathon]   # no rule joins goal and did,
+                                                         # so the read shows both
+
+remember(user, did, "run a marathon",
+         replaces=[goal: "run a marathon", goal: "learn piano"])
+  -> replaced:   [goal: run a marathon]
+  -> unreplaced: [goal: learn piano]       # never believed, so reported, not dropped
+```
+
+Nothing is deleted. Every replaced value stays in history, and `as_of` answers
+what was believed at any earlier moment.
+
+Why not let a model reconcile memory? We tried it on 77 LongMemEval
+conversations: shown each new statement and the beliefs it might end, and
+asked which ones it made untrue, gpt-4o-mini retired 35 beliefs, and 32 of
+them were still true ([the measurement](https://polign.com/model-judged-corrections)).
+So Recall applies the rules the registry declares, shows the candidates, and
+lets your agent confirm the rest.
+
+Agents share memory across processes and sessions: one agent records a
+preference, another corrects it, and both read the same current value and the
+same history. Recall can also [resume an agent from its records](#resuming-an-agent)
+when its process crashes or moves to another machine.
 
 Use it through **Go**, **Python**, or **MCP**, with
 [Polign](https://github.com/Polign/polign) as the storage backend. Go applications
@@ -102,13 +134,15 @@ A memory has a **subject**, a **predicate**, and a **typed value**:
 | `recall-demo` | `prefers_test_framework` | `pytest` |
 | `recall-demo` | `uses_technology` | `Go` |
 
-The registry defines which predicates an application accepts, their value types,
-and whether they hold one value or several. Recall includes
+Predicates live in a registry that declares each one's value type, whether it
+holds one value or several, and which predicates it contradicts (`dislikes`
+excludes `likes`, `gave_away` excludes `owns`). Recall includes
 [starter registries](docs/reference.md#starter-registries) for coding, personal
-assistant, support, sales, and voice agents. You can
-[extend the registry](docs/reference.md#the-registry) for your application, and
-[change it later](docs/reference.md#changing-the-registry) without changing what
-the agent remembered before. A value can be text, a number, a boolean, an enum,
+assistant, support, sales, and voice agents. Add your own predicates
+([the registry](docs/reference.md#the-registry)), and the extractor files
+statements under them; you can
+[change the registry later](docs/reference.md#changing-the-registry) without
+changing what the agent remembered before. A value can be text, a number, a boolean, an enum,
 a date, or a [reference to another subject](docs/reference.md#references-between-subjects).
 
 For a single-valued predicate such as `prefers_editor`, a new assertion replaces

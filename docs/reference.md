@@ -167,9 +167,11 @@ statement makes untrue remembers the statement again with it in `replaces`.
 
 `RememberText` applies the `replaces` each proposed statement carries, for a
 caller that proposes statements after reading memory. The `model` extractor
-proposes none: asked which existing beliefs a text makes untrue, a model
-retired true ones about nine times in ten on real conversations, so Recall
-does not let one decide. What Recall does on its own is the rule in
+proposes none: asked which existing beliefs a statement makes untrue, on 77
+LongMemEval conversations gpt-4o-mini retired 35 beliefs and 32 of them were
+still true ([the measurement](https://polign.com/model-judged-corrections);
+the scored list is `eval/longmemeval/retired-judged.jsonl`), so Recall does
+not let one decide. What Recall does on its own is the rule in
 [Exclusions](#exclusions): a value stated under a predicate ends the same
 value under the predicates it excludes.
 
@@ -189,7 +191,7 @@ elsewhere:  dislikes mangoes   (2026-10-09T18:19:22Z)
 The reader sees both and their dates instead of one predicate alone; the
 newer statement usually holds, and remembering it again with the older one
 in `Replaces` records the correction. `Ask` and the text tools say the same
-under `also`. Nothing is decided at read time: `Elsewhere` only reports.
+under `elsewhere` as well. Nothing is decided at read time: `Elsewhere` only reports.
 
 The lookup matches values whatever their capitalization, covers the first 10
 typed beliefs of an answer, runs side by side, and is cached with the other

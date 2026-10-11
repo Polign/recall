@@ -149,7 +149,7 @@ class Memory:
     days_ago: int
     before: tuple[Earlier, ...] = ()
     # What else is believed about the same thing in other words.
-    also: tuple[Earlier, ...] = ()
+    elsewhere: tuple[Earlier, ...] = ()
 
 
 def _known(cls: type, data: Any) -> dict[str, Any]:
@@ -626,7 +626,7 @@ class Client:
         data = self._tool("recall", args)
         return [Memory(m.get("text", ""), m.get("since", ""), int(m.get("days_ago", 0)),
                        tuple(Earlier(e.get("text", ""), e.get("since", "")) for e in m.get("before") or ()),
-                       tuple(Earlier(e.get("text", ""), e.get("since", "")) for e in m.get("also") or ()))
+                       tuple(Earlier(e.get("text", ""), e.get("since", "")) for e in m.get("elsewhere") or ()))
                 for m in data.get("memories") or ()]
 
     def forget_text(self, text: str) -> list[str]:

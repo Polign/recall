@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- The same value held under another predicate is reported as `elsewhere`
+  everywhere: `Memory.Elsewhere` in Go (was `Also`), `elsewhere` in the MCP
+  text `recall` tool and in Python's `Memory` (was `also`), matching
+  `Belief.Elsewhere` and the typed `recall` tool.
+
 ## [0.15.0] - 2026-10-11
 
 Memory no longer stops at the predicate a fact was filed under. A statement
@@ -7,6 +16,22 @@ can end a belief filed elsewhere, reads show the same value wherever it is
 held, and nothing is withdrawn by guesswork: every correction is either a
 registry rule or an explicit statement, and what cannot be withdrawn is
 reported rather than dropped.
+
+No model proposes corrections. We measured that on 77 LongMemEval
+conversations: shown each new statement and the beliefs it might end, and
+asked which ones it made untrue, gpt-4o-mini retired 35 beliefs, and 32 of
+them were still true ([the measurement](https://polign.com/model-judged-corrections)).
+Recall applies the registry's rules, shows the candidates, and lets the agent
+confirm the rest.
+
+```text
+remember(user, likes, mangoes)
+remember(user, dislikes, mangoes)      -> superseded: [likes: mangoes]
+recall(user, goal)                     -> run a marathon   elsewhere: [did: run a marathon]
+remember(user, did, "run a marathon", replaces=[goal: "run a marathon", goal: "learn piano"])
+                                       -> replaced: [goal: run a marathon]
+                                       -> unreplaced: [goal: learn piano]
+```
 
 ### Added
 
