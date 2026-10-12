@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- `docs/memory-api-v1.md`, the versioned Memory API contract: operations,
+  identity envelope, response fields, registry rules, the Resume API, the
+  backend capability matrix, migration format, transports and credentials. A
+  test in `cmd/recall` checks its tool tables against the tools `recall mcp`
+  serves, so the document cannot drift from the code.
+
 ### Changed
 
 - The same value held under another predicate is reported as `elsewhere`
