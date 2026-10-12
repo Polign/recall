@@ -30,9 +30,14 @@ jobs:
     env:
       RELEASE_TAG: ${{ inputs.version || github.event.release.tag_name }}
     steps:
+      # Two checkouts: this workflow's own commit for the tooling (the smoke
+      # test may be newer than the release), and the released tag into src/
+      # for the source the image is built from.
+      - uses: actions/checkout@v4
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.version || github.event.release.tag_name }}
+          path: src
       - name: Set image version
         run: |
           case "$RELEASE_TAG" in v*) ;; *) echo "::error::version must look like vX.Y.Z, got $RELEASE_TAG"; exit 1 ;; esac
@@ -53,7 +58,7 @@ jobs:
         run: |
           docker buildx build --load --platform linux/amd64 \
             --build-arg VERSION="$RELEASE_TAG" \
-            -f deploy/container/Dockerfile -t recall:release-check .
+            -f src/deploy/container/Dockerfile -t recall:release-check src
       - name: Smoke test against a real polign-server
         run: bash deploy/container/smoke.sh recall:release-check "$POLIGN_SERVER_BIN" "$RELEASE_TAG"
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -65,8 +70,8 @@ jobs:
         id: image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: .
-          file: deploy/container/Dockerfile
+          context: src
+          file: src/deploy/container/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ghcr.io/polign/recall:${{ env.IMAGE_VERSION }}
