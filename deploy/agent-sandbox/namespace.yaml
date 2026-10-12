@@ -1,0 +1,16 @@
+# The tenant's namespace. With the default kubernetes.tenantLabel="" on the
+# recall chart, this namespace name is the tenant: every sandbox here gets
+# memory under "agents:<sandbox name>".
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agents
+---
+# The service account sandboxes run as. The cluster admin creates it; a
+# tenant who owns a SandboxTemplate cannot change what it says.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: runner
+  namespace: agents
+automountServiceAccountToken: false

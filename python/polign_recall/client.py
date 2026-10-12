@@ -10,6 +10,8 @@ import sys
 import sysconfig
 import threading
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field, fields
 from datetime import datetime
 from typing import Any, Mapping, Sequence
@@ -393,8 +395,148 @@ def _local_server(setup: Sequence[str], directory: str | os.PathLike[str], timeo
     return {"POLIGN_URL": url, "POLIGN_API_KEY": key}
 
 
+_DEFAULT_TOKEN_FILE = "/var/run/secrets/recall/token"
+
+
+class _HTTPSession:
+    """One `recall serve`: JSON-RPC over HTTP at /mcp, behind a Recall key.
+
+    The key is given, or obtained by exchanging a projected Kubernetes token at
+    /v1/auth/kubernetes and renewed at /v1/keys/renew once past half its
+    lifetime. A 401 part-way through triggers one fresh exchange and a retry.
+    """
+
+    def __init__(self, url: str, api_key: str | None, token_file: str | None, timeout: float):
+        if not api_key and not token_file:
+            raise ValueError("a url needs api_key or token_file")
+        self.url = url.rstrip("/")
+        self.timeout = timeout
+        self._api_key = api_key
+        self._token_file = token_file
+        self._lock = threading.Lock()
+        self._key: str | None = api_key
+        self._expires_at: float | None = None
+        self._ttl: float | None = None
+
+    def _post(self, path: str, body: bytes | None, bearer: str | None) -> tuple[int, Any]:
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if bearer:
+            headers["Authorization"] = "Bearer " + bearer
+        request = urllib.request.Request(self.url + path, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:  # noqa: S310 (operator-supplied URL)
+                raw = response.read()
+                status = response.status
+        except urllib.error.HTTPError as exc:
+            with exc:
+                raw = exc.read()
+                status = exc.code
+        except (urllib.error.URLError, OSError, TimeoutError) as exc:
+            raise RecallError(f"could not reach {self.url}: {exc}", code="transport_error") from exc
+        if status == 202 or not raw.strip():
+            return status, None
+        try:
+            return status, json.loads(raw)
+        except ValueError as exc:
+            raise RecallError(f"{path}: malformed answer: {exc}", code="protocol_error") from exc
+
+    @staticmethod
+    def _failure(status: int, data: Any, what: str) -> RecallError:
+        message = what
+        if isinstance(data, dict) and isinstance(data.get("error"), dict):
+            message = data["error"].get("message", what)
+        code = {401: "unauthenticated", 403: "forbidden", 404: "not_found"}.get(status, "transport_error")
+        return RecallError(f"{message} (HTTP {status})", code=code)
+
+    def _exchange(self) -> str:
+        assert self._token_file is not None
+        try:
+            with open(self._token_file, encoding="utf-8") as f:
+                token = f.read().strip()
+        except OSError as exc:
+            raise RecallError(f"token file: {exc}", code="transport_error") from exc
+        status, data = self._post("/v1/auth/kubernetes", json.dumps({"token": token}).encode(), None)
+        if status != 201 or not isinstance(data, dict) or not data.get("key"):
+            raise self._failure(status, data, "the server refused the token")
+        self._key = data["key"]
+        self._ttl = _seconds(data.get("ttl"))
+        self._expires_at = time.monotonic() + self._ttl if self._ttl else None
+        return self._key
+
+    def _renew(self) -> bool:
+        status, data = self._post("/v1/keys/renew", None, self._key)
+        if status != 200 or self._ttl is None:
+            return False
+        self._expires_at = time.monotonic() + self._ttl
+        return True
+
+    def bearer(self) -> str:
+        with self._lock:
+            if self._key is None:
+                return self._exchange()
+            if self._expires_at is not None and self._ttl and time.monotonic() > self._expires_at - self._ttl / 2:
+                if not self._renew():
+                    return self._exchange()
+            return self._key
+
+    def refresh(self) -> bool:
+        if self._token_file is None:
+            return False
+        with self._lock:
+            self._key = None
+            self._exchange()
+            return True
+
+    def rpc(self, message: dict[str, Any]) -> Any:
+        body = json.dumps(message, allow_nan=False).encode()
+        for attempt in (0, 1):
+            status, data = self._post("/mcp", body, self.bearer())
+            if status == 401 and attempt == 0 and self.refresh():
+                continue
+            if status != 200:
+                raise self._failure(status, data, "the server refused the call")
+            return data
+        raise AssertionError("unreachable")
+
+    def notify(self, message: dict[str, Any]) -> None:
+        self._post("/mcp", json.dumps(message, allow_nan=False).encode(), self.bearer())
+
+
+def _seconds(duration: Any) -> float | None:
+    """Parse a Go duration such as "15m0s" or "1h30m" into seconds."""
+    if not isinstance(duration, str) or not duration:
+        return None
+    total, number = 0.0, ""
+    units = {"h": 3600.0, "m": 60.0, "s": 1.0, "ms": 0.001}
+    i = 0
+    while i < len(duration):
+        c = duration[i]
+        if c.isdigit() or c == ".":
+            number += c
+            i += 1
+            continue
+        unit = c
+        if duration[i:i + 2] == "ms":
+            unit, i = "ms", i + 1
+        i += 1
+        if not number or unit not in units:
+            return None
+        total += float(number) * units[unit]
+        number = ""
+    return total if not number else None
+
+
 class Client:
-    """Owns one MCP subprocess. Thread-safe, with serialized calls and timeouts.
+    """Owns one MCP subprocess, or one HTTP session with a `recall serve`.
+    Thread-safe, with serialized calls and timeouts.
+
+    With `url`, the client talks to a `recall serve` over HTTP instead of
+    starting a process. It needs `api_key` (a Recall key) or `token_file` (a
+    projected Kubernetes service account token the server exchanges for one).
+    The server decides what it serves: text or typed tools, and whether the
+    resume tools are there; the client finds out at connect time, so `text`
+    and `agent` are read from the server rather than chosen here. See also
+    `Client.from_env()`, which reads RECALL_URL and the credential variables.
 
     Environment overrides extend the inherited environment. Credentials belong
     in POLIGN_API_KEY, not command-line arguments. The default enables memory
@@ -427,11 +569,35 @@ class Client:
     def __init__(self, *, command: Sequence[str] | None = None,
                  env: Mapping[str, str] | None = None, timeout: float = 120,
                  write: bool = True, local_dir: str | os.PathLike[str] | None = None,
-                 agent: bool = False, extract_model: str | None = None, text: bool = False):
+                 agent: bool = False, extract_model: str | None = None, text: bool = False,
+                 url: str | None = None, api_key: str | None = None, token_file: str | None = None):
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be finite and positive")
         if agent and not write:
             raise ValueError("agent=True needs write=True: resuming an agent writes its records")
+        self._http: _HTTPSession | None = None
+        self._process: subprocess.Popen[bytes] | None = None
+        if url is not None:
+            if command is not None or local_dir is not None or extract_model is not None or env is not None:
+                raise ValueError("url connects to a recall serve; command, local_dir, env and extract_model configure a local process and cannot be combined with it")
+            self.timeout = timeout
+            self._lock = threading.RLock()
+            self._id = 0
+            self._closed = False
+            self._http = _HTTPSession(url, api_key, token_file, timeout)
+            self._rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                     "clientInfo": {"name": "polign-recall-python", "version": "0.1.0"}})
+            self._http.notify({"jsonrpc": "2.0", "method": "notifications/initialized"})
+            names = {t.get("name") for t in self._rpc("tools/list", {}).get("tools", [])}
+            self._text = "remember" in names and "memory_history" not in names
+            self._agent = "agent_resume" in names
+            if agent and not self._agent:
+                raise ValueError("agent=True, but this server does not serve the resume tools (its backend has no leases)")
+            if text and not self._text:
+                raise ValueError("text=True, but this server serves the typed tools")
+            return
+        if api_key is not None or token_file is not None:
+            raise ValueError("api_key and token_file go with url")
         if extract_model is not None and command is not None:
             raise ValueError("extract_model configures the recall server and cannot be combined with command")
         if local_dir is not None and command is not None:
@@ -469,9 +635,30 @@ class Client:
             self.close()
             raise
 
+    @classmethod
+    def from_env(cls, **kwargs: Any) -> Client:
+        """A client for wherever the environment says memory is.
+
+        With RECALL_URL set, it connects there with RECALL_API_KEY, or with
+        the projected token at RECALL_TOKEN_FILE (default
+        /var/run/secrets/recall/token when it exists). Otherwise it starts a
+        local `recall` process as `Client(**kwargs)` does. The same code
+        therefore runs on a laptop and inside a sandbox.
+        """
+        url = os.environ.get("RECALL_URL")
+        if not url:
+            return cls(**kwargs)
+        api_key = os.environ.get("RECALL_API_KEY") or None
+        token_file = os.environ.get("RECALL_TOKEN_FILE") or None
+        if not api_key and not token_file and os.path.exists(_DEFAULT_TOKEN_FILE):
+            token_file = _DEFAULT_TOKEN_FILE
+        for forbidden in ("command", "local_dir", "extract_model", "env", "url", "api_key", "token_file"):
+            kwargs.pop(forbidden, None)
+        return cls(url=url, api_key=api_key, token_file=token_file, **kwargs)
+
     def _read(self) -> None:
         try:
-            assert self._process.stdout is not None
+            assert self._process is not None and self._process.stdout is not None
             while True:
                 line = self._process.stdout.readline((8 << 20) + 1)
                 if not line:
@@ -483,8 +670,11 @@ class Client:
             self._responses.put(exc)
 
     def _send(self, message: dict[str, Any]) -> None:
+        if self._http is not None:
+            self._http.notify(message)
+            return
         payload = (json.dumps(message, allow_nan=False) + "\n").encode()
-        assert self._process.stdin is not None
+        assert self._process is not None and self._process.stdin is not None
         # The write has to be bounded like the read. A server that stops
         # draining its stdin blocks this call forever once the payload passes
         # the pipe buffer, and the blocked call holds the lock close() needs, so
@@ -519,6 +709,13 @@ class Client:
             if self._closed:
                 raise RecallError("client is closed", code="closed")
             self._id += 1
+            if self._http is not None:
+                response = self._http.rpc({"jsonrpc": "2.0", "id": self._id, "method": method, "params": params})
+                if not isinstance(response, dict):
+                    raise RecallError("malformed answer from the server", code="protocol_error")
+                if "error" in response:
+                    raise RecallError(response["error"].get("message", "error"), code="protocol_error")
+                return response.get("result")
             self._send({"jsonrpc": "2.0", "id": self._id, "method": method, "params": params})
             deadline = time.monotonic() + self.timeout
             while True:
@@ -734,6 +931,10 @@ class Client:
             if self._closed:
                 return
             self._closed = True
+            if self._process is None:
+                # An HTTP session holds nothing open. Agents resumed through
+                # it stay held until released or their lease expires.
+                return
             if self._agent and self._process.poll() is None and self._process.stdin is not None:
                 # Closing stdin ends the session cleanly, and the server then
                 # hands every lease over. A terminated server leaves them to

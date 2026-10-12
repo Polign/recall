@@ -220,6 +220,34 @@ and continues it in a new process. See [Resuming an agent](docs/reference.md#res
 for the full API, and the [Python client guide](python/README.md) for `resume`
 in Python.
 
+## Serving many agents
+
+`recall mcp` is one agent, one process, one store. `recall serve` is the same
+memory for many agents at once, over HTTP, each inside the namespace its key
+names. The server holds the store's credentials; agents hold Recall keys.
+
+```sh
+recall -url http://polign:23000 serve -bootstrap-key-file admin.key   # admin.key holds one rcl_... line
+recall -url http://polign:23000 key create -namespace acme:agent-7 -expires 168h
+```
+
+Each namespace gets its own collection, so nothing a caller sends can reach
+another namespace's records. Keys are stored hashed, expire if asked, renew at
+`POST /v1/keys/renew`, and are revoked by a tombstone that nothing can
+overwrite. `POST /mcp` is MCP over streamable HTTP; `POST /v1/remember`,
+`/v1/recall`, `/v1/forget` and `/v1/history` take a tool's arguments as the
+body. Any MCP client that speaks stdio reaches the server through
+`recall connect`, with `RECALL_URL` and `RECALL_API_KEY` set.
+
+On Kubernetes a pod needs no key at all. With `recall serve -kubernetes`, it
+posts its projected service account token (audience `recall`) and gets a
+short-lived key for `<tenant>:<pod name>`, fixed to that agent, which `recall
+connect` and the Python client obtain and renew by themselves from
+`RECALL_TOKEN_FILE`. The Helm chart is `charts/recall` in
+[Polign/polign](https://github.com/Polign/polign); the
+[agent-sandbox demo](deploy/agent-sandbox) runs it on kind. The contract every
+client is written against is [docs/memory-api-v1.md](docs/memory-api-v1.md).
+
 ## Storage and search
 
 Recall provides memory rules, validation, and history; the backend provides

@@ -1,0 +1,16 @@
+# Values for the recall chart in the demo: workload token exchange on, tenant
+# from the pod's namespace, an admin key for minting by hand as well.
+backend:
+  kind: polign
+  url: http://polign.polign.svc:23000
+  existingSecret: polign-key
+auth:
+  bootstrapKey:
+    existingSecret: recall-admin
+kubernetes:
+  enabled: true
+  audience: recall
+  keyTTL: 15m
+  # Pods a warm pool hands out carry generated names; a SandboxClaim labels
+  # its pod with the agent's name and the server uses that instead.
+  agentLabel: sandbox.users.io/agent

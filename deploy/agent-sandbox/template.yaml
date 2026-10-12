@@ -1,0 +1,102 @@
+# What a platform uses: a template, a warm pool that keeps sandboxes ready,
+# and a claim per agent run. Same pod spec as sandbox.yaml, so the same
+# identity story applies to every sandbox the pool hands out.
+#
+# Templated sandboxes are network-isolated by default: the controller writes a
+# NetworkPolicy that allows egress to public addresses only and points the pod
+# at public DNS resolvers, so an in-cluster Recall is unreachable. The policy
+# below keeps the isolation and opens exactly two paths: cluster DNS, and the
+# recall Service.
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: recall-agent
+  namespace: agents
+spec:
+  networkPolicyManagement: Managed
+  networkPolicy:
+    ingress:
+      - from:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: agent-sandbox-system
+            podSelector:
+              matchLabels:
+                app: sandbox-router
+    egress:
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: kube-system
+            podSelector:
+              matchLabels:
+                k8s-app: kube-dns
+        ports:
+          - {protocol: UDP, port: 53}
+          - {protocol: TCP, port: 53}
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: recall
+        ports:
+          - {protocol: TCP, port: 8080}
+  podTemplate:
+    spec:
+      serviceAccountName: runner
+      containers:
+        - name: agent
+          image: curlimages/curl:8.11.1
+          command: ["sleep", "infinity"]
+          env:
+            - name: RECALL_URL
+              value: http://recall.recall.svc:8080
+            - name: RECALL_TOKEN_FILE
+              value: /var/run/secrets/recall/token
+          volumeMounts:
+            - name: recall-token
+              mountPath: /var/run/secrets/recall
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 100
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: recall-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: recall
+                  expirationSeconds: 3600
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: recall-agents
+  namespace: agents
+spec:
+  replicas: 1
+  sandboxTemplateRef:
+    name: recall-agent
+---
+# A claim checks a sandbox out of the pool, so its pod carries the pool's
+# generated name. The label below names the agent instead, and the recall
+# chart's kubernetes.agentLabel tells the server to read it, so run-1 keeps
+# its memory and resumes itself across claims. The label lives in the
+# tenant's own namespace, so it can only ever name one of the tenant's agents.
+# The controller allowlists the label domains a claim may set (the
+# allowed-label-domains key of the agent-sandbox-config ConfigMap, default
+# sandbox.users.io), which is why the key is under that domain.
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxClaim
+metadata:
+  name: run-1
+  namespace: agents
+spec:
+  warmPoolRef:
+    name: recall-agents
+  additionalPodMetadata:
+    labels:
+      sandbox.users.io/agent: run-1

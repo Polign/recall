@@ -8,6 +8,21 @@ is one ready-made integration.
 `recall skill` prints an agent guide covering setup, tool calls, correction
 rules, and history, as Markdown, offline, without a configured database.
 
+## Connect to a shared server
+
+When a `recall serve` holds the memory, an MCP client that speaks stdio starts
+`recall connect` instead of `recall mcp`:
+
+```json
+{"mcpServers": {"recall": {"command": "recall", "args": ["connect"],
+  "env": {"RECALL_URL": "http://recall.recall.svc:8080", "RECALL_API_KEY": "rcl_..."}}}}
+```
+
+A client that speaks MCP over streamable HTTP connects to `RECALL_URL/mcp`
+directly with `Authorization: Bearer rcl_...`. Inside a Kubernetes pod,
+`RECALL_TOKEN_FILE` in place of the key exchanges the pod's projected token
+for one. See [memory-api-v1.md](memory-api-v1.md).
+
 ## Connect to your memory backend
 
 `recall setup` does all of this for a local database. To connect by hand,

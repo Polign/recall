@@ -1,0 +1,46 @@
+# The smallest thing that works: one Sandbox, created directly.
+#
+# The pod gets exactly one token, projected with audience "recall", and
+# nothing else: the Sandbox controller defaults automountServiceAccountToken
+# to false. Inside, an agent runs `recall connect` (stdio MCP) or posts the
+# token to /v1/auth/kubernetes itself; either way it ends up with a key for
+# "agents:demo-1" that only this pod could have obtained.
+apiVersion: agents.x-k8s.io/v1beta1
+kind: Sandbox
+metadata:
+  name: demo-1
+  namespace: agents
+spec:
+  podTemplate:
+    spec:
+      serviceAccountName: runner
+      # runtimeClassName: gvisor   # or kata, where the cluster offers one
+      containers:
+        - name: agent
+          # A shell and curl, so the demo can be driven with kubectl exec.
+          # A real agent image would carry the recall binary instead.
+          image: curlimages/curl:8.11.1
+          command: ["sleep", "infinity"]
+          env:
+            - name: RECALL_URL
+              value: http://recall.recall.svc:8080
+            - name: RECALL_TOKEN_FILE
+              value: /var/run/secrets/recall/token
+          volumeMounts:
+            - name: recall-token
+              mountPath: /var/run/secrets/recall
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 100
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: recall-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: recall
+                  expirationSeconds: 3600

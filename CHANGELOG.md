@@ -2,6 +2,55 @@
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-11
+
+### Added
+
+- `recall serve`, Recall's own front door: the memory tools over HTTP, for
+  many callers at once. Each caller's key names one namespace, each namespace
+  has its own collection derived from its name, and the backend's credentials
+  stay with the server. `POST /mcp` is MCP over streamable HTTP (one JSON-RPC
+  message per request) and `POST /v1/<verb>` takes a tool's arguments as the
+  body. A request that names a namespace, session or agent its key does not
+  carry is refused with `namespace_mismatch`.
+- Recall keys, `rcl_<id>_<secret>`, kept hashed in a control collection beside
+  the memory on any backend that reads by id. Records are written once,
+  renewal rewrites the expiry, and revocation writes a tombstone that is never
+  overwritten, so no compare-and-swap is needed. `recall key create | list |
+  revoke` manages them against the backend; an admin key manages them over
+  HTTP (`POST`/`GET /v1/keys`, `DELETE /v1/keys/<id>`) and any key renews
+  itself with `POST /v1/keys/renew`. `-bootstrap-key-file` registers one admin
+  key at start, idempotently. `-auth-cache-ttl` bounds how long a revoked key
+  is still accepted; `-keys-file` still adds static keys.
+- `recall serve -kubernetes`: a pod exchanges its projected service account
+  token (audience `recall`) at `POST /v1/auth/kubernetes` for a short-lived
+  key. The server reviews the token with the API server, takes the tenant from
+  the service account's namespace (or a label named by
+  `-kubernetes-tenant-label`) and the agent and session from the pod name the
+  token is bound to, and mints a key for `<tenant>:<pod>` fixed to that agent.
+  Nothing in the identity comes from the client, so a pod can only get a key
+  for itself and only resume itself. Keys last `-kubernetes-key-ttl` (default
+  15 minutes) and the pod renews them. `-kubernetes-agent-label` names a pod
+  label that carries the agent's name instead, for pods a pool hands out under
+  generated names; the namespace stays `<tenant>:<agent>`.
+- `recall connect`: MCP over stdio for the agent, HTTP to a `recall serve` for
+  the rest. It forwards every message to the server's `/mcp`, with a key from
+  `RECALL_API_KEY` or a projected token from `RECALL_TOKEN_FILE` exchanged at
+  start, renewed past half its lifetime, and exchanged again after a 401. A
+  workload needs `RECALL_URL` and one credential, nothing else.
+- Python: `Client(url=..., api_key=...)` or `Client(url=..., token_file=...)`
+  talks to a `recall serve` over HTTP instead of starting a process, with the
+  same token exchange and renewal as `recall connect`. `Client.from_env()`
+  reads `RECALL_URL` and the credential variables and falls back to a local
+  process, so one program runs unchanged on a laptop and in a sandbox. Over
+  HTTP the server decides text mode and whether the resume tools exist; the
+  client reads that at connect time.
+- `docs/memory-api-v1.md`, the versioned Memory API contract: operations,
+  identity envelope, response fields, registry rules, the Resume API, the
+  backend capability matrix, migration format, transports and credentials. A
+  test in `cmd/recall` checks its tool tables against the tools `recall mcp`
+  serves, so the document cannot drift from the code.
+
 ### Changed
 
 - The same value held under another predicate is reported as `elsewhere`
