@@ -34,6 +34,13 @@
   `RECALL_API_KEY` or a projected token from `RECALL_TOKEN_FILE` exchanged at
   start, renewed past half its lifetime, and exchanged again after a 401. A
   workload needs `RECALL_URL` and one credential, nothing else.
+- Python: `Client(url=..., api_key=...)` or `Client(url=..., token_file=...)`
+  talks to a `recall serve` over HTTP instead of starting a process, with the
+  same token exchange and renewal as `recall connect`. `Client.from_env()`
+  reads `RECALL_URL` and the credential variables and falls back to a local
+  process, so one program runs unchanged on a laptop and in a sandbox. Over
+  HTTP the server decides text mode and whether the resume tools exist; the
+  client reads that at connect time.
 - `docs/memory-api-v1.md`, the versioned Memory API contract: operations,
   identity envelope, response fields, registry rules, the Resume API, the
   backend capability matrix, migration format, transports and credentials. A

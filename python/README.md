@@ -94,6 +94,32 @@ reported partial results. Calls are serialized, timeout after 120 seconds by
 default, and never automatically retry writes. A timeout closes the transport;
 inspect history using a new client before retrying an uncertain write.
 
+## Connecting to a server
+
+When memory is served by `recall serve` rather than a local process, give the
+client the server and one credential and it speaks HTTP instead:
+
+```python
+from polign_recall import Client
+
+client = Client(url="http://recall.recall.svc:8080", api_key="rcl_...")
+```
+
+Inside a Kubernetes sandbox the credential is the pod's projected service
+account token, which the server exchanges for a short-lived key and the
+client renews:
+
+```python
+client = Client(url="http://recall.recall.svc:8080", token_file="/var/run/secrets/recall/token")
+```
+
+`Client.from_env()` reads `RECALL_URL`, `RECALL_API_KEY` and
+`RECALL_TOKEN_FILE` (default `/var/run/secrets/recall/token` when it exists)
+and falls back to a local process when `RECALL_URL` is unset, so the same
+program runs on a laptop and in a sandbox. Over HTTP the server decides
+whether it serves the text or the typed tools and whether the resume tools
+exist; the client finds out when it connects.
+
 ## Resuming an agent
 
 An agent that crashes or moves to another machine can pick up from its own
