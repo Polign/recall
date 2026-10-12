@@ -86,6 +86,9 @@ spec:
 # chart's kubernetes.agentLabel tells the server to read it, so run-1 keeps
 # its memory and resumes itself across claims. The label lives in the
 # tenant's own namespace, so it can only ever name one of the tenant's agents.
+# The controller allowlists the label domains a claim may set (the
+# allowed-label-domains key of the agent-sandbox-config ConfigMap, default
+# sandbox.users.io), which is why the key is under that domain.
 apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxClaim
 metadata:
@@ -96,4 +99,4 @@ spec:
     name: recall-agents
   additionalPodMetadata:
     labels:
-      recall.polign.com/agent: run-1
+      sandbox.users.io/agent: run-1

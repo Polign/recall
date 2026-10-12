@@ -13,4 +13,4 @@ kubernetes:
   keyTTL: 15m
   # Pods a warm pool hands out carry generated names; a SandboxClaim labels
   # its pod with the agent's name and the server uses that instead.
-  agentLabel: recall.polign.com/agent
+  agentLabel: sandbox.users.io/agent

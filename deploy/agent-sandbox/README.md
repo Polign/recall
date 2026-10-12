@@ -54,6 +54,42 @@ kubectl -n agents exec demo-1 -- sh -c 'curl -sS -H "Content-Type: application/j
 The new pod gets a new key for the same namespace, `agents:demo-1`, and the
 memory is still there. `make clean` removes the cluster.
 
+## What the first run showed
+
+Measured on kind (Kubernetes v1.35 node, runc, Apple Silicon), 2026-10-11,
+with the recall image already on the node:
+
+| What | Result |
+| --- | --- |
+| Fresh `Sandbox` applied to pod Ready | 0.5 s |
+| Token exchange (TokenReview plus key mint), 20 calls from the sandbox | p50 2.4 ms, max 3.3 ms |
+| recall over REST, 40 calls from the sandbox | p50 1.0 ms, p90 1.3 ms, p99 2.7 ms |
+| Revoked key refused | at once with one replica (the server drops its own cache entry); within the 30 s auth cache TTL across replicas |
+| recall serve resident memory, polign-server resident memory | 17 MB, 14 MB on the demo's handful of records |
+
+Deleting `demo-1` and applying it again gave a new pod and a new key for the
+same namespace; the editor preference and the agent's working state were
+there, and `agent_resume` picked up where the first pod left off. A key fixed
+to `demo-1` could not resume `run-1`.
+
+Two things about agent-sandbox v1.0.6 shaped the manifests:
+
+- **Templated sandboxes are isolated from the cluster by default.** With
+  `networkPolicyManagement: Managed` and no `networkPolicy`, the controller
+  writes a policy that allows egress to public addresses only and points the
+  pod at public DNS resolvers, so an in-cluster Recall cannot even be resolved.
+  `template.yaml` carries an explicit policy that opens cluster DNS and the
+  `recall` Service and nothing else; the controller then gives the pod cluster
+  DNS. A directly created `Sandbox` has no policy and needs nothing.
+- **A claim's pod carries the pool's generated name.** The token says which
+  pod is calling, so the identity would change with every claim. The claim
+  labels its pod with the agent's name (`sandbox.users.io/agent: run-1`; the
+  controller allowlists the label domains a claim may set, default
+  `sandbox.users.io`) and the recall chart's `kubernetes.agentLabel` tells the
+  server to use it. The key is then for `agents:run-1`, the session stays the
+  pod, and a tenant can only name its own agents because the label lives in
+  its namespace.
+
 ## On a real cluster
 
 Point `recall-values.yaml` at your store (the polign chart with a bucket, or
@@ -68,3 +104,4 @@ Both read `RECALL_URL` and `RECALL_TOKEN_FILE` and need nothing else.
 - Keys are not rotated in flight; a workload exchanges a new one.
 - The resume tools need a backend with leases: polign_db today.
 - Tenants map to Kubernetes namespaces unless the cluster admin controls service account labels and sets `kubernetes.tenantLabel`.
+- Every token exchange mints a key. `recall connect` and the Python client exchange once and renew; a loop that exchanges on every call leaves keys behind until they expire.
