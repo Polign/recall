@@ -12,7 +12,9 @@ IMAGE ?= ghcr.io/polign/recall:dev
 POLIGN_CHART ?= oci://ghcr.io/polign/charts/polign
 # The recall backend needs polign_db 0.8.0 or later; the chart's default image is older.
 POLIGN_VERSION ?= 0.14.0
-RECALL_CHART ?= ../../../polign/charts/recall
+# The published chart; point at a checkout of Polign/polign/charts/recall to test chart changes.
+RECALL_CHART ?= oci://ghcr.io/polign/charts/recall
+RECALL_CHART_VERSION ?= 0.1.0
 KUBECTL = kubectl --context kind-$(CLUSTER)
 HELM = helm --kube-context kind-$(CLUSTER)
 
@@ -46,7 +48,7 @@ server:
 	    --from-literal=api-key="$$($(KUBECTL) -n polign get secret polign-key -o jsonpath='{.data.api-key}' | base64 -d)"
 	$(KUBECTL) -n recall get secret recall-admin >/dev/null 2>&1 || \
 	  $(KUBECTL) -n recall create secret generic recall-admin --from-literal=key="rcl_$$(openssl rand -hex 8)_$$(openssl rand -base64 24 | tr '+/' '-_' | tr -d =)"
-	$(HELM) upgrade --install recall $(RECALL_CHART) -n recall -f recall-values.yaml \
+	$(HELM) upgrade --install recall $(RECALL_CHART) $(if $(findstring oci://,$(RECALL_CHART)),--version $(RECALL_CHART_VERSION),) -n recall -f recall-values.yaml \
 	  --set image.repository=$$(echo $(IMAGE) | cut -d: -f1) --set image.tag=$$(echo $(IMAGE) | cut -d: -f2) \
 	  --set image.pullPolicy=Never --wait --timeout 3m
 
