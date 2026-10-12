@@ -35,12 +35,10 @@ remember(user, did, "run a marathon",
 Nothing is deleted. Every replaced value stays in history, and `as_of` answers
 what was believed at any earlier moment.
 
-Why not let a model reconcile memory? We tried it on 77 LongMemEval
-conversations: shown each new statement and the beliefs it might end, and
-asked which ones it made untrue, gpt-4o-mini retired 35 beliefs, and 32 of
-them were still true ([the measurement](https://polign.com/model-judged-corrections)).
-So Recall applies the rules the registry declares, shows the candidates, and
-lets your agent confirm the rest.
+No model reconciles memory on its own. Recall applies the rules the registry
+declares, shows the candidates that may conflict, and lets your agent confirm
+the rest, so every correction can be read back to the rule or the statement
+that made it.
 
 Agents share memory across processes and sessions: one agent records a
 preference, another corrects it, and both read the same current value and the

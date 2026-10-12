@@ -167,11 +167,8 @@ statement makes untrue remembers the statement again with it in `replaces`.
 
 `RememberText` applies the `replaces` each proposed statement carries, for a
 caller that proposes statements after reading memory. The `model` extractor
-proposes none: asked which existing beliefs a statement makes untrue, on 77
-LongMemEval conversations gpt-4o-mini retired 35 beliefs and 32 of them were
-still true ([the measurement](https://polign.com/model-judged-corrections);
-the scored list is `eval/longmemeval/retired-judged.jsonl`), so Recall does
-not let one decide. What Recall does on its own is the rule in
+proposes none; Recall does not let a model decide what a statement ends.
+What Recall does on its own is the rule in
 [Exclusions](#exclusions): a value stated under a predicate ends the same
 value under the predicates it excludes.
 

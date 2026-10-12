@@ -66,7 +66,5 @@ methods, leaving out abstention questions.
 runs (branch `at/corrective-memory`, `ku_correct.sh`): for each retired
 belief, the statement that retired it, the words the model judged by, and
 the user turn they came from. `retired-judged.jsonl` is that list with a
-verdict per row, scored by hand against the conversation: of 35 retirements
-across 77 knowledge-update conversations, 1 was a real correction, 2 are
-unclear, and 32 retired a belief that was still true. The post at
-https://polign.com/model-judged-corrections reports it.
+verdict per row, scored by hand against the conversation. The numbers are
+specific to that model and run and are not a claim about models in general.

@@ -17,12 +17,8 @@ held, and nothing is withdrawn by guesswork: every correction is either a
 registry rule or an explicit statement, and what cannot be withdrawn is
 reported rather than dropped.
 
-No model proposes corrections. We measured that on 77 LongMemEval
-conversations: shown each new statement and the beliefs it might end, and
-asked which ones it made untrue, gpt-4o-mini retired 35 beliefs, and 32 of
-them were still true ([the measurement](https://polign.com/model-judged-corrections)).
-Recall applies the registry's rules, shows the candidates, and lets the agent
-confirm the rest.
+No model proposes corrections. Recall applies the registry's rules, shows the
+candidates that may conflict, and lets the agent confirm the rest.
 
 ```text
 remember(user, likes, mangoes)
@@ -60,9 +56,7 @@ remember(user, did, "run a marathon", replaces=[goal: "run a marathon", goal: "l
   current beliefs under other predicates that may conflict, same value
   first, then closest in meaning. The MCP `remember` tool returns them on
   every typed write and accepts `replaces`, so the agent decides and confirms.
-  No model proposes corrections: measured on real conversations, one asked
-  to judge which existing beliefs a text makes untrue was wrong about nine
-  times in ten.
+  No model proposes corrections.
 - Reads across predicates: each belief a client read returns lists under
   `Belief.Elsewhere` the subject's current beliefs under other predicates
   holding the same value, whatever its capitalization. `Ask` and the MCP
