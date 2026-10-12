@@ -10,8 +10,16 @@
   stay with the server. `POST /mcp` is MCP over streamable HTTP (one JSON-RPC
   message per request) and `POST /v1/<verb>` takes a tool's arguments as the
   body. A request that names a namespace, session or agent its key does not
-  carry is refused with `namespace_mismatch`. Keys come from `-keys-file` for
-  now, one `<key> <namespace>` per line.
+  carry is refused with `namespace_mismatch`.
+- Recall keys, `rcl_<id>_<secret>`, kept hashed in a control collection beside
+  the memory on any backend that reads by id. Records are written once,
+  renewal rewrites the expiry, and revocation writes a tombstone that is never
+  overwritten, so no compare-and-swap is needed. `recall key create | list |
+  revoke` manages them against the backend; an admin key manages them over
+  HTTP (`POST`/`GET /v1/keys`, `DELETE /v1/keys/<id>`) and any key renews
+  itself with `POST /v1/keys/renew`. `-bootstrap-key-file` registers one admin
+  key at start, idempotently. `-auth-cache-ttl` bounds how long a revoked key
+  is still accepted; `-keys-file` still adds static keys.
 - `docs/memory-api-v1.md`, the versioned Memory API contract: operations,
   identity envelope, response fields, registry rules, the Resume API, the
   backend capability matrix, migration format, transports and credentials. A

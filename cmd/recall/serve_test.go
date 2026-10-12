@@ -62,7 +62,7 @@ func (a staticAuth) Authenticate(_ context.Context, credential string) (principa
 func newTestFrontDoor(t *testing.T, auth authenticator) *httptest.Server {
 	t.Helper()
 	tenants := newTenantServers(serveConfig{backend: newMultiDB(), registry: recall.DefaultRegistry(), embedder: recall.LexicalEmbedder{}, base: "memories", agents: true})
-	srv := httptest.NewServer(newFrontDoor(auth, tenants))
+	srv := httptest.NewServer(newFrontDoor(auth, tenants, nil))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -317,4 +317,48 @@ func TestLoadFileKeys(t *testing.T) {
 			t.Errorf("%q accepted", bad)
 		}
 	}
+}
+
+// Get lets the key store read records by id.
+func (m *multiDB) Get(_ context.Context, c string, ids []string) ([]recall.StoredVector, error) {
+	d := m.db(c)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []recall.StoredVector
+	for _, id := range ids {
+		if rec, ok := d.records[id]; ok {
+			out = append(out, rec)
+		}
+	}
+	return out, nil
+}
+
+func newTestServerWith(t *testing.T, auth authenticator, tenants *tenantServers, keys *keyStore) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(newFrontDoor(auth, tenants, keys))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func readAll(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func extractJSONString(t *testing.T, body, field string) string {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(body), &m); err != nil {
+		t.Fatalf("%v in %s", err, body)
+	}
+	s, _ := m[field].(string)
+	if s == "" {
+		t.Fatalf("no %s in %s", field, body)
+	}
+	return s
 }

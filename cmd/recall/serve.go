@@ -47,6 +47,10 @@ type principal struct {
 	Agent string
 	// Session names the run, when the credential carries one.
 	Session string
+	// Admin keys manage keys and reach no namespace.
+	Admin bool
+	// KeyID is the id of the key presented, when a key store issued it.
+	KeyID string
 }
 
 // authenticator turns a bearer credential into a principal.
@@ -221,11 +225,13 @@ func newTenantServers(cfg serveConfig) *tenantServers {
 type frontDoor struct {
 	auth    authenticator
 	tenants *tenantServers
-	mux     *http.ServeMux
+	// keys is the store behind the /v1/keys endpoints; nil serves none.
+	keys *keyStore
+	mux  *http.ServeMux
 }
 
-func newFrontDoor(auth authenticator, tenants *tenantServers) *frontDoor {
-	f := &frontDoor{auth: auth, tenants: tenants, mux: http.NewServeMux()}
+func newFrontDoor(auth authenticator, tenants *tenantServers, keys *keyStore) *frontDoor {
+	f := &frontDoor{auth: auth, tenants: tenants, keys: keys, mux: http.NewServeMux()}
 	f.mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprintln(w, "ok") })
 	f.mux.Handle("/mcp", f.authenticated(f.handleMCP))
 	f.mux.Handle("/v1/", f.authenticated(f.handleREST))
@@ -253,8 +259,8 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 }
 
 // authenticated wraps a handler with bearer authentication and hands it the
-// caller's principal and namespace server.
-func (f *frontDoor) authenticated(next func(w http.ResponseWriter, r *http.Request, p principal, s *mcpServer)) http.Handler {
+// caller's principal.
+func (f *frontDoor) authenticated(next func(w http.ResponseWriter, r *http.Request, p principal)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		scheme, credential, _ := strings.Cut(r.Header.Get("Authorization"), " ")
 		credential = strings.TrimSpace(credential)
@@ -269,15 +275,25 @@ func (f *frontDoor) authenticated(next func(w http.ResponseWriter, r *http.Reque
 			writeError(w, http.StatusUnauthorized, "unauthenticated", "the key is not known or no longer valid")
 			return
 		}
-		s, err := f.tenants.get(p.Namespace)
-		if err != nil {
-			log.Printf("serve: namespace %s: %v", p.Namespace, err)
-			writeError(w, http.StatusInternalServerError, "internal", "could not open the namespace")
-			return
-		}
 		r.Body = http.MaxBytesReader(w, r.Body, maxBody)
-		next(w, r, p, s)
+		next(w, r, p)
 	})
+}
+
+// tenant opens the caller's namespace server, refusing an admin key, which
+// reaches no namespace. It reports whether the handler may go on.
+func (f *frontDoor) tenant(w http.ResponseWriter, p principal) (*mcpServer, bool) {
+	if p.Admin || p.Namespace == "" {
+		writeError(w, http.StatusForbidden, "namespace_mismatch", "an admin key manages keys and reaches no namespace")
+		return nil, false
+	}
+	s, err := f.tenants.get(p.Namespace)
+	if err != nil {
+		log.Printf("serve: namespace %s: %v", p.Namespace, err)
+		writeError(w, http.StatusInternalServerError, "internal", "could not open the namespace")
+		return nil, false
+	}
+	return s, true
 }
 
 // checkIdentity enforces the identity envelope on tool arguments: a request
@@ -331,7 +347,11 @@ func checkIdentity(p principal, args json.RawMessage) (json.RawMessage, *httpErr
 // a client POSTs one JSON-RPC message and receives one JSON response. There
 // is no server-initiated stream, so GET answers 405, and no session state,
 // so DELETE is a no-op.
-func (f *frontDoor) handleMCP(w http.ResponseWriter, r *http.Request, p principal, s *mcpServer) {
+func (f *frontDoor) handleMCP(w http.ResponseWriter, r *http.Request, p principal) {
+	s, ok := f.tenant(w, p)
+	if !ok {
+		return
+	}
 	switch r.Method {
 	case http.MethodPost:
 	case http.MethodDelete:
@@ -392,8 +412,12 @@ var restTools = map[string]string{
 // handleREST serves POST /v1/<verb> with the tool's arguments as the body.
 // The answer is the tool's result: JSON when the tool returned JSON, which
 // the memory tools do, and {"text": ...} otherwise.
-func (f *frontDoor) handleREST(w http.ResponseWriter, r *http.Request, p principal, s *mcpServer) {
+func (f *frontDoor) handleREST(w http.ResponseWriter, r *http.Request, p principal) {
 	verb := strings.TrimPrefix(r.URL.Path, "/v1/")
+	if verb == "keys" || strings.HasPrefix(verb, "keys/") {
+		f.handleKeys(w, r, p, strings.TrimPrefix(verb, "keys"))
+		return
+	}
 	tool, ok := restTools[verb]
 	if !ok {
 		writeError(w, http.StatusNotFound, "not_found", "unknown operation; want one of remember, recall, forget, history, predicates, explain")
@@ -402,6 +426,10 @@ func (f *frontDoor) handleREST(w http.ResponseWriter, r *http.Request, p princip
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST the operation's arguments as JSON")
+		return
+	}
+	s, ok := f.tenant(w, p)
+	if !ok {
 		return
 	}
 	body, err := io.ReadAll(r.Body)
@@ -434,6 +462,115 @@ func (f *frontDoor) handleREST(w http.ResponseWriter, r *http.Request, p princip
 	_ = json.NewEncoder(w).Encode(map[string]string{"text": out})
 }
 
+// handleKeys serves key management. Admin keys create, list and revoke;
+// any key renews itself with POST /v1/keys/renew.
+func (f *frontDoor) handleKeys(w http.ResponseWriter, r *http.Request, p principal, rest string) {
+	if f.keys == nil {
+		writeError(w, http.StatusNotFound, "not_found", "this server keeps no key store; keys come from -keys-file")
+		return
+	}
+	rest = strings.Trim(rest, "/")
+	if rest == "renew" {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST to renew")
+			return
+		}
+		if p.KeyID == "" {
+			writeError(w, http.StatusBadRequest, "invalid_argument", "this credential is not a stored key")
+			return
+		}
+		rec, err := f.keys.renew(r.Context(), p.KeyID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_argument", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, keyView(rec))
+		return
+	}
+	if !p.Admin {
+		writeError(w, http.StatusForbidden, "forbidden", "key management needs an admin key")
+		return
+	}
+	switch {
+	case rest == "" && r.Method == http.MethodPost:
+		var req struct {
+			Namespace string `json:"namespace"`
+			Agent     string `json:"agent"`
+			Session   string `json:"session"`
+			Note      string `json:"note"`
+			Admin     bool   `json:"admin"`
+			ExpiresIn string `json:"expires_in"`
+		}
+		if err := strictArgs(mustReadAll(r.Body), &req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_argument", err.Error())
+			return
+		}
+		var ttl time.Duration
+		if req.ExpiresIn != "" {
+			d, err := time.ParseDuration(req.ExpiresIn)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_argument", "expires_in: "+err.Error())
+				return
+			}
+			ttl = d
+		}
+		token, rec, err := f.keys.create(r.Context(), req.Namespace, req.Agent, req.Session, req.Note, req.Admin, ttl)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_argument", err.Error())
+			return
+		}
+		view := keyView(rec)
+		view["key"] = token
+		writeJSON(w, http.StatusCreated, view)
+	case rest == "" && r.Method == http.MethodGet:
+		recs, err := f.keys.list(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+		views := make([]map[string]any, 0, len(recs))
+		for _, rec := range recs {
+			views = append(views, keyView(rec))
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"keys": views})
+	case rest != "" && r.Method == http.MethodDelete:
+		if err := f.keys.revoke(r.Context(), rest); err != nil {
+			writeError(w, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST or GET /v1/keys, DELETE /v1/keys/<id>, POST /v1/keys/renew")
+	}
+}
+
+func mustReadAll(r io.Reader) json.RawMessage {
+	b, _ := io.ReadAll(r)
+	if len(strings.TrimSpace(string(b))) == 0 {
+		return json.RawMessage("{}")
+	}
+	return b
+}
+
+// keyView is what a key looks like over HTTP: everything but the hash.
+func keyView(rec keyRecord) map[string]any {
+	v := map[string]any{"id": rec.ID, "namespace": rec.Namespace, "admin": rec.Admin, "revoked": rec.Revoked, "created_at": rec.CreatedAt.UTC().Format(time.RFC3339)}
+	if rec.Agent != "" {
+		v["agent"] = rec.Agent
+	}
+	if rec.Session != "" {
+		v["session"] = rec.Session
+	}
+	if rec.Note != "" {
+		v["note"] = rec.Note
+	}
+	if !rec.ExpiresAt.IsZero() {
+		v["expires_at"] = rec.ExpiresAt.UTC().Format(time.RFC3339)
+		v["ttl"] = rec.TTL.String()
+	}
+	return v
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -444,7 +581,9 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func cmdServe(c *api, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	listen := fs.String("listen", envOr("RECALL_LISTEN", ":8080"), "address to listen on (default $RECALL_LISTEN, then :8080)")
-	keysFile := fs.String("keys-file", os.Getenv("RECALL_KEYS_FILE"), "file of accepted keys, one \"<key> <namespace>\" per line (default $RECALL_KEYS_FILE)")
+	keysFile := fs.String("keys-file", os.Getenv("RECALL_KEYS_FILE"), "also accept the keys in this file, one \"<key> <namespace>\" per line (default $RECALL_KEYS_FILE)")
+	bootstrapKey := fs.String("bootstrap-key-file", os.Getenv("RECALL_BOOTSTRAP_KEY_FILE"), "file holding one admin key to register at startup if the store does not know it, so an install driven from manifests can mint keys over HTTP (default $RECALL_BOOTSTRAP_KEY_FILE)")
+	cacheTTL := fs.Duration("auth-cache-ttl", 30*time.Second, "how long a key check is reused; a revoked or expired key is refused within this time")
 	collection := fs.String("collection", envOr("POLIGN_COLLECTION", "recall_lexical_v1"), "collection name prefix; each namespace gets its own collection under it")
 	predicates := fs.String("predicates", os.Getenv("POLIGN_PREDICATES"), "predicate registry JSON file; omitted uses the starter registry")
 	embedURL := fs.String("embed-url", os.Getenv("POLIGN_EMBED_URL"), "optional embedding service; omitted uses built-in lexical feature hashing")
@@ -461,12 +600,13 @@ func cmdServe(c *api, args []string) error {
 	if fs.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %v", fs.Args())
 	}
-	if *keysFile == "" {
-		return errors.New("serve: -keys-file is required; every caller needs a key")
-	}
-	auth, err := loadFileKeys(*keysFile)
-	if err != nil {
-		return fmt.Errorf("serve: keys: %w", err)
+	var auth authChain
+	if *keysFile != "" {
+		fileAuth, err := loadFileKeys(*keysFile)
+		if err != nil {
+			return fmt.Errorf("serve: keys: %w", err)
+		}
+		auth = append(auth, fileAuth)
 	}
 	openAll := *open || *text && *predicates == ""
 	registry := recall.DefaultRegistry()
@@ -503,13 +643,41 @@ func cmdServe(c *api, args []string) error {
 	if *agent && !leases {
 		log.Printf("serve: the %s backend has no leases; the resume tools are not served", name)
 	}
+	var keys *keyStore
+	if _, ok := backend.(recall.GetBackend); ok {
+		keys = newKeyStore(backend, *collection, *cacheTTL)
+		auth = append(auth, keys)
+		if *bootstrapKey != "" {
+			raw, err := readFileTrimmed(*bootstrapKey)
+			if err != nil {
+				return fmt.Errorf("serve: bootstrap key: %w", err)
+			}
+			rec, created, err := keys.adopt(context.Background(), string(raw), "", "bootstrap admin key", true)
+			if err != nil {
+				return fmt.Errorf("serve: bootstrap key: %w", err)
+			}
+			if created {
+				log.Printf("serve: registered bootstrap admin key %s", rec.ID)
+			} else if !rec.Admin {
+				return fmt.Errorf("serve: bootstrap key %s is on record without admin rights; it will not be rebound", rec.ID)
+			}
+		}
+	} else if *bootstrapKey != "" {
+		return fmt.Errorf("serve: the %s backend cannot read records by id, so it keeps no key store", name)
+	}
+	if len(auth) == 0 {
+		return errors.New("serve: no way to authenticate callers; the backend keeps no key store, so give -keys-file")
+	}
 
 	ln, err := net.Listen("tcp", *listen)
 	if err != nil {
 		return fmt.Errorf("serve: %w", err)
 	}
-	srv := &http.Server{Handler: newFrontDoor(auth, tenants), ReadHeaderTimeout: 10 * time.Second}
-	log.Printf("recall serve %s listening on %s: backend %s, %d keys from %s, resume tools %v", version, ln.Addr(), name, len(auth.byHash), *keysFile, *agent && leases)
+	srv := &http.Server{Handler: newFrontDoor(auth, tenants, keys), ReadHeaderTimeout: 10 * time.Second}
+	log.Printf("recall serve %s listening on %s: backend %s, resume tools %v", version, ln.Addr(), name, *agent && leases)
+	if keys != nil {
+		log.Printf("serve: key store in collection %s; a revoked or expired key is refused within %s", keys.collection, *cacheTTL)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

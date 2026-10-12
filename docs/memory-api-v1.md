@@ -157,7 +157,7 @@ Import rules: a server whose embedding model differs from `embedding_model` reco
 | Go (`github.com/Polign/recall`) | 0.15 | `Client.Remember`, `Recall`, `Forget`, `History`, `Explain`, `Ask`, `Resume`, `ExportEvents`, `ExportAudit`. |
 | Python (`polign-recall`) | 0.15 | `Client.remember`, `recall`, `forget`, `history`, `predicates`, `ask`, `resume`. Speaks the MCP protocol to a `recall` process. |
 | MCP over streamable HTTP (`recall serve`, `/mcp`) | 0.16 | Same tools, same dispatch, behind a Recall key. |
-| HTTP (`recall serve`, `/v1/remember`, `/v1/recall`, `/v1/forget`, `/v1/history`) | 0.16 | JSON bodies with the tool arguments; JSON answers with the tool results. |
+| HTTP (`recall serve`, `/v1/remember`, `/v1/recall`, `/v1/forget`, `/v1/history`, `/v1/predicates`, `/v1/explain`) | 0.16 | JSON bodies with the tool arguments; JSON answers with the tool results. |
 | Python over HTTP | 0.16 | `Client(url=..., api_key=...)` or `Client.from_env()`. Same decoders. |
 
 ## 10. Credentials and environment
@@ -172,7 +172,9 @@ A client needs a URL and one credential. Nothing else is configuration: the serv
 | RECALL_AGENT, RECALL_SESSION | Informational in Kubernetes mode (the server derives them); authoritative otherwise. | 0.16 |
 | POLIGN_URL, POLIGN_API_KEY, POLIGN_COLLECTION, POLIGN_PREDICATES, POLIGN_EMBED_URL, POLIGN_EXTRACT_MODEL | Direct-to-backend configuration for `recall mcp` without a server. Kept through 0.16 as aliases. | 0.15 |
 
-Keys: write-once records, hashed at rest, with an optional expiry. Renewal rewrites the expiry. Revocation writes a tombstone that is never overwritten and that every check reads, so a late renewal cannot resurrect a revoked key. A revoked key is refused within the server's auth cache TTL, which the server prints at start. Kubernetes-mode keys default to a 15 minute TTL renewed by the client.
+Keys: `rcl_<id>_<secret>`. The store holds the SHA-256 of the key, the namespace, the optional agent and session, and an optional expiry, as write-once records in a control collection beside the memory. Renewal rewrites the expiry. Revocation writes a tombstone that is never overwritten and that every check reads, so a late renewal cannot resurrect a revoked key. A revoked or expired key is refused within the server's auth cache TTL (`-auth-cache-ttl`, default 30 seconds), which the server prints at start. Kubernetes-mode keys default to a 15 minute TTL renewed by the client.
+
+Key management (0.16): `recall key create | list | revoke` against the backend, or over HTTP with an admin key: `POST /v1/keys` (body: `namespace`, `agent`, `session`, `note`, `expires_in`, `admin`), `GET /v1/keys`, `DELETE /v1/keys/<id>`. Any key renews itself with `POST /v1/keys/renew`. An admin key reaches no namespace. `-bootstrap-key-file` registers one admin key at start if the store does not know it, and never rebinds a key already on record.
 
 ## 11. Errors
 
@@ -182,6 +184,8 @@ Keys: write-once records, hashed at rest, with an optional expiry. Renewal rewri
 | namespace_mismatch | 403 | The request names a namespace, agent or session the credential does not carry. |
 | unregistered_predicate | 400 | Closed registry, unknown predicate. Use `note`. |
 | invalid_argument | 400 | Unknown field, wrong type, bad instant. |
+| tool_error | 400 | The operation refused the request for a reason in its message. |
+| forbidden | 403 | A non-admin key called key management. |
 | lease_held | 409 | Another process holds the agent. Retry or `defer_lease`. |
 | lease_lost | 409 | This process lost the lease; its write was refused. |
 | unsupported | 501 | The backend lacks the capability (for example the Resume API without leases). |
