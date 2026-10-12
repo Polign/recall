@@ -28,9 +28,9 @@ account), and the sandbox name comes from the token itself.
 
 ## Run it on kind
 
-Needs docker, kind, kubectl and helm, and a checkout of
-[Polign/polign](https://github.com/Polign/polign) beside this repository for
-the `recall` chart.
+Needs docker, kind, kubectl and helm. The recall chart comes from
+`oci://ghcr.io/polign/charts/recall`; set `RECALL_CHART=../../../polign/charts/recall`
+to test a local checkout of it instead.
 
 ```sh
 make demo
