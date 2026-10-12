@@ -59,6 +59,12 @@ type keyRecord struct {
 	// TTL is the lifetime a renewal grants again; zero when the key does not
 	// expire.
 	TTL time.Duration
+	// RenewWith says what renews the key: "" for the key itself, "token" for
+	// a key minted from a workload token, which is never renewed. The
+	// workload exchanges its token again instead, so a key copied out of a
+	// pod dies at its TTL and nothing minted for a deleted pod can be
+	// extended.
+	RenewWith string
 	// Revoked is set from the tombstone, not the record.
 	Revoked bool
 }
@@ -87,6 +93,9 @@ func (r keyRecord) metadata() map[string]any {
 		md["expires_at"] = r.ExpiresAt.UTC().Format(time.RFC3339Nano)
 		md["ttl_ms"] = r.TTL.Milliseconds()
 	}
+	if r.RenewWith != "" {
+		md["renew_with"] = r.RenewWith
+	}
 	return md
 }
 
@@ -95,7 +104,7 @@ func recordFromMetadata(md map[string]any) (keyRecord, error) {
 		s, _ := md[k].(string)
 		return s
 	}
-	r := keyRecord{ID: str("key_id"), Hash: str("hash"), Namespace: str("namespace"), Agent: str("agent"), Session: str("session"), Note: str("note")}
+	r := keyRecord{ID: str("key_id"), Hash: str("hash"), Namespace: str("namespace"), Agent: str("agent"), Session: str("session"), Note: str("note"), RenewWith: str("renew_with")}
 	switch v := md["admin"].(type) {
 	case bool:
 		r.Admin = v
@@ -168,6 +177,10 @@ func keyID(token string) (string, bool) {
 
 var errKeyExists = errors.New("a key with this id already exists")
 
+// errRenewWithToken is the answer to renewing a workload key: the pod proves
+// itself again instead.
+var errRenewWithToken = errors.New("this key was minted from a workload token and is not renewed; exchange the pod's token again at /v1/auth/kubernetes")
+
 // keyStore keeps keys in a control collection and answers authentication.
 type keyStore struct {
 	backend    recall.Backend
@@ -203,14 +216,21 @@ func (k *keyStore) create(ctx context.Context, ns, agent, session, note string, 
 	if ttl < 0 {
 		return "", keyRecord{}, errors.New("expiry cannot be negative")
 	}
+	return k.mint(ctx, keyRecord{Namespace: ns, Agent: agent, Session: session, Note: note, Admin: admin, TTL: ttl})
+}
+
+// mint gives a record a fresh id, hash and timestamps, stores it, and returns
+// the token once. rec.TTL, when positive, sets the first expiry.
+func (k *keyStore) mint(ctx context.Context, rec keyRecord) (string, keyRecord, error) {
 	token, id, err := newKeyToken()
 	if err != nil {
 		return "", keyRecord{}, err
 	}
-	rec := keyRecord{ID: id, Hash: hashCredential(token), Namespace: ns, Agent: agent, Session: session, Note: note, Admin: admin, CreatedAt: k.now()}
-	if ttl > 0 {
-		rec.TTL = ttl
-		rec.ExpiresAt = rec.CreatedAt.Add(ttl)
+	rec.ID, rec.Hash, rec.CreatedAt = id, hashCredential(token), k.now()
+	if rec.TTL > 0 {
+		rec.ExpiresAt = rec.CreatedAt.Add(rec.TTL)
+	} else {
+		rec.TTL, rec.ExpiresAt = 0, time.Time{}
 	}
 	if err := k.put(ctx, rec); err != nil {
 		return "", keyRecord{}, err
@@ -281,6 +301,9 @@ func (k *keyStore) renew(ctx context.Context, id string) (keyRecord, error) {
 	}
 	if rec.TTL <= 0 {
 		return keyRecord{}, errors.New("the key does not expire, so there is nothing to renew")
+	}
+	if rec.RenewWith == "token" {
+		return keyRecord{}, errRenewWithToken
 	}
 	rec.ExpiresAt = k.now().Add(rec.TTL)
 	if err := k.put(ctx, rec); err != nil {

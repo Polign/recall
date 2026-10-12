@@ -222,7 +222,10 @@ func (k *kubeAuth) exchange(ctx context.Context, token string) (string, keyRecor
 		return "", keyRecord{}, fmt.Errorf("%w: %v", errTokenRejected, err)
 	}
 	note := fmt.Sprintf("kubernetes %s/%s pod %s", w.namespace, w.serviceAccount, w.pod)
-	return k.keys.create(ctx, ns, agent, w.pod, note, false, k.keyTTL)
+	// Never renewable: the workload exchanges its token again, so a key
+	// copied out of the pod dies at its TTL and a deleted pod's key cannot
+	// be extended by anyone.
+	return k.keys.mint(ctx, keyRecord{Namespace: ns, Agent: agent, Session: w.pod, Note: note, TTL: k.keyTTL, RenewWith: "token"})
 }
 
 // call makes one authenticated request to the API server.

@@ -101,16 +101,17 @@ func TestConnectBridgesStdioToTheServerWithAnExchangedToken(t *testing.T) {
 		t.Fatalf("want a second key after refresh, have %d", len(recs))
 	}
 
-	// Past half the lifetime the bridge renews instead of exchanging.
+	// Past half the lifetime the bridge tries to renew; a workload key
+	// refuses, so it exchanges the token again and gets a fresh key.
 	cred.now = func() time.Time { return cred.expiresAt.Add(-time.Minute) }
 	if _, err := cred.bearer(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if renews.Load() != 1 {
-		t.Fatalf("renewals: %d, want 1", renews.Load())
+		t.Fatalf("renewal attempts: %d, want 1", renews.Load())
 	}
-	if recs, _ = keys.list(context.Background()); len(recs) != 2 {
-		t.Fatalf("renewal minted a key: %d", len(recs))
+	if recs, _ = keys.list(context.Background()); len(recs) != 3 {
+		t.Fatalf("want a third key from the re-exchange, have %d", len(recs))
 	}
 }
 

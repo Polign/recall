@@ -172,7 +172,7 @@ A client needs a URL and one credential. Nothing else is configuration: the serv
 | RECALL_AGENT, RECALL_SESSION | Informational in Kubernetes mode (the server derives them); authoritative otherwise. | 0.16 |
 | POLIGN_URL, POLIGN_API_KEY, POLIGN_COLLECTION, POLIGN_PREDICATES, POLIGN_EMBED_URL, POLIGN_EXTRACT_MODEL | Direct-to-backend configuration for `recall mcp` without a server. Kept through 0.16 as aliases. | 0.15 |
 
-Keys: `rcl_<id>_<secret>`. The store holds the SHA-256 of the key, the namespace, the optional agent and session, and an optional expiry, as write-once records in a control collection beside the memory. Renewal rewrites the expiry. Revocation writes a tombstone that is never overwritten and that every check reads, so a late renewal cannot resurrect a revoked key. A revoked or expired key is refused within the server's auth cache TTL (`-auth-cache-ttl`, default 30 seconds), which the server prints at start. Kubernetes-mode keys default to a 15 minute TTL renewed by the client.
+Keys: `rcl_<id>_<secret>`. The store holds the SHA-256 of the key, the namespace, the optional agent and session, and an optional expiry, as write-once records in a control collection beside the memory. Renewal rewrites the expiry. Revocation writes a tombstone that is never overwritten and that every check reads, so a late renewal cannot resurrect a revoked key. A revoked or expired key is refused within the server's auth cache TTL (`-auth-cache-ttl`, default 30 seconds), which the server prints at start. Kubernetes-mode keys default to a 15 minute TTL and are never renewed: `POST /v1/keys/renew` answers `409 renew_with_token`, and the workload exchanges its projected token again, so a key copied out of a pod dies at its TTL and a deleted pod's key cannot be extended.
 
 Key management (0.16): `recall key create | list | revoke` against the backend, or over HTTP with an admin key: `POST /v1/keys` (body: `namespace`, `agent`, `session`, `note`, `expires_in`, `admin`), `GET /v1/keys`, `DELETE /v1/keys/<id>`. Any key renews itself with `POST /v1/keys/renew`. An admin key reaches no namespace. `-bootstrap-key-file` registers one admin key at start if the store does not know it, and never rebinds a key already on record.
 
@@ -188,6 +188,7 @@ Key management (0.16): `recall key create | list | revoke` against the backend, 
 | forbidden | 403 | A non-admin key called key management. |
 | lease_held | 409 | Another process holds the agent. Retry or `defer_lease`. |
 | lease_lost | 409 | This process lost the lease; its write was refused. |
+| renew_with_token | 409 | The key was minted from a workload token and is not renewed; exchange the token again. |
 | unsupported | 501 | The backend lacks the capability (for example the Resume API without leases). |
 
 MCP carries the same codes in the tool error text.

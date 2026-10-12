@@ -161,9 +161,13 @@ func TestKubernetesExchangeMintsAWorkloadKey(t *testing.T) {
 	if !isErr || !strings.Contains(out, "namespace_mismatch") {
 		t.Fatalf("resumed another agent: %v %s", isErr, out)
 	}
-	// And it renews itself.
-	if status, body := post(t, srv.URL+"/v1/keys/renew", key, ``); status != http.StatusOK {
-		t.Fatalf("renew: %d %s", status, body)
+	// It cannot renew itself: the pod exchanges its token again instead, so
+	// a key copied out of the pod dies at its TTL.
+	if !strings.Contains(body, `"renewable":false`) {
+		t.Fatalf("workload key should say it is not renewable: %s", body)
+	}
+	if status, body := post(t, srv.URL+"/v1/keys/renew", key, ``); status != http.StatusConflict || !strings.Contains(body, "renew_with_token") {
+		t.Fatalf("renew of a workload key: %d %s", status, body)
 	}
 }
 
