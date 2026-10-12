@@ -20,6 +20,15 @@
   itself with `POST /v1/keys/renew`. `-bootstrap-key-file` registers one admin
   key at start, idempotently. `-auth-cache-ttl` bounds how long a revoked key
   is still accepted; `-keys-file` still adds static keys.
+- `recall serve -kubernetes`: a pod exchanges its projected service account
+  token (audience `recall`) at `POST /v1/auth/kubernetes` for a short-lived
+  key. The server reviews the token with the API server, takes the tenant from
+  the service account's namespace (or a label named by
+  `-kubernetes-tenant-label`) and the agent and session from the pod name the
+  token is bound to, and mints a key for `<tenant>:<pod>` fixed to that agent.
+  Nothing in the identity comes from the client, so a pod can only get a key
+  for itself and only resume itself. Keys last `-kubernetes-key-ttl` (default
+  15 minutes) and the pod renews them.
 - `docs/memory-api-v1.md`, the versioned Memory API contract: operations,
   identity envelope, response fields, registry rules, the Resume API, the
   backend capability matrix, migration format, transports and credentials. A

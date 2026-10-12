@@ -168,7 +168,7 @@ A client needs a URL and one credential. Nothing else is configuration: the serv
 | --- | --- | --- |
 | RECALL_URL | The `recall serve` endpoint. | 0.16 |
 | RECALL_API_KEY | A Recall key, `rcl_<id>_<secret>`. | 0.16 |
-| RECALL_TOKEN_FILE | Path to a projected Kubernetes service account token with audience `recall`, exchanged for a key at start. Default: the projected volume's path. | 0.16 |
+| RECALL_TOKEN_FILE | Path to a projected Kubernetes service account token with audience `recall`, exchanged for a key at `POST /v1/auth/kubernetes` (body `{"token": ...}`) and renewed at `POST /v1/keys/renew`. The server derives the tenant from the service account's namespace or a label on it, and the agent and session from the pod the token is bound to. | 0.16 |
 | RECALL_AGENT, RECALL_SESSION | Informational in Kubernetes mode (the server derives them); authoritative otherwise. | 0.16 |
 | POLIGN_URL, POLIGN_API_KEY, POLIGN_COLLECTION, POLIGN_PREDICATES, POLIGN_EMBED_URL, POLIGN_EXTRACT_MODEL | Direct-to-backend configuration for `recall mcp` without a server. Kept through 0.16 as aliases. | 0.15 |
 

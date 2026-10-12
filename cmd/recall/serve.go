@@ -227,12 +227,15 @@ type frontDoor struct {
 	tenants *tenantServers
 	// keys is the store behind the /v1/keys endpoints; nil serves none.
 	keys *keyStore
+	// kube exchanges Kubernetes workload tokens for keys; nil serves none.
+	kube *kubeAuth
 	mux  *http.ServeMux
 }
 
 func newFrontDoor(auth authenticator, tenants *tenantServers, keys *keyStore) *frontDoor {
 	f := &frontDoor{auth: auth, tenants: tenants, keys: keys, mux: http.NewServeMux()}
 	f.mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprintln(w, "ok") })
+	f.mux.HandleFunc("/v1/auth/kubernetes", f.handleKubernetesAuth)
 	f.mux.Handle("/mcp", f.authenticated(f.handleMCP))
 	f.mux.Handle("/v1/", f.authenticated(f.handleREST))
 	return f
@@ -584,6 +587,13 @@ func cmdServe(c *api, args []string) error {
 	keysFile := fs.String("keys-file", os.Getenv("RECALL_KEYS_FILE"), "also accept the keys in this file, one \"<key> <namespace>\" per line (default $RECALL_KEYS_FILE)")
 	bootstrapKey := fs.String("bootstrap-key-file", os.Getenv("RECALL_BOOTSTRAP_KEY_FILE"), "file holding one admin key to register at startup if the store does not know it, so an install driven from manifests can mint keys over HTTP (default $RECALL_BOOTSTRAP_KEY_FILE)")
 	cacheTTL := fs.Duration("auth-cache-ttl", 30*time.Second, "how long a key check is reused; a revoked or expired key is refused within this time")
+	kube := fs.Bool("kubernetes", os.Getenv("RECALL_KUBERNETES") == "1", "exchange projected Kubernetes service account tokens for keys at POST /v1/auth/kubernetes (default on when $RECALL_KUBERNETES is 1)")
+	kubeAPI := fs.String("kubernetes-api", os.Getenv("RECALL_KUBERNETES_API"), "API server URL (default from KUBERNETES_SERVICE_HOST and _PORT)")
+	kubeCA := fs.String("kubernetes-ca-file", envOr("RECALL_KUBERNETES_CA_FILE", defaultKubeCAFile), "CA bundle for the API server")
+	kubeToken := fs.String("kubernetes-token-file", envOr("RECALL_KUBERNETES_TOKEN_FILE", defaultKubeTokenFile), "this server's own service account token, for TokenReview")
+	kubeAudience := fs.String("kubernetes-audience", envOr("RECALL_KUBERNETES_AUDIENCE", defaultKubeAudience), "audience a pod's projected token must carry")
+	kubeTenantLabel := fs.String("kubernetes-tenant-label", os.Getenv("RECALL_KUBERNETES_TENANT_LABEL"), "label on the service account that names the tenant; empty uses the service account's namespace")
+	kubeKeyTTL := fs.Duration("kubernetes-key-ttl", defaultKubeKeyTTL, "lifetime of a key minted for a pod; the pod renews it")
 	collection := fs.String("collection", envOr("POLIGN_COLLECTION", "recall_lexical_v1"), "collection name prefix; each namespace gets its own collection under it")
 	predicates := fs.String("predicates", os.Getenv("POLIGN_PREDICATES"), "predicate registry JSON file; omitted uses the starter registry")
 	embedURL := fs.String("embed-url", os.Getenv("POLIGN_EMBED_URL"), "optional embedding service; omitted uses built-in lexical feature hashing")
@@ -668,15 +678,34 @@ func cmdServe(c *api, args []string) error {
 	if len(auth) == 0 {
 		return errors.New("serve: no way to authenticate callers; the backend keeps no key store, so give -keys-file")
 	}
+	var kubeExchange *kubeAuth
+	if *kube {
+		if keys == nil {
+			return fmt.Errorf("serve: -kubernetes needs the key store, which the %s backend cannot keep", name)
+		}
+		kubeExchange, err = newKubeAuth(kubeAuthConfig{apiServer: *kubeAPI, caFile: *kubeCA, tokenFile: *kubeToken, audience: *kubeAudience, tenantLabel: *kubeTenantLabel, keyTTL: *kubeKeyTTL}, keys)
+		if err != nil {
+			return fmt.Errorf("serve: -kubernetes: %w", err)
+		}
+	}
 
 	ln, err := net.Listen("tcp", *listen)
 	if err != nil {
 		return fmt.Errorf("serve: %w", err)
 	}
-	srv := &http.Server{Handler: newFrontDoor(auth, tenants, keys), ReadHeaderTimeout: 10 * time.Second}
+	door := newFrontDoor(auth, tenants, keys)
+	door.kube = kubeExchange
+	srv := &http.Server{Handler: door, ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("recall serve %s listening on %s: backend %s, resume tools %v", version, ln.Addr(), name, *agent && leases)
 	if keys != nil {
 		log.Printf("serve: key store in collection %s; a revoked or expired key is refused within %s", keys.collection, *cacheTTL)
+	}
+	if kubeExchange != nil {
+		tenantFrom := "the service account's namespace"
+		if *kubeTenantLabel != "" {
+			tenantFrom = "the service account's " + *kubeTenantLabel + " label"
+		}
+		log.Printf("serve: kubernetes workload tokens with audience %q exchanged for %s keys; tenant from %s", *kubeAudience, *kubeKeyTTL, tenantFrom)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
