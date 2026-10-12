@@ -35,7 +35,7 @@ func main() {
 	backend := flag.String("backend", envOr("RECALL_BACKEND", setupBackend), "storage backend: "+strings.Join(recall.Backends(), ", ")+" (default $RECALL_BACKEND, then "+setupBackend+")")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Usage = func() {
-		fmt.Fprintln(flag.CommandLine.Output(), "Usage: recall [global flags] <command> [options]\n\nCommands: mcp, explain, setup, doctor, skill\nAgent guide: recall skill (offline)\n\nGlobal flags:")
+		fmt.Fprintln(flag.CommandLine.Output(), "Usage: recall [global flags] <command> [options]\n\nCommands: mcp, serve, explain, setup, doctor, skill\nAgent guide: recall skill (offline)\n\nGlobal flags:")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -64,6 +64,8 @@ func main() {
 	switch cmd {
 	case "mcp":
 		err = cmdMCP(c, url != "", args)
+	case "serve":
+		err = cmdServe(c, args)
 	case "explain":
 		err = cmdExplain(c, url != "", args, os.Stdout)
 	case "setup", "doctor":
@@ -71,7 +73,7 @@ func main() {
 	case "skill":
 		err = cmdSkill(args, os.Stdout)
 	default:
-		err = fmt.Errorf("unknown command %q (want mcp, explain, setup, doctor, skill)", cmd)
+		err = fmt.Errorf("unknown command %q (want mcp, serve, explain, setup, doctor, skill)", cmd)
 	}
 	if err != nil {
 		log.Fatal(err)

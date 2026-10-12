@@ -1,0 +1,528 @@
+package main
+
+// The `recall serve` subcommand: Recall's own front door. It serves the same
+// memory tools as `recall mcp`, over HTTP, to many callers at once, each
+// inside the namespace its credential names.
+//
+// A namespace is the unit of isolation. Each one gets its own collection in
+// the backend, derived from the namespace name, so no filter stands between
+// two tenants' records: a caller's key selects a collection, and nothing the
+// caller sends can select another. The backend's own credentials never leave
+// this process.
+//
+// Two surfaces share one dispatcher. POST /mcp is MCP over streamable HTTP:
+// one JSON-RPC request per POST, one JSON response, notifications accepted
+// with 202. POST /v1/<verb> takes the tool's arguments as the body and answers
+// with the tool's result. Both check the credential first and refuse a request
+// that names a namespace, agent or session the credential does not carry.
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/Polign/recall"
+)
+
+// principal is who a credential says is calling.
+type principal struct {
+	// Namespace is the only namespace this caller reaches.
+	Namespace string
+	// Agent, when set, is the only agent_id this caller may use; the server
+	// fixes it from the workload identity in Kubernetes mode.
+	Agent string
+	// Session names the run, when the credential carries one.
+	Session string
+}
+
+// authenticator turns a bearer credential into a principal.
+type authenticator interface {
+	Authenticate(ctx context.Context, credential string) (principal, error)
+}
+
+var errUnauthenticated = errors.New("unauthenticated")
+
+// fileKeys is the simplest authenticator: keys listed in a file, one per
+// line as "<key> <namespace>", with blank lines and # comments ignored. It
+// serves single-operator installs and tests; the store-backed key set with
+// expiry and revocation is layered on the same interface.
+type fileKeys struct {
+	byHash map[string]principal
+}
+
+func loadFileKeys(path string) (*fileKeys, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	keys := &fileKeys{byHash: map[string]principal{}}
+	for n, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			return nil, fmt.Errorf("%s:%d: want \"<key> <namespace>\"", path, n+1)
+		}
+		if err := validateNamespace(fields[1]); err != nil {
+			return nil, fmt.Errorf("%s:%d: %w", path, n+1, err)
+		}
+		keys.byHash[hashCredential(fields[0])] = principal{Namespace: fields[1]}
+	}
+	if len(keys.byHash) == 0 {
+		return nil, fmt.Errorf("%s: no keys", path)
+	}
+	return keys, nil
+}
+
+func (k *fileKeys) Authenticate(_ context.Context, credential string) (principal, error) {
+	p, ok := k.byHash[hashCredential(credential)]
+	if !ok {
+		return principal{}, errUnauthenticated
+	}
+	return p, nil
+}
+
+func hashCredential(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+// maxNamespaceLen matches polign_db's limit, so a namespace that is valid
+// here is valid as a key binding there too.
+const maxNamespaceLen = 128
+
+// validateNamespace accepts letters, digits and "_-.:", starting with a
+// letter or digit: the same rule polign_db applies to key namespaces.
+func validateNamespace(ns string) error {
+	if ns == "" {
+		return errors.New("namespace: empty")
+	}
+	if len(ns) > maxNamespaceLen {
+		return fmt.Errorf("namespace: %d bytes exceeds the %d byte limit", len(ns), maxNamespaceLen)
+	}
+	for i := 0; i < len(ns); i++ {
+		c := ns[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '_', c == '-', c == '.', c == ':':
+			if i == 0 {
+				return fmt.Errorf("namespace %q: must start with a letter or digit", ns)
+			}
+		default:
+			return fmt.Errorf("namespace %q: byte %d is not allowed (use letters, digits, and _-.:)", ns, i)
+		}
+	}
+	return nil
+}
+
+// namespaceCollection names the collection holding one namespace's memory.
+// The name uses only lowercase letters, digits and underscores, which every
+// backend accepts, and ends in a hash of the namespace so that two namespaces
+// that sanitise alike ("a.b" and "a_b") never share a collection.
+func namespaceCollection(base, ns string) string {
+	var b strings.Builder
+	for i := 0; i < len(ns); i++ {
+		c := ns[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+			b.WriteByte(c)
+		case c >= 'A' && c <= 'Z':
+			b.WriteByte(c + 'a' - 'A')
+		default:
+			b.WriteByte('_')
+		}
+	}
+	sum := sha256.Sum256([]byte(ns))
+	return base + "__" + b.String() + "_" + hex.EncodeToString(sum[:4])
+}
+
+// tenantServers hands out one MCP server per namespace, built on first use
+// and kept for the life of the process.
+type tenantServers struct {
+	mu   sync.Mutex
+	byNS map[string]*mcpServer
+	make func(ns string) (*mcpServer, error)
+}
+
+func (t *tenantServers) get(ns string) (*mcpServer, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if s, ok := t.byNS[ns]; ok {
+		return s, nil
+	}
+	s, err := t.make(ns)
+	if err != nil {
+		return nil, err
+	}
+	t.byNS[ns] = s
+	return s, nil
+}
+
+func (t *tenantServers) releaseAll() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, s := range t.byNS {
+		if s.agents != nil {
+			s.agents.releaseAll()
+		}
+	}
+}
+
+// serveConfig is everything cmdServe resolves before listening.
+type serveConfig struct {
+	backend   recall.Backend
+	registry  recall.Registry
+	embedder  recall.Embedder
+	extractor recall.Extractor
+	base      string // collection name prefix
+	open      bool
+	text      bool
+	agents    bool // expose the resume tools when the backend has leases
+}
+
+// newTenantServers builds the per-namespace server factory. Every namespace
+// shares the backend, registry, embedder and extractor; only the collection
+// differs.
+func newTenantServers(cfg serveConfig) *tenantServers {
+	_, leases := cfg.backend.(recall.LeaseBackend)
+	return &tenantServers{byNS: map[string]*mcpServer{}, make: func(ns string) (*mcpServer, error) {
+		collection := namespaceCollection(cfg.base, ns)
+		client, err := recall.NewClient(recall.Config{Backend: cfg.backend, Collection: collection, Registry: cfg.registry, Embedder: cfg.embedder, Materialize: true, Open: cfg.open})
+		if err != nil {
+			return nil, err
+		}
+		mem := &memoryRuntime{client: client, backend: cfg.backend, ctx: context.Background(), extractor: cfg.extractor, open: cfg.open, text: cfg.text}
+		s := &mcpServer{collection: collection, write: true, memory: mem}
+		if cfg.agents && leases {
+			s.agents = newAgentRuntime()
+		}
+		return s, nil
+	}}
+}
+
+// frontDoor is the HTTP handler: authentication, then one of the two
+// surfaces.
+type frontDoor struct {
+	auth    authenticator
+	tenants *tenantServers
+	mux     *http.ServeMux
+}
+
+func newFrontDoor(auth authenticator, tenants *tenantServers) *frontDoor {
+	f := &frontDoor{auth: auth, tenants: tenants, mux: http.NewServeMux()}
+	f.mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprintln(w, "ok") })
+	f.mux.Handle("/mcp", f.authenticated(f.handleMCP))
+	f.mux.Handle("/v1/", f.authenticated(f.handleREST))
+	return f
+}
+
+func (f *frontDoor) ServeHTTP(w http.ResponseWriter, r *http.Request) { f.mux.ServeHTTP(w, r) }
+
+// maxBody bounds a request body. remember takes 32 KiB of text and 32
+// statements; four mebibytes leaves room for a large recorded turn.
+const maxBody = 4 << 20
+
+type httpError struct {
+	status  int
+	code    string
+	message string
+}
+
+func (e *httpError) Error() string { return e.code + ": " + e.message }
+
+func writeError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": code, "message": message}})
+}
+
+// authenticated wraps a handler with bearer authentication and hands it the
+// caller's principal and namespace server.
+func (f *frontDoor) authenticated(next func(w http.ResponseWriter, r *http.Request, p principal, s *mcpServer)) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scheme, credential, _ := strings.Cut(r.Header.Get("Authorization"), " ")
+		credential = strings.TrimSpace(credential)
+		if !strings.EqualFold(scheme, "Bearer") || credential == "" {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="recall"`)
+			writeError(w, http.StatusUnauthorized, "unauthenticated", "send a Recall key as Authorization: Bearer <key>")
+			return
+		}
+		p, err := f.auth.Authenticate(r.Context(), credential)
+		if err != nil {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="recall"`)
+			writeError(w, http.StatusUnauthorized, "unauthenticated", "the key is not known or no longer valid")
+			return
+		}
+		s, err := f.tenants.get(p.Namespace)
+		if err != nil {
+			log.Printf("serve: namespace %s: %v", p.Namespace, err)
+			writeError(w, http.StatusInternalServerError, "internal", "could not open the namespace")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+		next(w, r, p, s)
+	})
+}
+
+// checkIdentity enforces the identity envelope on tool arguments: a request
+// may repeat the namespace, agent or session its credential carries, and is
+// refused when it names another. Fields that match are removed, so the tools
+// never see them. The returned arguments are what the tool runs with.
+func checkIdentity(p principal, args json.RawMessage) (json.RawMessage, *httpError) {
+	if len(args) == 0 {
+		return args, nil
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(args, &m); err != nil {
+		return nil, &httpError{http.StatusBadRequest, "invalid_argument", "arguments must be a JSON object"}
+	}
+	check := func(field, want string, strip bool) *httpError {
+		raw, ok := m[field]
+		if !ok {
+			return nil
+		}
+		var got string
+		if err := json.Unmarshal(raw, &got); err != nil {
+			return &httpError{http.StatusBadRequest, "invalid_argument", field + " must be a string"}
+		}
+		if want != "" && got != want {
+			return &httpError{http.StatusForbidden, "namespace_mismatch", fmt.Sprintf("the credential does not carry %s %q", field, got)}
+		}
+		if strip {
+			delete(m, field)
+		}
+		return nil
+	}
+	if err := check("namespace", p.Namespace, true); err != nil {
+		return nil, err
+	}
+	if err := check("session", p.Session, true); err != nil {
+		return nil, err
+	}
+	// agent_id stays in the arguments: the resume tools need it. It is only
+	// checked when the credential fixes the agent.
+	if err := check("agent_id", p.Agent, false); err != nil {
+		return nil, err
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return nil, &httpError{http.StatusBadRequest, "invalid_argument", err.Error()}
+	}
+	return out, nil
+}
+
+// handleMCP is MCP over streamable HTTP, in its simplest conforming form:
+// a client POSTs one JSON-RPC message and receives one JSON response. There
+// is no server-initiated stream, so GET answers 405, and no session state,
+// so DELETE is a no-op.
+func (f *frontDoor) handleMCP(w http.ResponseWriter, r *http.Request, p principal, s *mcpServer) {
+	switch r.Method {
+	case http.MethodPost:
+	case http.MethodDelete:
+		w.WriteHeader(http.StatusOK)
+		return
+	default:
+		w.Header().Set("Allow", "POST, DELETE")
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST one JSON-RPC message")
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusRequestEntityTooLarge, "invalid_argument", err.Error())
+		return
+	}
+	var req rpcRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, rpcResponse{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &rpcError{Code: codeParse, Message: err.Error()}})
+		return
+	}
+	if len(req.ID) == 0 {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	if req.Method == "tools/call" {
+		var call struct {
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
+		}
+		if err := json.Unmarshal(req.Params, &call); err != nil {
+			writeJSON(w, http.StatusOK, rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: codeInvalidParams, Message: err.Error()}})
+			return
+		}
+		args, herr := checkIdentity(p, call.Arguments)
+		if herr != nil {
+			// A refused identity is a tool result, as every tool failure is,
+			// so the model reads the reason.
+			writeJSON(w, http.StatusOK, rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: toolResult(herr.Error(), true)})
+			return
+		}
+		params, _ := json.Marshal(map[string]any{"name": call.Name, "arguments": args})
+		req.Params = params
+	}
+	result, rerr := s.dispatch(r.Context(), req.Method, req.Params)
+	writeJSON(w, http.StatusOK, rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: result, Error: rerr})
+}
+
+// restTools maps the REST verbs to the tools behind them.
+var restTools = map[string]string{
+	"remember":   "remember",
+	"recall":     "recall",
+	"forget":     "forget",
+	"history":    "memory_history",
+	"predicates": "list_predicates",
+	"explain":    "explain",
+}
+
+// handleREST serves POST /v1/<verb> with the tool's arguments as the body.
+// The answer is the tool's result: JSON when the tool returned JSON, which
+// the memory tools do, and {"text": ...} otherwise.
+func (f *frontDoor) handleREST(w http.ResponseWriter, r *http.Request, p principal, s *mcpServer) {
+	verb := strings.TrimPrefix(r.URL.Path, "/v1/")
+	tool, ok := restTools[verb]
+	if !ok {
+		writeError(w, http.StatusNotFound, "not_found", "unknown operation; want one of remember, recall, forget, history, predicates, explain")
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST the operation's arguments as JSON")
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusRequestEntityTooLarge, "invalid_argument", err.Error())
+		return
+	}
+	if len(strings.TrimSpace(string(body))) == 0 {
+		body = []byte("{}")
+	}
+	args, herr := checkIdentity(p, body)
+	if herr != nil {
+		writeError(w, herr.status, herr.code, herr.message)
+		return
+	}
+	out, err := s.runTool(r.Context(), tool, args)
+	if err != nil {
+		code := "tool_error"
+		if strings.HasPrefix(err.Error(), "arguments:") {
+			code = "invalid_argument"
+		}
+		writeError(w, http.StatusBadRequest, code, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if json.Valid([]byte(out)) {
+		_, _ = io.WriteString(w, out)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]string{"text": out})
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// cmdServe runs the front door.
+func cmdServe(c *api, args []string) error {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	listen := fs.String("listen", envOr("RECALL_LISTEN", ":8080"), "address to listen on (default $RECALL_LISTEN, then :8080)")
+	keysFile := fs.String("keys-file", os.Getenv("RECALL_KEYS_FILE"), "file of accepted keys, one \"<key> <namespace>\" per line (default $RECALL_KEYS_FILE)")
+	collection := fs.String("collection", envOr("POLIGN_COLLECTION", "recall_lexical_v1"), "collection name prefix; each namespace gets its own collection under it")
+	predicates := fs.String("predicates", os.Getenv("POLIGN_PREDICATES"), "predicate registry JSON file; omitted uses the starter registry")
+	embedURL := fs.String("embed-url", os.Getenv("POLIGN_EMBED_URL"), "optional embedding service; omitted uses built-in lexical feature hashing")
+	extractModel := fs.String("extract-model", os.Getenv("POLIGN_EXTRACT_MODEL"), "model that works out the statements in text remembered without any, as provider:model")
+	text := fs.Bool("text", false, "serve the text-only tools")
+	open := fs.Bool("open", os.Getenv("RECALL_OPEN") == "1", "let writes define predicates")
+	agent := fs.Bool("agent", true, "expose the resume tools when the backend provides leases")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %v", fs.Args())
+	}
+	if *keysFile == "" {
+		return errors.New("serve: -keys-file is required; every caller needs a key")
+	}
+	auth, err := loadFileKeys(*keysFile)
+	if err != nil {
+		return fmt.Errorf("serve: keys: %w", err)
+	}
+	openAll := *open || *text && *predicates == ""
+	registry := recall.DefaultRegistry()
+	if openAll && *predicates == "" {
+		registry = openSeeds()
+	}
+	if *predicates != "" {
+		raw, err := readFileTrimmed(*predicates)
+		if err != nil {
+			return fmt.Errorf("serve: predicates: %w", err)
+		}
+		if registry, err = recall.LoadRegistry(raw); err != nil {
+			return fmt.Errorf("serve: predicates: %w", err)
+		}
+	}
+	var embedder recall.Embedder = recall.LexicalEmbedder{}
+	if *embedURL != "" {
+		embedder = newRemoteEmbedder(*embedURL, 0)
+	}
+	extractor, err := newExtractor(*extractModel)
+	if err != nil {
+		return fmt.Errorf("serve: -extract-model: %w", err)
+	}
+	name := c.backend
+	if name == "" {
+		name = setupBackend
+	}
+	backend, err := recall.OpenBackend(name, recall.BackendOptions{URL: c.base, APIKey: c.key})
+	if err != nil {
+		return fmt.Errorf("serve: backend: %w", err)
+	}
+	tenants := newTenantServers(serveConfig{backend: backend, registry: registry, embedder: embedder, extractor: extractor, base: *collection, open: openAll, text: *text, agents: *agent})
+	_, leases := backend.(recall.LeaseBackend)
+	if *agent && !leases {
+		log.Printf("serve: the %s backend has no leases; the resume tools are not served", name)
+	}
+
+	ln, err := net.Listen("tcp", *listen)
+	if err != nil {
+		return fmt.Errorf("serve: %w", err)
+	}
+	srv := &http.Server{Handler: newFrontDoor(auth, tenants), ReadHeaderTimeout: 10 * time.Second}
+	log.Printf("recall serve %s listening on %s: backend %s, %d keys from %s, resume tools %v", version, ln.Addr(), name, len(auth.byHash), *keysFile, *agent && leases)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	errc := make(chan error, 1)
+	go func() { errc <- srv.Serve(ln) }()
+	select {
+	case err := <-errc:
+		return fmt.Errorf("serve: %w", err)
+	case <-ctx.Done():
+	}
+	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err = srv.Shutdown(shutdown)
+	tenants.releaseAll()
+	return err
+}

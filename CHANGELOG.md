@@ -4,6 +4,14 @@
 
 ### Added
 
+- `recall serve`, Recall's own front door: the memory tools over HTTP, for
+  many callers at once. Each caller's key names one namespace, each namespace
+  has its own collection derived from its name, and the backend's credentials
+  stay with the server. `POST /mcp` is MCP over streamable HTTP (one JSON-RPC
+  message per request) and `POST /v1/<verb>` takes a tool's arguments as the
+  body. A request that names a namespace, session or agent its key does not
+  carry is refused with `namespace_mismatch`. Keys come from `-keys-file` for
+  now, one `<key> <namespace>` per line.
 - `docs/memory-api-v1.md`, the versioned Memory API contract: operations,
   identity envelope, response fields, registry rules, the Resume API, the
   backend capability matrix, migration format, transports and credentials. A
