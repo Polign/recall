@@ -1,0 +1,58 @@
+# What a platform uses: a template, a warm pool that keeps sandboxes ready,
+# and a claim per agent run. Same pod spec as sandbox.yaml, so the same
+# identity story applies to every sandbox the pool hands out.
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: recall-agent
+  namespace: agents
+spec:
+  podTemplate:
+    spec:
+      serviceAccountName: runner
+      containers:
+        - name: agent
+          image: curlimages/curl:8.11.1
+          command: ["sleep", "infinity"]
+          env:
+            - name: RECALL_URL
+              value: http://recall.recall.svc:8080
+            - name: RECALL_TOKEN_FILE
+              value: /var/run/secrets/recall/token
+          volumeMounts:
+            - name: recall-token
+              mountPath: /var/run/secrets/recall
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 100
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: recall-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: recall
+                  expirationSeconds: 3600
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: recall-agents
+  namespace: agents
+spec:
+  replicas: 1
+  sandboxTemplateRef:
+    name: recall-agent
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxClaim
+metadata:
+  name: run-1
+  namespace: agents
+spec:
+  warmPoolRef:
+    name: recall-agents
