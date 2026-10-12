@@ -29,6 +29,11 @@
   Nothing in the identity comes from the client, so a pod can only get a key
   for itself and only resume itself. Keys last `-kubernetes-key-ttl` (default
   15 minutes) and the pod renews them.
+- `recall connect`: MCP over stdio for the agent, HTTP to a `recall serve` for
+  the rest. It forwards every message to the server's `/mcp`, with a key from
+  `RECALL_API_KEY` or a projected token from `RECALL_TOKEN_FILE` exchanged at
+  start, renewed past half its lifetime, and exchanged again after a 401. A
+  workload needs `RECALL_URL` and one credential, nothing else.
 - `docs/memory-api-v1.md`, the versioned Memory API contract: operations,
   identity envelope, response fields, registry rules, the Resume API, the
   backend capability matrix, migration format, transports and credentials. A
