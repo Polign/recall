@@ -21,6 +21,8 @@ type fakeAPIServer struct {
 	reviews map[string]map[string]any
 	// labels maps "namespace/serviceaccount" to its labels.
 	labels map[string]map[string]string
+	// podLabels maps "namespace/pod" to its labels.
+	podLabels map[string]map[string]string
 	// wantOwnToken is the bearer the server must present.
 	wantOwnToken string
 	gotAudiences []string
@@ -51,11 +53,18 @@ func (f *fakeAPIServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": status})
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/namespaces/"):
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/namespaces/"), "/")
-		if len(parts) != 3 || parts[1] != "serviceaccounts" {
+		if len(parts) != 3 {
 			http.NotFound(w, r)
 			return
 		}
-		labels, ok := f.labels[parts[0]+"/"+parts[2]]
+		var labels map[string]string
+		var ok bool
+		switch parts[1] {
+		case "serviceaccounts":
+			labels, ok = f.labels[parts[0]+"/"+parts[2]]
+		case "pods":
+			labels, ok = f.podLabels[parts[0]+"/"+parts[2]]
+		}
 		if !ok {
 			http.NotFound(w, r)
 			return
@@ -84,8 +93,14 @@ func saStatus(ns, sa, pod string, audiences ...string) map[string]any {
 }
 
 func newKubeTest(t *testing.T, tenantLabel string) (*httptest.Server, *fakeAPIServer, *keyStore) {
+	return newKubeTestWith(t, tenantLabel, "")
+}
+
+func newKubeTestWith(t *testing.T, tenantLabel, agentLabel string) (*httptest.Server, *fakeAPIServer, *keyStore) {
 	t.Helper()
-	api := &fakeAPIServer{t: t, wantOwnToken: "own-token", labels: map[string]map[string]string{"agents/runner": {"recall.polign.com/tenant": "acme"}, "agents/unlabeled": {}}}
+	api := &fakeAPIServer{t: t, wantOwnToken: "own-token",
+		labels:    map[string]map[string]string{"agents/runner": {"recall.polign.com/tenant": "acme"}, "agents/unlabeled": {}},
+		podLabels: map[string]map[string]string{"agents/pool-x7k2q": {"recall.polign.com/agent": "run-1"}, "agents/sandbox-1": {}}}
 	api.reviews = map[string]map[string]any{
 		"pod-token":        saStatus("agents", "runner", "sandbox-1", "recall"),
 		"other-aud":        saStatus("agents", "runner", "sandbox-1", "https://kubernetes.default.svc"),
@@ -94,6 +109,7 @@ func newKubeTest(t *testing.T, tenantLabel string) (*httptest.Server, *fakeAPISe
 		"not-a-sa":         {"authenticated": true, "user": map[string]any{"username": "alice", "extra": map[string][]string{podNameExtra: {"p"}}}},
 		"weird-pod-name":   saStatus("agents", "runner", "bad pod", "recall"),
 		"no-audience-list": saStatus("agents", "runner", "sandbox-3"),
+		"pooled":           saStatus("agents", "runner", "pool-x7k2q", "recall"),
 	}
 	apiSrv := httptest.NewServer(api)
 	t.Cleanup(apiSrv.Close)
@@ -105,7 +121,7 @@ func newKubeTest(t *testing.T, tenantLabel string) (*httptest.Server, *fakeAPISe
 	}
 	db := newMultiDB()
 	keys, _ := newTestKeyStore(t, db, 0)
-	kube, err := newKubeAuth(kubeAuthConfig{apiServer: apiSrv.URL, tokenFile: own, tenantLabel: tenantLabel, keyTTL: 5 * time.Minute}, keys)
+	kube, err := newKubeAuth(kubeAuthConfig{apiServer: apiSrv.URL, tokenFile: own, tenantLabel: tenantLabel, agentLabel: agentLabel, keyTTL: 5 * time.Minute}, keys)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,5 +220,26 @@ func TestKubernetesAuthOffByDefault(t *testing.T) {
 	status, body := post(t, srv.URL+"/v1/auth/kubernetes", "", `{"token":"pod-token"}`)
 	if status != http.StatusNotFound || !strings.Contains(body, "-kubernetes") {
 		t.Fatalf("%d %s", status, body)
+	}
+}
+
+func TestKubernetesAgentFromPodLabel(t *testing.T) {
+	srv, _, _ := newKubeTestWith(t, "", "recall.polign.com/agent")
+	// A pooled pod with the label is the agent the label names; the session
+	// stays the pod, so the record still says which pod did the work.
+	status, body := post(t, srv.URL+"/v1/auth/kubernetes", "", `{"token":"pooled"}`)
+	if status != http.StatusCreated || !strings.Contains(body, `"namespace":"agents:run-1"`) || !strings.Contains(body, `"agent":"run-1"`) || !strings.Contains(body, `"session":"pool-x7k2q"`) {
+		t.Fatalf("pooled: %d %s", status, body)
+	}
+	// A pod without the label falls back to its own name.
+	status, body = post(t, srv.URL+"/v1/auth/kubernetes", "", `{"token":"pod-token"}`)
+	if status != http.StatusCreated || !strings.Contains(body, `"namespace":"agents:sandbox-1"`) {
+		t.Fatalf("unlabeled: %d %s", status, body)
+	}
+	// Without the option the pool's name is the identity.
+	srv, _, _ = newKubeTest(t, "")
+	status, body = post(t, srv.URL+"/v1/auth/kubernetes", "", `{"token":"pooled"}`)
+	if status != http.StatusCreated || !strings.Contains(body, `"namespace":"agents:pool-x7k2q"`) {
+		t.Fatalf("no label option: %d %s", status, body)
 	}
 }

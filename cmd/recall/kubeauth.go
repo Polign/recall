@@ -49,13 +49,21 @@ type kubeAuth struct {
 	// tenantLabel names a label on the service account that carries the
 	// tenant. Empty means the service account's namespace is the tenant.
 	tenantLabel string
-	keyTTL      time.Duration
-	keys        *keyStore
+	// agentLabel names a label on the pod that carries the agent's name.
+	// Empty means the pod's name is the agent. A pool hands out pods with
+	// generated names, so a platform that wants an agent to keep its identity
+	// across claims labels the pod (SandboxClaim.additionalPodMetadata) and
+	// names the label here. Whoever creates pods in the tenant's namespace
+	// chooses the label, so it can only ever name one of the tenant's own
+	// agents: the namespace stays <tenant>:<agent>.
+	agentLabel string
+	keyTTL     time.Duration
+	keys       *keyStore
 }
 
 type kubeAuthConfig struct {
-	apiServer, caFile, tokenFile, audience, tenantLabel string
-	keyTTL                                              time.Duration
+	apiServer, caFile, tokenFile, audience, tenantLabel, agentLabel string
+	keyTTL                                                          time.Duration
 }
 
 func newKubeAuth(cfg kubeAuthConfig, keys *keyStore) (*kubeAuth, error) {
@@ -99,6 +107,7 @@ func newKubeAuth(cfg kubeAuthConfig, keys *keyStore) (*kubeAuth, error) {
 		tokenFile:   cfg.tokenFile,
 		audience:    audience,
 		tenantLabel: cfg.tenantLabel,
+		agentLabel:  cfg.agentLabel,
 		keyTTL:      ttl,
 		keys:        keys,
 	}, nil
@@ -174,6 +183,26 @@ func (k *kubeAuth) tenant(ctx context.Context, w workload) (string, error) {
 	return tenant, nil
 }
 
+// agent decides which agent a workload is: the pod's name, or the value of
+// the agent label on the pod when one is configured and present.
+func (k *kubeAuth) agent(ctx context.Context, w workload) (string, error) {
+	if k.agentLabel == "" {
+		return w.pod, nil
+	}
+	var pod struct {
+		Metadata struct {
+			Labels map[string]string `json:"labels"`
+		} `json:"metadata"`
+	}
+	if err := k.call(ctx, http.MethodGet, "/api/v1/namespaces/"+w.namespace+"/pods/"+w.pod, nil, &pod); err != nil {
+		return "", err
+	}
+	if name := pod.Metadata.Labels[k.agentLabel]; name != "" {
+		return name, nil
+	}
+	return w.pod, nil
+}
+
 // exchange turns a projected token into a Recall key for the workload.
 func (k *kubeAuth) exchange(ctx context.Context, token string) (string, keyRecord, error) {
 	w, err := k.review(ctx, token)
@@ -184,12 +213,16 @@ func (k *kubeAuth) exchange(ctx context.Context, token string) (string, keyRecor
 	if err != nil {
 		return "", keyRecord{}, err
 	}
-	ns := tenant + ":" + w.pod
+	agent, err := k.agent(ctx, w)
+	if err != nil {
+		return "", keyRecord{}, err
+	}
+	ns := tenant + ":" + agent
 	if err := validateNamespace(ns); err != nil {
 		return "", keyRecord{}, fmt.Errorf("%w: %v", errTokenRejected, err)
 	}
 	note := fmt.Sprintf("kubernetes %s/%s pod %s", w.namespace, w.serviceAccount, w.pod)
-	return k.keys.create(ctx, ns, w.pod, w.pod, note, false, k.keyTTL)
+	return k.keys.create(ctx, ns, agent, w.pod, note, false, k.keyTTL)
 }
 
 // call makes one authenticated request to the API server.

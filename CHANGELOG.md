@@ -28,7 +28,9 @@
   token is bound to, and mints a key for `<tenant>:<pod>` fixed to that agent.
   Nothing in the identity comes from the client, so a pod can only get a key
   for itself and only resume itself. Keys last `-kubernetes-key-ttl` (default
-  15 minutes) and the pod renews them.
+  15 minutes) and the pod renews them. `-kubernetes-agent-label` names a pod
+  label that carries the agent's name instead, for pods a pool hands out under
+  generated names; the namespace stays `<tenant>:<agent>`.
 - `recall connect`: MCP over stdio for the agent, HTTP to a `recall serve` for
   the rest. It forwards every message to the server's `/mcp`, with a key from
   `RECALL_API_KEY` or a projected token from `RECALL_TOKEN_FILE` exchanged at

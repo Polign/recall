@@ -594,6 +594,7 @@ func cmdServe(c *api, args []string) error {
 	kubeAudience := fs.String("kubernetes-audience", envOr("RECALL_KUBERNETES_AUDIENCE", defaultKubeAudience), "audience a pod's projected token must carry")
 	kubeTenantLabel := fs.String("kubernetes-tenant-label", os.Getenv("RECALL_KUBERNETES_TENANT_LABEL"), "label on the service account that names the tenant; empty uses the service account's namespace")
 	kubeKeyTTL := fs.Duration("kubernetes-key-ttl", defaultKubeKeyTTL, "lifetime of a key minted for a pod; the pod renews it")
+	kubeAgentLabel := fs.String("kubernetes-agent-label", os.Getenv("RECALL_KUBERNETES_AGENT_LABEL"), "label on the pod that names the agent, for pods handed out by a pool under generated names; empty uses the pod's name. The namespace stays <tenant>:<agent>")
 	collection := fs.String("collection", envOr("POLIGN_COLLECTION", "recall_lexical_v1"), "collection name prefix; each namespace gets its own collection under it")
 	predicates := fs.String("predicates", os.Getenv("POLIGN_PREDICATES"), "predicate registry JSON file; omitted uses the starter registry")
 	embedURL := fs.String("embed-url", os.Getenv("POLIGN_EMBED_URL"), "optional embedding service; omitted uses built-in lexical feature hashing")
@@ -683,7 +684,7 @@ func cmdServe(c *api, args []string) error {
 		if keys == nil {
 			return fmt.Errorf("serve: -kubernetes needs the key store, which the %s backend cannot keep", name)
 		}
-		kubeExchange, err = newKubeAuth(kubeAuthConfig{apiServer: *kubeAPI, caFile: *kubeCA, tokenFile: *kubeToken, audience: *kubeAudience, tenantLabel: *kubeTenantLabel, keyTTL: *kubeKeyTTL}, keys)
+		kubeExchange, err = newKubeAuth(kubeAuthConfig{apiServer: *kubeAPI, caFile: *kubeCA, tokenFile: *kubeToken, audience: *kubeAudience, tenantLabel: *kubeTenantLabel, agentLabel: *kubeAgentLabel, keyTTL: *kubeKeyTTL}, keys)
 		if err != nil {
 			return fmt.Errorf("serve: -kubernetes: %w", err)
 		}
@@ -705,7 +706,11 @@ func cmdServe(c *api, args []string) error {
 		if *kubeTenantLabel != "" {
 			tenantFrom = "the service account's " + *kubeTenantLabel + " label"
 		}
-		log.Printf("serve: kubernetes workload tokens with audience %q exchanged for %s keys; tenant from %s", *kubeAudience, *kubeKeyTTL, tenantFrom)
+		agentFrom := "the pod's name"
+		if *kubeAgentLabel != "" {
+			agentFrom = "the pod's " + *kubeAgentLabel + " label, else its name"
+		}
+		log.Printf("serve: kubernetes workload tokens with audience %q exchanged for %s keys; tenant from %s; agent from %s", *kubeAudience, *kubeKeyTTL, tenantFrom, agentFrom)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
