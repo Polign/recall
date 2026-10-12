@@ -100,7 +100,7 @@ Both read `RECALL_URL` and `RECALL_TOKEN_FILE` and need nothing else.
 
 ## Limitations
 
-- A deleted sandbox's key stays valid for its TTL (15 minutes by default) unless revoked through `/v1/keys`; a revoked key is still accepted for the server's auth cache TTL (30 seconds).
+- A deleted sandbox's key stays valid for its TTL (15 minutes by default) unless revoked through `/v1/keys`; it cannot be renewed, since workload keys are only ever re-exchanged with the pod's token. A revoked key is still accepted for the server's auth cache TTL (30 seconds) on replicas other than the one that revoked it.
 - Keys are not rotated in flight; a workload exchanges a new one.
 - The resume tools need a backend with leases: polign_db today.
 - Tenants map to Kubernetes namespaces unless the cluster admin controls service account labels and sets `kubernetes.tenantLabel`.

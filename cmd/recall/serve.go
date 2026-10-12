@@ -483,6 +483,10 @@ func (f *frontDoor) handleKeys(w http.ResponseWriter, r *http.Request, p princip
 			return
 		}
 		rec, err := f.keys.renew(r.Context(), p.KeyID)
+		if errors.Is(err, errRenewWithToken) {
+			writeError(w, http.StatusConflict, "renew_with_token", err.Error())
+			return
+		}
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_argument", err.Error())
 			return
@@ -570,6 +574,7 @@ func keyView(rec keyRecord) map[string]any {
 	if !rec.ExpiresAt.IsZero() {
 		v["expires_at"] = rec.ExpiresAt.UTC().Format(time.RFC3339)
 		v["ttl"] = rec.TTL.String()
+		v["renewable"] = rec.RenewWith == ""
 	}
 	return v
 }

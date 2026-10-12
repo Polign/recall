@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Keys minted from a Kubernetes workload token are never renewed. `POST
+  /v1/keys/renew` answers `409 renew_with_token` and the workload exchanges
+  its projected token again, which `recall connect` and the Python client
+  already do when a renewal is refused. A key copied out of a pod therefore
+  dies at its TTL, and nothing can extend a deleted pod's key. Key views
+  carry `renewable`.
+
 ## [0.16.0] - 2026-10-11
 
 ### Added
