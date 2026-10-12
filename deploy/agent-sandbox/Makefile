@@ -10,6 +10,8 @@ CLUSTER ?= recall-sandbox
 AGENT_SANDBOX_VERSION ?= v1.0.6
 IMAGE ?= ghcr.io/polign/recall:dev
 POLIGN_CHART ?= oci://ghcr.io/polign/charts/polign
+# The recall backend needs polign_db 0.8.0 or later; the chart's default image is older.
+POLIGN_VERSION ?= 0.14.0
 RECALL_CHART ?= ../../../polign/charts/recall
 KUBECTL = kubectl --context kind-$(CLUSTER)
 HELM = helm --kube-context kind-$(CLUSTER)
@@ -32,9 +34,10 @@ image:
 store:
 	$(KUBECTL) create namespace polign --dry-run=client -o yaml | $(KUBECTL) apply -f -
 	$(KUBECTL) -n polign get secret polign-key >/dev/null 2>&1 || \
-	  $(KUBECTL) -n polign create secret generic polign-key --from-literal=api-key="plgn_$$(openssl rand -hex 8)_$$(openssl rand -base64 24 | tr '+/' '-_' | tr -d =)"
+	  $(KUBECTL) -n polign create secret generic polign-key \
+	    --from-literal=api-key="$$(docker run --rm --entrypoint /usr/local/bin/polign-apikey ghcr.io/polign/polign-server:$(POLIGN_VERSION) generate)"
 	$(HELM) upgrade --install polign $(POLIGN_CHART) -n polign \
-	  --set store.claim.create=true --set auth.existingSecret=polign-key --wait --timeout 5m
+	  --set store.claim.create=true --set auth.existingSecret=polign-key --set image.tag=$(POLIGN_VERSION) --wait --timeout 5m
 
 server:
 	$(KUBECTL) create namespace recall --dry-run=client -o yaml | $(KUBECTL) apply -f -
