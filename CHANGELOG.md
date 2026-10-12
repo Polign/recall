@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-11
+
 ### Added
 
 - `recall serve`, Recall's own front door: the memory tools over HTTP, for
