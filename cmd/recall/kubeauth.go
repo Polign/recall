@@ -12,6 +12,13 @@ package main
 // extra fields for bound tokens. A pod can therefore only ever get a key for
 // itself, and with it only ever resume itself.
 //
+// With agent-sandbox, a pod handed out by a warm pool has a generated name,
+// so its name is a poor agent identity. -kubernetes-sandbox-claims follows the
+// pod's controller owner references, pod -> Sandbox -> SandboxClaim, and uses
+// the claim's name as the agent: deleting a claim and creating it again under
+// the same name gives the new pod the old agent's memory. The API server
+// writes owner references, so the pod cannot choose them.
+//
 // The server talks to the API server with its own mounted credentials over
 // one HTTPS call per exchange, so no client library is needed.
 
@@ -34,6 +41,8 @@ const (
 	defaultKubeTokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/token" //nolint:gosec // a path, not a credential
 	defaultKubeCAFile    = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
 	podNameExtra         = "authentication.kubernetes.io/pod-name"
+	sandboxGroup         = "agents.x-k8s.io"
+	sandboxClaimGroup    = "extensions.agents.x-k8s.io"
 	defaultKubeAudience  = "recall"
 	defaultKubeKeyTTL    = 15 * time.Minute
 )
@@ -57,12 +66,17 @@ type kubeAuth struct {
 	// chooses the label, so it can only ever name one of the tenant's own
 	// agents: the namespace stays <tenant>:<agent>.
 	agentLabel string
-	keyTTL     time.Duration
-	keys       *keyStore
+	// sandboxClaims makes the agent the name of the SandboxClaim that owns
+	// the pod's Sandbox, when there is one. It needs get on pods, sandboxes
+	// and sandboxclaims.
+	sandboxClaims bool
+	keyTTL        time.Duration
+	keys          *keyStore
 }
 
 type kubeAuthConfig struct {
 	apiServer, caFile, tokenFile, audience, tenantLabel, agentLabel string
+	sandboxClaims                                                   bool
 	keyTTL                                                          time.Duration
 }
 
@@ -102,14 +116,15 @@ func newKubeAuth(cfg kubeAuthConfig, keys *keyStore) (*kubeAuth, error) {
 		audience = defaultKubeAudience
 	}
 	return &kubeAuth{
-		apiServer:   strings.TrimRight(apiServer, "/"),
-		client:      &http.Client{Transport: transport, Timeout: 10 * time.Second},
-		tokenFile:   cfg.tokenFile,
-		audience:    audience,
-		tenantLabel: cfg.tenantLabel,
-		agentLabel:  cfg.agentLabel,
-		keyTTL:      ttl,
-		keys:        keys,
+		apiServer:     strings.TrimRight(apiServer, "/"),
+		client:        &http.Client{Transport: transport, Timeout: 10 * time.Second},
+		tokenFile:     cfg.tokenFile,
+		audience:      audience,
+		tenantLabel:   cfg.tenantLabel,
+		agentLabel:    cfg.agentLabel,
+		sandboxClaims: cfg.sandboxClaims,
+		keyTTL:        ttl,
+		keys:          keys,
 	}, nil
 }
 
@@ -119,6 +134,9 @@ type workload struct {
 }
 
 var errTokenRejected = errors.New("token rejected")
+
+// errKubeNotFound is a 404 from the API server: the object is gone.
+var errKubeNotFound = errors.New("not found")
 
 // review asks the API server whether the token is a live service account
 // token for our audience, bound to a pod.
@@ -183,24 +201,104 @@ func (k *kubeAuth) tenant(ctx context.Context, w workload) (string, error) {
 	return tenant, nil
 }
 
-// agent decides which agent a workload is: the pod's name, or the value of
-// the agent label on the pod when one is configured and present.
+// objectMeta is the part of a Kubernetes object the exchange reads.
+type objectMeta struct {
+	Metadata struct {
+		UID             string            `json:"uid"`
+		Labels          map[string]string `json:"labels"`
+		OwnerReferences []ownerReference  `json:"ownerReferences"`
+	} `json:"metadata"`
+}
+
+type ownerReference struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	UID        string `json:"uid"`
+	Controller bool   `json:"controller"`
+}
+
+// controllerOf returns the object's controller owner reference, if any.
+func controllerOf(obj objectMeta) (ownerReference, bool) {
+	for _, ref := range obj.Metadata.OwnerReferences {
+		if ref.Controller {
+			return ref, true
+		}
+	}
+	return ownerReference{}, false
+}
+
+// refGroup is the API group of an owner reference's apiVersion.
+func refGroup(ref ownerReference) string {
+	group, _, _ := strings.Cut(ref.APIVersion, "/")
+	return group
+}
+
+// agent decides which agent a workload is. In order: the SandboxClaim that
+// owns the pod's Sandbox when -kubernetes-sandbox-claims is on, the agent
+// label on the pod when one is configured and present, the pod's name.
 func (k *kubeAuth) agent(ctx context.Context, w workload) (string, error) {
-	if k.agentLabel == "" {
+	if k.agentLabel == "" && !k.sandboxClaims {
 		return w.pod, nil
 	}
-	var pod struct {
-		Metadata struct {
-			Labels map[string]string `json:"labels"`
-		} `json:"metadata"`
-	}
+	var pod objectMeta
 	if err := k.call(ctx, http.MethodGet, "/api/v1/namespaces/"+w.namespace+"/pods/"+w.pod, nil, &pod); err != nil {
 		return "", err
 	}
-	if name := pod.Metadata.Labels[k.agentLabel]; name != "" {
-		return name, nil
+	if k.sandboxClaims {
+		claim, err := k.sandboxClaim(ctx, w, pod)
+		if err != nil || claim != "" {
+			return claim, err
+		}
+	}
+	if k.agentLabel != "" {
+		if name := pod.Metadata.Labels[k.agentLabel]; name != "" {
+			return name, nil
+		}
 	}
 	return w.pod, nil
+}
+
+// sandboxClaim follows pod -> Sandbox -> SandboxClaim and returns the claim's
+// name. It returns "" when the pod is not a Sandbox's, or the Sandbox has no
+// controller (created by hand), so the caller falls back. A Sandbox still held
+// by a warm pool is refused: it has no agent yet, and a key minted now would
+// carry the pool's generated name into the agent's memory. Each hop checks the
+// UID the reference names, so a pod left over from a deleted claim does not
+// get a key for a new claim of the same name.
+func (k *kubeAuth) sandboxClaim(ctx context.Context, w workload, pod objectMeta) (string, error) {
+	ref, ok := controllerOf(pod)
+	if !ok || ref.Kind != "Sandbox" || refGroup(ref) != sandboxGroup {
+		return "", nil
+	}
+	var sandbox objectMeta
+	err := k.call(ctx, http.MethodGet, "/apis/"+ref.APIVersion+"/namespaces/"+w.namespace+"/sandboxes/"+ref.Name, nil, &sandbox)
+	if err != nil && !errors.Is(err, errKubeNotFound) {
+		return "", err
+	}
+	if err != nil || sandbox.Metadata.UID != ref.UID {
+		return "", fmt.Errorf("%w: pod %s names Sandbox %s, which is gone or has been replaced", errTokenRejected, w.pod, ref.Name)
+	}
+	owner, ok := controllerOf(sandbox)
+	if !ok {
+		return "", nil
+	}
+	switch {
+	case owner.Kind == "SandboxClaim" && refGroup(owner) == sandboxClaimGroup:
+	case owner.Kind == "SandboxWarmPool" && refGroup(owner) == sandboxClaimGroup:
+		return "", fmt.Errorf("%w: Sandbox %s is still in warm pool %s; exchange the token after it is claimed", errTokenRejected, ref.Name, owner.Name)
+	default:
+		return "", nil
+	}
+	var claim objectMeta
+	err = k.call(ctx, http.MethodGet, "/apis/"+owner.APIVersion+"/namespaces/"+w.namespace+"/sandboxclaims/"+owner.Name, nil, &claim)
+	if err != nil && !errors.Is(err, errKubeNotFound) {
+		return "", err
+	}
+	if err != nil || claim.Metadata.UID != owner.UID {
+		return "", fmt.Errorf("%w: Sandbox %s belongs to a deleted SandboxClaim %s", errTokenRejected, ref.Name, owner.Name)
+	}
+	return owner.Name, nil
 }
 
 // exchange turns a projected token into a Recall key for the workload.
@@ -253,6 +351,9 @@ func (k *kubeAuth) call(ctx context.Context, method, path string, body []byte, o
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("kubernetes: %s %s: %w", method, path, errKubeNotFound)
+	}
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("kubernetes: %s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(raw)))
 	}

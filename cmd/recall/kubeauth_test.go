@@ -23,6 +23,10 @@ type fakeAPIServer struct {
 	labels map[string]map[string]string
 	// podLabels maps "namespace/pod" to its labels.
 	podLabels map[string]map[string]string
+	// podOwners maps "namespace/pod" to its owner references.
+	podOwners map[string][]ownerReference
+	// objects maps an /apis/... path to the object metadata served there.
+	objects map[string]map[string]any
 	// wantOwnToken is the bearer the server must present.
 	wantOwnToken string
 	gotAudiences []string
@@ -69,7 +73,18 @@ func (f *fakeAPIServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"labels": labels}})
+		meta := map[string]any{"labels": labels}
+		if parts[1] == "pods" {
+			meta["ownerReferences"] = f.podOwners[parts[0]+"/"+parts[2]]
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"metadata": meta})
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/apis/"):
+		meta, ok := f.objects[r.URL.Path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"metadata": meta})
 	default:
 		http.NotFound(w, r)
 	}
@@ -97,6 +112,10 @@ func newKubeTest(t *testing.T, tenantLabel string) (*httptest.Server, *fakeAPISe
 }
 
 func newKubeTestWith(t *testing.T, tenantLabel, agentLabel string) (*httptest.Server, *fakeAPIServer, *keyStore) {
+	return newKubeTestConfig(t, kubeAuthConfig{tenantLabel: tenantLabel, agentLabel: agentLabel})
+}
+
+func newKubeTestConfig(t *testing.T, cfg kubeAuthConfig) (*httptest.Server, *fakeAPIServer, *keyStore) {
 	t.Helper()
 	api := &fakeAPIServer{t: t, wantOwnToken: "own-token",
 		labels:    map[string]map[string]string{"agents/runner": {"recall.polign.com/tenant": "acme"}, "agents/unlabeled": {}},
@@ -121,7 +140,8 @@ func newKubeTestWith(t *testing.T, tenantLabel, agentLabel string) (*httptest.Se
 	}
 	db := newMultiDB()
 	keys, _ := newTestKeyStore(t, db, 0)
-	kube, err := newKubeAuth(kubeAuthConfig{apiServer: apiSrv.URL, tokenFile: own, tenantLabel: tenantLabel, agentLabel: agentLabel, keyTTL: 5 * time.Minute}, keys)
+	cfg.apiServer, cfg.tokenFile, cfg.keyTTL = apiSrv.URL, own, 5*time.Minute
+	kube, err := newKubeAuth(cfg, keys)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,5 +265,89 @@ func TestKubernetesAgentFromPodLabel(t *testing.T) {
 	status, body = post(t, srv.URL+"/v1/auth/kubernetes", "", `{"token":"pooled"}`)
 	if status != http.StatusCreated || !strings.Contains(body, `"namespace":"agents:pool-x7k2q"`) {
 		t.Fatalf("no label option: %d %s", status, body)
+	}
+}
+
+// sandboxRef and friends build owner references the way the agent-sandbox
+// controllers write them.
+func sandboxRef(name, uid string) ownerReference {
+	return ownerReference{APIVersion: "agents.x-k8s.io/v1beta1", Kind: "Sandbox", Name: name, UID: uid, Controller: true}
+}
+
+func extensionRef(kind, name, uid string) map[string]any {
+	return map[string]any{"apiVersion": "extensions.agents.x-k8s.io/v1beta1", "kind": kind, "name": name, "uid": uid, "controller": true}
+}
+
+const (
+	sandboxesPath = "/apis/agents.x-k8s.io/v1beta1/namespaces/agents/sandboxes/"
+	claimsPath    = "/apis/extensions.agents.x-k8s.io/v1beta1/namespaces/agents/sandboxclaims/"
+)
+
+func TestKubernetesAgentFromSandboxClaim(t *testing.T) {
+	srv, api, _ := newKubeTestConfig(t, kubeAuthConfig{sandboxClaims: true, agentLabel: "recall.polign.com/agent"})
+	api.reviews["claimed"] = saStatus("agents", "runner", "pool-a1b2c", "recall")
+	api.reviews["warm"] = saStatus("agents", "runner", "pool-d3e4f", "recall")
+	api.reviews["bare"] = saStatus("agents", "runner", "bare-sandbox", "recall")
+	api.reviews["orphan"] = saStatus("agents", "runner", "pool-g5h6i", "recall")
+	api.reviews["stale-claim"] = saStatus("agents", "runner", "pool-j7k8l", "recall")
+	api.reviews["gone-sandbox"] = saStatus("agents", "runner", "pool-m9n0p", "recall")
+	for _, pod := range []string{"pool-a1b2c", "pool-d3e4f", "bare-sandbox", "pool-g5h6i", "pool-j7k8l", "pool-m9n0p"} {
+		api.podLabels["agents/"+pod] = map[string]string{}
+	}
+	api.podLabels["agents/bare-sandbox"] = map[string]string{"recall.polign.com/agent": "hand-made"}
+	api.podOwners = map[string][]ownerReference{
+		"agents/pool-a1b2c":   {sandboxRef("pool-a1b2c", "sb-1")},
+		"agents/pool-d3e4f":   {sandboxRef("pool-d3e4f", "sb-2")},
+		"agents/bare-sandbox": {sandboxRef("bare-sandbox", "sb-3")},
+		"agents/pool-g5h6i":   {sandboxRef("pool-g5h6i", "sb-4")},
+		"agents/pool-j7k8l":   {sandboxRef("pool-j7k8l", "sb-5")},
+		"agents/pool-m9n0p":   {sandboxRef("pool-m9n0p", "sb-6")},
+	}
+	api.objects = map[string]map[string]any{
+		sandboxesPath + "pool-a1b2c":   {"uid": "sb-1", "ownerReferences": []any{extensionRef("SandboxClaim", "run-1", "claim-1")}},
+		sandboxesPath + "pool-d3e4f":   {"uid": "sb-2", "ownerReferences": []any{extensionRef("SandboxWarmPool", "recall-agents", "pool-1")}},
+		sandboxesPath + "bare-sandbox": {"uid": "sb-3"},
+		sandboxesPath + "pool-g5h6i":   {"uid": "sb-4", "ownerReferences": []any{extensionRef("SandboxClaim", "deleted", "claim-2")}},
+		sandboxesPath + "pool-j7k8l":   {"uid": "sb-5", "ownerReferences": []any{extensionRef("SandboxClaim", "run-1", "claim-0")}},
+		sandboxesPath + "pool-m9n0p":   {"uid": "sb-other"},
+		claimsPath + "run-1":           {"uid": "claim-1"},
+	}
+
+	// A claimed pod is the agent its claim names; the session stays the pod.
+	status, body := post(t, srv.URL+"/v1/auth/kubernetes", "", `{"token":"claimed"}`)
+	if status != http.StatusCreated || !strings.Contains(body, `"namespace":"agents:run-1"`) || !strings.Contains(body, `"session":"pool-a1b2c"`) {
+		t.Fatalf("claimed: %d %s", status, body)
+	}
+	// A Sandbox with no controller falls back to the agent label.
+	status, body = post(t, srv.URL+"/v1/auth/kubernetes", "", `{"token":"bare"}`)
+	if status != http.StatusCreated || !strings.Contains(body, `"namespace":"agents:hand-made"`) {
+		t.Fatalf("bare sandbox: %d %s", status, body)
+	}
+	// A pod with no Sandbox owner falls back to its own name.
+	status, body = post(t, srv.URL+"/v1/auth/kubernetes", "", `{"token":"pod-token"}`)
+	if status != http.StatusCreated || !strings.Contains(body, `"namespace":"agents:sandbox-1"`) {
+		t.Fatalf("no owner: %d %s", status, body)
+	}
+	// Still in the warm pool, or tied to a claim or Sandbox that is gone or
+	// was replaced: refused, no key.
+	for _, token := range []string{"warm", "orphan", "stale-claim", "gone-sandbox"} {
+		status, body := post(t, srv.URL+"/v1/auth/kubernetes", "", `{"token":"`+token+`"}`)
+		if status != http.StatusUnauthorized || strings.Contains(body, `"key"`) {
+			t.Errorf("%s: %d %s", token, status, body)
+		}
+	}
+	if _, body := post(t, srv.URL+"/v1/auth/kubernetes", "", `{"token":"warm"}`); !strings.Contains(body, "warm pool") {
+		t.Errorf("warm pool refusal should say why: %s", body)
+	}
+}
+
+func TestKubernetesSandboxClaimsOffIgnoresOwners(t *testing.T) {
+	srv, api, _ := newKubeTest(t, "")
+	api.podOwners = map[string][]ownerReference{"agents/sandbox-1": {sandboxRef("sandbox-1", "sb-1")}}
+	// Without -kubernetes-sandbox-claims the server reads nothing past the
+	// TokenReview, so no Sandbox lookup can fail it.
+	status, body := post(t, srv.URL+"/v1/auth/kubernetes", "", `{"token":"pod-token"}`)
+	if status != http.StatusCreated || !strings.Contains(body, `"namespace":"agents:sandbox-1"`) {
+		t.Fatalf("%d %s", status, body)
 	}
 }

@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- `-kubernetes-sandbox-claims` (`RECALL_KUBERNETES_SANDBOX_CLAIMS=1`): with
+  agent-sandbox, the agent is the name of the SandboxClaim that owns the pod's
+  Sandbox, found by following controller owner references pod -> Sandbox ->
+  SandboxClaim. Deleting a claim and creating it again under the same name
+  gives the new pod the old agent's memory, and no label is needed. A Sandbox
+  with no controller falls back to `-kubernetes-agent-label`, then the pod's
+  name. A Sandbox still owned by a SandboxWarmPool is refused until it is
+  claimed, and each hop checks the referenced UID, so a pod left from a
+  deleted claim gets no key. The server needs `get` on pods,
+  `sandboxes.agents.x-k8s.io` and `sandboxclaims.extensions.agents.x-k8s.io`.
+
 ### Changed
 
 - Keys minted from a Kubernetes workload token are never renewed. `POST
