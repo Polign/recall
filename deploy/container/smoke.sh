@@ -35,12 +35,13 @@ SERVER_PID=$!
 for _ in $(seq 1 60); do curl -sf http://127.0.0.1:23900/readyz >/dev/null 2>&1 && break; sleep 0.5; done
 curl -sf http://127.0.0.1:23900/readyz >/dev/null || { cat "$WORK/server.log" >&2; exit 1; }
 
-# A static Recall key for the test caller, and the image as the server.
+# A static Recall key for the test caller, and the image as the server. It
+# serves the typed tools (-typed), which the calls below are written in.
 RECALL_KEY="rcl_0123456789abcdef_smoke"
 mkdir -p "$WORK/keys"; printf '%s smoke\n' "$RECALL_KEY" > "$WORK/keys/keys"; chmod 644 "$WORK/keys/keys"
 docker run -d --name recall-smoke --add-host=host.docker.internal:host-gateway -p 127.0.0.1:8900:8080 \
   -e POLIGN_API_KEY="$POLIGN_KEY" -v "$WORK/keys:/keys:ro" "$IMAGE" \
-  -url http://host.docker.internal:23900 serve -listen :8080 -keys-file /keys/keys >/dev/null
+  -url http://host.docker.internal:23900 serve -listen :8080 -keys-file /keys/keys -typed >/dev/null
 for _ in $(seq 1 40); do curl -sf http://127.0.0.1:8900/healthz >/dev/null 2>&1 && break; sleep 0.5; done
 curl -sf http://127.0.0.1:8900/healthz >/dev/null || { docker logs recall-smoke >&2; exit 1; }
 
