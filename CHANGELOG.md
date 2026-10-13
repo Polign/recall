@@ -16,6 +16,11 @@
   the text-only tools, none serves the typed tools with the agent naming
   predicates, and `recall setup -typed` keeps the typed tools with a model
   saved.
+- `recall setup` at a terminal asks which extraction model to use, listing
+  none, a hosted model for each provider key in the environment and every
+  local Ollama model that generates text; an empty answer means none. It never
+  picks one itself, and a setup that already saved a model, was given
+  `-extract-model`, or has no terminal is not asked.
 
 ## [0.17.0] - 2026-10-12
 
