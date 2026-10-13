@@ -26,7 +26,7 @@ with tempfile.TemporaryDirectory(prefix='recall-release-') as directory:
         try: p.wait(timeout=15)
         except subprocess.TimeoutExpired: p.kill();p.wait();raise
     def client():
-        return Client(command=[os.environ['RECALL_TEST_POLIGN'],'mcp','-memory-only','-write'],env=env)
+        return Client(command=[os.environ['RECALL_TEST_POLIGN'],'mcp','-memory-only','-write','-typed'],env=env)
     server=start()
     try:
         subprocess.run([sys.executable,'-m','unittest','discover','-s',str(__import__('pathlib').Path(__file__).parent),'-v'],env=env,check=True)

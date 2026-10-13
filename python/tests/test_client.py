@@ -45,7 +45,7 @@ class TransportTests(unittest.TestCase):
         self.command = [sys.executable, "-u", str(script)]
 
     def test_false_zero_and_cleanup(self):
-        with Client(command=self.command) as memory:
+        with Client(command=self.command, typed=True) as memory:
             result = memory.remember("user", "enabled", False, confidence=0)
             self.assertIs(result.stored.value, False)
             self.assertEqual(result.stored.confidence, 0)
@@ -63,7 +63,7 @@ class TransportTests(unittest.TestCase):
 
     def test_observed_at_is_sent_as_an_instant(self):
         from datetime import datetime, timezone
-        with Client(command=self.command) as memory:
+        with Client(command=self.command, typed=True) as memory:
             sent = []
             real = memory._tool
             memory._tool = lambda name, args: (sent.append(args), real(name, args))[1]
@@ -76,7 +76,7 @@ class TransportTests(unittest.TestCase):
                 memory.remember("user", "prefers_editor", "vim", observed_at=datetime(2023, 3, 1))
 
     def test_text_alone_leaves_statements_to_the_server(self):
-        with Client(command=self.command) as memory:
+        with Client(command=self.command, typed=True) as memory:
             sent = []
             memory._tool = lambda name, args: (sent.append(args), {"proposals": [], "results": []})[1]
             memory.remember(text="I use emacs now.")
@@ -86,7 +86,7 @@ class TransportTests(unittest.TestCase):
             Client(command=self.command, extract_model="anthropic")
 
     def test_unknown_fields_from_a_newer_server_are_ignored(self):
-        with Client(command=self.command) as memory:
+        with Client(command=self.command, typed=True) as memory:
             result = memory.remember("future", "prefers_editor", "vim")
             self.assertEqual(result.stored.value, "vim")
             self.assertEqual(result.stored.evidence, "")
@@ -100,13 +100,13 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(_belief({"subject": "4812"}).replaced, ())
 
     def test_partial_results_are_preserved(self):
-        with Client(command=self.command) as memory:
+        with Client(command=self.command, typed=True) as memory:
             with self.assertRaises(RecallError) as failure:
                 memory.remember("partial", "p", "v")
             self.assertEqual(failure.exception.partial, {"results": [1]})
 
     def test_timeout_closes_without_retry(self):
-        with Client(command=self.command, timeout=0.2) as memory:
+        with Client(command=self.command, typed=True, timeout=0.2) as memory:
             with self.assertRaises(RecallError) as failure:
                 memory.recall("timeout")
             self.assertEqual(failure.exception.code, "timeout")
@@ -116,7 +116,7 @@ class TransportTests(unittest.TestCase):
 @unittest.skipUnless(os.environ.get("RECALL_TEST_POLIGN"), "set RECALL_TEST_POLIGN and POLIGN_URL for integration")
 class IntegrationTests(unittest.TestCase):
     def connect(self):
-        return Client(command=[os.environ["RECALL_TEST_POLIGN"], "mcp", "-memory-only", "-write"])
+        return Client(command=[os.environ["RECALL_TEST_POLIGN"], "mcp", "-memory-only", "-write", "-typed"])
 
     def test_sessions_extraction_history_and_retraction(self):
         subject = "python-integration"
@@ -181,7 +181,7 @@ class IntegrationTests(unittest.TestCase):
 @unittest.skipUnless(os.environ.get("RECALL_TEST_POLIGN"), "set RECALL_TEST_POLIGN and POLIGN_URL for integration")
 class AgentIntegrationTests(unittest.TestCase):
     def connect(self):
-        return Client(command=[os.environ["RECALL_TEST_POLIGN"], "mcp", "-memory-only", "-write", "-agent"],
+        return Client(command=[os.environ["RECALL_TEST_POLIGN"], "mcp", "-memory-only", "-write", "-agent", "-typed"],
                       agent=True)
 
     def test_resume_writes_records_and_a_second_client_sees_them(self):
@@ -281,11 +281,17 @@ for line in sys.stdin:
     print(json.dumps({"jsonrpc":"2.0","id":request["id"],"result":{"content":[{"type":"text","text":"[]"}]}}),flush=True)
 '''
 
-# Answers the handshake, then never reads its input again.
+# Answers the handshake (initialize and tools/list), then never reads its
+# input again.
 DEAF = r'''
 import json, sys, time
-request = json.loads(sys.stdin.readline())
-print(json.dumps({"jsonrpc":"2.0","id":request["id"],"result":{"protocolVersion":"2025-06-18"}}),flush=True)
+for _ in range(2):
+    request = json.loads(sys.stdin.readline())
+    if "id" in request:
+        print(json.dumps({"jsonrpc":"2.0","id":request["id"],"result":{"protocolVersion":"2025-06-18"}}),flush=True)
+    else:
+        request = json.loads(sys.stdin.readline())
+        print(json.dumps({"jsonrpc":"2.0","id":request["id"],"result":{}}),flush=True)
 time.sleep(60)
 '''
 
@@ -301,12 +307,12 @@ class ResilienceTests(unittest.TestCase):
         return [sys.executable, "-u", str(script)]
 
     def test_server_notifications_do_not_end_the_session(self):
-        with Client(command=self._command(CHATTY)) as memory:
+        with Client(command=self._command(CHATTY), typed=True) as memory:
             self.assertEqual(memory.predicates(), [])
             self.assertEqual(memory.recall("user", "prefers_editor"), [])
 
     def test_a_server_that_never_reads_times_out_instead_of_hanging(self):
-        memory = Client(command=self._command(DEAF), timeout=2)
+        memory = Client(command=self._command(DEAF), typed=True, timeout=2)
         self.addCleanup(memory.close)
         with self.assertRaises(RecallError) as caught:
             memory.remember("user", "note", "x" * (1 << 20))
@@ -341,6 +347,9 @@ for line in sys.stdin:
         continue
     seen = [{"url": os.environ.get("POLIGN_URL"), "key": os.environ.get("POLIGN_API_KEY"), "argv": args}]
     result = {"content": [{"type": "text", "text": json.dumps(seen)}]} if request["method"] == "tools/call" else {}
+    if request["method"] == "tools/list":
+        names = ["remember", "recall", "forget"] if "-text" in args else ["remember", "recall", "forget", "list_predicates", "memory_history", "explain"]
+        result = {"tools": [{"name": n} for n in names]}
     print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
 ''' % sys.executable
 
@@ -354,6 +363,8 @@ for line in sys.stdin:
     if "id" not in request:
         continue
     result = {}
+    if request["method"] == "tools/list":
+        result = {"tools": [{"name": n} for n in ("remember", "recall", "forget")]}
     if request["method"] == "tools/call":
         name, args = request["params"]["name"], request["params"]["arguments"]
         if name == "remember":
@@ -378,9 +389,13 @@ class TextModeTests(unittest.TestCase):
         path = Path(directory.name) / "text_server.py"
         path.write_text(TEXT_FAKE)
         self.command = [sys.executable, str(path)]
+        typed = Path(directory.name) / "typed_server.py"
+        typed.write_text(FAKE_POLIGN)
+        self.typed_command = [sys.executable, str(typed)]
 
     def test_remember_ask_and_forget_in_words(self):
-        with Client(command=self.command, text=True) as memory:
+        # The text tools are the default; the client follows what the server lists.
+        with Client(command=self.command) as memory:
             result = memory.remember(text="I switched to zed.", observed_at="2026-10-03T00:00:00Z")
             self.assertEqual(result, TextResult((Remembered("user prefers editor: zed", ("user prefers editor: helix",)),), True))
             self.assertEqual(memory.ask("which editor?", as_of="2026-10-10T00:00:00Z"),
@@ -398,11 +413,19 @@ class TextModeTests(unittest.TestCase):
                          lambda: memory.forget("user", "prefers_editor", all=True)):
                 with self.assertRaises(ValueError):
                     call()
-        with Client(command=self.command) as typed:
+        with Client(command=self.typed_command) as typed:
             with self.assertRaises(ValueError):
                 typed.ask("which editor?")
             with self.assertRaises(ValueError):
                 typed.forget_text("my editor")
+
+    def test_the_server_surface_must_match_what_was_asked(self):
+        with self.assertRaises(ValueError):
+            Client(command=self.command, typed=True)
+        with self.assertRaises(ValueError):
+            Client(command=self.typed_command, text=True)
+        with self.assertRaises(ValueError):
+            Client(command=self.command, text=True, typed=True)
 
 
 @unittest.skipIf(sys.platform == "win32", "managed local databases are Unix only")
@@ -420,17 +443,20 @@ class LocalDirTests(unittest.TestCase):
     def test_local_dir_connects_to_the_managed_server(self):
         # A connection aimed at some other server must not leak into either step.
         with unittest.mock.patch.dict(os.environ, {"POLIGN_URL": "http://elsewhere:23000", "POLIGN_API_KEY": "plgn_other"}):
-            with Client(local_dir=Path(self.directory.name) / "data", write=False) as memory:
+            with Client(local_dir=Path(self.directory.name) / "data", write=False, typed=True) as memory:
                 (seen,) = memory.predicates()
         self.assertEqual(seen, {"url": "http://127.0.0.1:4242", "key": "plgn_local_secret",
-                                "argv": ["mcp"]})
+                                "argv": ["mcp", "-typed"]})
 
     def test_agent_mode_adds_the_agent_flag(self):
-        with Client(local_dir=Path(self.directory.name) / "data", agent=True) as memory:
+        with Client(local_dir=Path(self.directory.name) / "data", agent=True, typed=True) as memory:
             (seen,) = memory.predicates()
-        self.assertEqual(seen["argv"], ["mcp", "-write", "-agent"])
+        self.assertEqual(seen["argv"], ["mcp", "-write", "-agent", "-typed"])
 
-    def test_text_mode_adds_the_text_flag(self):
+    def test_the_text_tools_are_the_default(self):
+        with Client(local_dir=Path(self.directory.name) / "data") as memory:
+            (seen,) = memory._tool("list_predicates", {})
+        self.assertEqual(seen["argv"], ["mcp", "-write", "-text"])
         with Client(local_dir=Path(self.directory.name) / "data", text=True) as memory:
             (seen,) = memory._tool("list_predicates", {})
         self.assertEqual(seen["argv"], ["mcp", "-write", "-text"])
@@ -438,7 +464,8 @@ class LocalDirTests(unittest.TestCase):
     def test_without_recall_the_old_polign_commands_serve(self):
         with unittest.mock.patch("polign_recall.client.recall_bin", return_value=None), \
              unittest.mock.patch("polign_recall.client.polign_bin", return_value=str(self.recall)):
-            with Client(local_dir=Path(self.directory.name) / "data", write=False) as memory:
+            # polign mcp predates -typed: no surface flag, and it serves the typed tools.
+            with Client(local_dir=Path(self.directory.name) / "data", write=False, typed=True) as memory:
                 (seen,) = memory.predicates()
         self.assertEqual(seen["argv"], ["mcp", "-memory-only"])
 

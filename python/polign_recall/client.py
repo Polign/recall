@@ -558,23 +558,30 @@ class Client:
     "openai:<model>", or "ollama:<model>". Keys come from ANTHROPIC_API_KEY or
     OPENAI_API_KEY. POLIGN_EXTRACT_MODEL in the environment does the same.
 
-    `text=True` uses the text tools instead of the typed ones (`recall mcp
-    -text`): `remember(text=...)`, `ask(question)` and `forget_text(...)`,
-    with no predicates anywhere. The server works out the facts with
-    `extract_model`; without one, remembered text is kept as written and
-    replaces nothing. With `command`, the command must start the server with
-    -text itself. Needs recall 0.14 or later.
+    The client serves the text tools unless told otherwise: `remember(text=...)`,
+    `ask(question)` and `forget_text(...)`, with no predicates anywhere. The
+    server works out the facts with `extract_model`; without one, remembered
+    text is kept as written and replaces nothing. `typed=True` serves the typed
+    tools instead (`recall mcp -typed`, recall 0.18 or later): `remember(subject,
+    predicate, value)`, `recall`, `predicates`, `history` and `forget`.
+    `text=True` insists on the text tools (recall 0.14 or later). With `command`
+    or `url`, the server decides, and the client follows what it lists; asking
+    for the other surface is an error.
     """
 
     def __init__(self, *, command: Sequence[str] | None = None,
                  env: Mapping[str, str] | None = None, timeout: float = 120,
                  write: bool = True, local_dir: str | os.PathLike[str] | None = None,
-                 agent: bool = False, extract_model: str | None = None, text: bool = False,
-                 url: str | None = None, api_key: str | None = None, token_file: str | None = None):
+                 agent: bool = False, extract_model: str | None = None, text: bool | None = None,
+                 typed: bool = False, url: str | None = None, api_key: str | None = None,
+                 token_file: str | None = None):
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be finite and positive")
         if agent and not write:
             raise ValueError("agent=True needs write=True: resuming an agent writes its records")
+        if text and typed:
+            raise ValueError("text=True and typed=True name different tools; pass one")
+        self.server_version = ""
         self._http: _HTTPSession | None = None
         self._process: subprocess.Popen[bytes] | None = None
         if url is not None:
@@ -585,16 +592,13 @@ class Client:
             self._id = 0
             self._closed = False
             self._http = _HTTPSession(url, api_key, token_file, timeout)
-            self._rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
-                                     "clientInfo": {"name": "polign-recall-python", "version": "0.1.0"}})
+            self._initialize()
             self._http.notify({"jsonrpc": "2.0", "method": "notifications/initialized"})
-            names = {t.get("name") for t in self._rpc("tools/list", {}).get("tools", [])}
-            self._text = "remember" in names and "memory_history" not in names
+            names = self._tool_names()
             self._agent = "agent_resume" in names
             if agent and not self._agent:
                 raise ValueError("agent=True, but this server does not serve the resume tools (its backend has no leases)")
-            if text and not self._text:
-                raise ValueError("text=True, but this server serves the typed tools")
+            self._adopt_surface(names, text, typed)
             return
         if api_key is not None or token_file is not None:
             raise ValueError("api_key and token_file go with url")
@@ -608,11 +612,17 @@ class Client:
         self._id = 0
         self._closed = False
         self._agent = agent
-        self._text = text
+        self._text = text is not False and not typed
         serve, setup = _server() if command is None else ([], [])
+        if command is not None:
+            surface: list[str] = []
+        elif "-memory-only" in serve:
+            # polign mcp predates -typed and serves the typed tools unasked.
+            surface = ["-text"] if text else []
+        else:
+            surface = ["-typed"] if typed else ["-text"]
         argv = list(command) if command is not None else (
-            serve + (["-write"] if write else []) + (["-agent"] if agent else [])
-            + (["-text"] if text else [])
+            serve + (["-write"] if write else []) + (["-agent"] if agent else []) + surface
             + (["-extract-model", extract_model] if extract_model else []))
         if local_dir is not None:
             env = {**(env or {}), **_local_server(setup, local_dir, timeout)}
@@ -628,12 +638,38 @@ class Client:
         self._reader = threading.Thread(target=self._read, daemon=True)
         self._reader.start()
         try:
-            self._rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
-                                     "clientInfo": {"name": "polign-recall-python", "version": "0.1.0"}})
+            self._initialize()
             self._send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+            self._adopt_surface(self._tool_names(), text, typed)
+        except RecallError as exc:
+            self.close()
+            if typed and exc.code == "transport_error":
+                raise RecallError(f"{exc} (typed=True passes -typed to recall mcp, which needs recall 0.18 or later)",
+                                  code=exc.code) from exc
+            raise
         except BaseException:
             self.close()
             raise
+
+    def _initialize(self) -> None:
+        result = self._rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                          "clientInfo": {"name": "polign-recall-python", "version": "0.1.0"}})
+        info = result.get("serverInfo") if isinstance(result, dict) else None
+        self.server_version = str((info or {}).get("version") or "")
+
+    def _tool_names(self) -> set[str]:
+        return {t.get("name") for t in self._rpc("tools/list", {}).get("tools", [])}
+
+    def _adopt_surface(self, names: set[str], text: bool | None, typed: bool) -> None:
+        """Follow the tools the server lists: the typed tools always include
+        list_predicates, the text tools never do. A server that lists nothing
+        (a stub) is taken at the caller's word."""
+        if names:
+            self._text = "list_predicates" not in names
+        if typed and self._text:
+            raise ValueError("typed=True, but this server serves the text tools; start it with -typed (recall 0.18 or later)")
+        if text and not self._text:
+            raise ValueError("text=True, but this server serves the typed tools; start it with -text (recall 0.14 or later)")
 
     @classmethod
     def from_env(cls, **kwargs: Any) -> Client:
@@ -835,12 +871,13 @@ class Client:
 
     def _need_text(self, method: str) -> None:
         if not self._text:
-            raise ValueError(f"{method} needs a client opened with text=True")
+            raise ValueError(f"{method} uses the text tools; this client serves the typed tools "
+                             "(open it without typed=True, or use recall, remember(subject, predicate, value) and forget)")
 
     def _need_typed(self, method: str) -> None:
         if self._text:
-            raise ValueError(f"{method} uses the typed tools; this client was opened with text=True "
-                             "(use ask, remember(text=...) and forget_text)")
+            raise ValueError(f"{method} uses the typed tools; this client serves the text tools "
+                             "(open it with typed=True, or use ask, remember(text=...) and forget_text)")
 
     def recall(self, subject: str | None = None, predicate: str | None = None, *,
                query: str | None = None, as_of: str | datetime | None = None,
