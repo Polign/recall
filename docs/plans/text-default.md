@@ -94,22 +94,23 @@ client guards the mismatch instead of a two-step rollout.
   migration lines (`-typed` for the old surface; `-predicates` for the
   old registry).
 
-### 4. Abstention (build, then measure)
+### 4. Abstention (disclose)
 
-The 267 run moved abstention from 93.3 to 80.0 on 15 questions
-(2 of 15 answered when they should have declined). Decided: build and
-rerun.
+The 267 run moved abstention from 93.3 to 80.0 on 15 questions. Read on
+2026-10-13 from the two runs' judge.jsonl and ingest logs:
 
-1. In `recall(question)`, when every supporting belief sits on a coined
-   predicate (not a seed) and the match score is below a threshold, answer
-   with the evidence and "nothing stored says this directly" rather than a
-   value. Tune the threshold offline against the 15 cached abstention
-   rows first; no new extraction.
-2. Rerun the 267 user-facts subset with the change (gpt-4o-mini
-   extraction cached, gpt-4o read/judge). Estimated ~$11; confirm the
-   figure from the cache state on the day and get a go before running.
-   Pass bar: abstention back above 90 with accuracy within 2 points of
-   79.4. Report both numbers in the 0.18.0 notes either way.
+- One is judge noise: 2133c1b5_abs got the same answer in both runs
+  ("you said Harajuku, not Shinjuku, 3 months") and gpt-4o judged it
+  right in the fixed run and wrong in the open run.
+- One is a filing loss: f4f1d8a4_abs ("what did my dad give me?"). The
+  fixed registry filed `detail: received a new stand mixer as a birthday
+  gift from sister`; the open vocabulary filed `owns: stand mixer`, and
+  the reader guessed dad. `owns` is a seed predicate, so a decline keyed
+  on coined predicates would not have fired.
+
+Decided: disclose only. The 0.18.0 notes carry the numbers and the cause.
+A prompt rule ("values keep the participants") plus a full re-extraction
+would cost about $12 and is not approved.
 
 ### 5. Docs, skill, site (with 0.18.0)
 
@@ -139,8 +140,8 @@ rerun.
 1. Setup with `none`: the Claude Code plugin keeps typed open tools
    (Claude extracts, replacement still works). Text tools come with a
    model.
-2. Abstention: build the weak-evidence answer and rerun the 267 subset
-   (~$11, go confirmed at run time).
+2. Abstention: disclose only (revised 2026-10-13 after reading the two
+   runs; see phase 4).
 3. Setup asks the model question on a TTY; non-interactive runs get
    `none` plus the hint.
 

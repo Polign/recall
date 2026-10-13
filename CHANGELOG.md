@@ -16,6 +16,12 @@
   the text-only tools, none serves the typed tools with the agent naming
   predicates, and `recall setup -typed` keeps the typed tools with a model
   saved.
+  Measured on the LongMemEval user-facts subset (267 questions, gpt-4o-mini
+  extraction, gpt-4o reader and judge): the open vocabulary answered 79.4%
+  against 81.3% for the hand-tuned registry (p=0.36), retrieved better
+  (nDCG@5 80.2 against 75.7) and abstained less (80.0% against 93.3% on 15
+  questions: one answer the judge scored differently in the two runs, and one
+  fact filed under a predicate whose value dropped who gave the gift).
 - `recall setup` at a terminal asks which extraction model to use, listing
   none, a hosted model for each provider key in the environment and every
   local Ollama model that generates text; an empty answer means none. It never
