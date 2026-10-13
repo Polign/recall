@@ -141,6 +141,11 @@ resume tools and is unaffected. Branch at/recall-text-default in
 Polign/polign also carries the recall chart 0.3.0 and the plugin README;
 polign_web at/recall-text-default carries the site pages.
 
+The agent-sandbox example (kubernetes-sigs/agent-sandbox
+examples/recall-memory, PR 1913) posts typed bodies to `/v1/remember` and
+`/v1/recall`. It pins recall 0.17.0, so it is unaffected until the image is
+bumped; the bump must add `- -typed` to the server args.
+
 ### 6. Release order
 
 1. recall `v0.18.0` + Python 0.18.0 on one tag; `pyproject` and
