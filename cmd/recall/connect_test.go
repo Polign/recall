@@ -64,6 +64,9 @@ func TestConnectBridgesStdioToTheServerWithAnExchangedToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	cred := newExchangedKey(srv.URL, tokenFile, srv.Client())
+	// The key store runs on a fixed test clock; the client must share it, or
+	// on any later day every key looks past half its life and is replaced.
+	cred.now = func() time.Time { return time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC) }
 	b := newBridge(srv.URL, cred, srv.Client(), nil)
 
 	// Messages in one burst are forwarded concurrently, as a client that
