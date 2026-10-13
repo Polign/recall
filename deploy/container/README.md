@@ -16,9 +16,9 @@ SBOM, and signs the digest. Verify a published image with Cosign:
 
 ```sh
 cosign verify \
-  --certificate-identity=https://github.com/Polign/recall/.github/workflows/container-release.yml@refs/tags/v0.16.0 \
+  --certificate-identity=https://github.com/Polign/recall/.github/workflows/container-release.yml@refs/tags/v0.17.0 \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
-  ghcr.io/polign/recall:0.16.0
+  ghcr.io/polign/recall:0.17.0
 ```
 
 Run the smoke test locally against any image and a `polign-server` binary (the

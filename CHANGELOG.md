@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-12
+
 ### Added
 
 - `-kubernetes-sandbox-claims` (`RECALL_KUBERNETES_SANDBOX_CLAIMS=1`): with
@@ -23,6 +25,11 @@
   already do when a renewal is refused. A key copied out of a pod therefore
   dies at its TTL, and nothing can extend a deleted pod's key. Key views
   carry `renewable`.
+
+### Fixed
+
+- `docker build` from the repository root no longer sends `eval/` as build
+  context; a `.dockerignore` keeps the context to the Go source.
 
 ## [0.16.0] - 2026-10-11
 
