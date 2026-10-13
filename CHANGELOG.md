@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `recall mcp` and `recall serve` serve the text-only tools by default:
+  `remember(text)`, `recall(question)` and `forget(text)`, with writes
+  defining predicates as they go. Give `-extract-model` so the server works
+  out the facts; without one, text is kept as written and replaces nothing,
+  and the server's instructions say so. `-typed` (`RECALL_TYPED=1`) serves
+  the typed tools instead, as before; `-predicates FILE` fixes the vocabulary
+  as before and `-open` lets writes add to it. `-text` is accepted and does
+  nothing. Setups made by `recall setup` are unchanged: a saved model serves
+  the text-only tools, none serves the typed tools with the agent naming
+  predicates, and `recall setup -typed` keeps the typed tools with a model
+  saved.
+
 ## [0.17.0] - 2026-10-12
 
 ### Added

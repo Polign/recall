@@ -24,6 +24,9 @@ type Config struct {
 	// Open lets writes define predicates, so no predicates file is needed.
 	// Setups made before it existed keep a closed vocabulary.
 	Open bool `json:"open,omitempty"`
+	// Typed keeps the typed tools even when a model is saved: the agent
+	// names predicates and the model extracts nothing.
+	Typed bool `json:"typed,omitempty"`
 }
 
 type Runtime struct {

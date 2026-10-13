@@ -55,7 +55,8 @@ func cmdRecall(args []string, out io.Writer) error {
 	noPlugin := fs.Bool("no-plugin", false, "configure and check Recall without installing the Claude plugin")
 	claude := fs.String("claude", "", "Claude executable (otherwise auto-detected)")
 	server := fs.String("server", "", "Polign server executable (otherwise alongside this CLI)")
-	extractModel := fs.String("extract-model", "", "model that works out what remembered text says, as provider:model (anthropic:claude-haiku-4-5-20251001, openai:<model>, ollama:<model>); with one, Recall offers text-only tools. none clears a saved model")
+	extractModel := fs.String("extract-model", "", "model that works out what remembered text says, as provider:model (anthropic:claude-haiku-4-5-20251001, openai:<model>, ollama:<model>); with one, Recall serves the text-only tools. none clears a saved model")
+	typed := fs.Bool("typed", false, "serve the typed tools (remember with subject, predicate and value) even with a model saved; -typed=false goes back to the text-only tools")
 	if err := fs.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -74,7 +75,7 @@ func cmdRecall(args []string, out io.Writer) error {
 	}
 	*dir = absolute
 	if args[0] != "setup" {
-		if *endpoint != "" || *local || *collection != "" || *noPlugin || *claude != "" || *server != "" || *extractModel != "" {
+		if *endpoint != "" || *local || *collection != "" || *noPlugin || *claude != "" || *server != "" || *extractModel != "" || *typed {
 			return fmt.Errorf("connection options belong to recall setup")
 		}
 		var cfg recallsetup.Config
@@ -110,7 +111,7 @@ func cmdRecall(args []string, out io.Writer) error {
 				return err
 			}
 			spec := envOr("POLIGN_EXTRACT_MODEL", cfg.ExtractModel)
-			text := spec != ""
+			text := spec != "" && !cfg.Typed
 			mem, err := newMemoryRuntime(c, cfg.Collection, cfg.Predicates, "", cfg.Predicates == "" && (cfg.Open || text))
 			if err != nil {
 				return err
@@ -177,6 +178,11 @@ func cmdRecall(args []string, out io.Writer) error {
 			return fmt.Errorf("-extract-model: %w", err)
 		}
 		cfg.ExtractModel = *extractModel
+	}
+	typedGiven := false
+	fs.Visit(func(f *flag.Flag) { typedGiven = typedGiven || f.Name == "typed" })
+	if typedGiven {
+		cfg.Typed = *typed
 	}
 	if *endpoint != "" {
 		cfg.URL = *endpoint
@@ -655,6 +661,8 @@ func localServerPath(exe string) string {
 // describeSurface says which tools a saved setup serves, and why.
 func describeSurface(cfg recallsetup.Config) string {
 	switch {
+	case cfg.ExtractModel != "" && cfg.Typed:
+		return "Extraction model: " + cfg.ExtractModel + ", unused (typed tools, -typed; setup again with -typed=false for the text-only tools)"
 	case cfg.ExtractModel != "":
 		return "Extraction model: " + cfg.ExtractModel + " (text-only tools: remember, recall, forget)"
 	case cfg.Predicates != "":

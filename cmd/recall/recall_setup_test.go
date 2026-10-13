@@ -73,10 +73,11 @@ func TestLocalKeyShape(t *testing.T) {
 
 func TestDescribeSurface(t *testing.T) {
 	for cfg, want := range map[recallsetup.Config]string{
-		{ExtractModel: "ollama:qwen3:8b"}:   "text-only tools",
-		{Predicates: "/p.json", Open: true}: "predicates from /p.json",
-		{Open: true}:                        "defined on first use",
-		{}:                                  "starter predicates",
+		{ExtractModel: "ollama:qwen3:8b"}:              "text-only tools",
+		{ExtractModel: "ollama:qwen3:8b", Typed: true}: "unused (typed tools",
+		{Predicates: "/p.json", Open: true}:            "predicates from /p.json",
+		{Open: true}:                                   "defined on first use",
+		{}:                                             "starter predicates",
 	} {
 		if got := describeSurface(cfg); !strings.Contains(got, want) {
 			t.Errorf("%+v: %q, want it to mention %q", cfg, got, want)

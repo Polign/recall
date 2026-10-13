@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"flag"
 	"strings"
 	"testing"
 )
@@ -156,5 +157,38 @@ func TestMCPMalformedInputEndsTheSession(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), `"code":-32700`) {
 		t.Errorf("want a parse error reported to the client, got %q", buf.String())
+	}
+}
+
+func TestSurfaceDefaultsToTextTools(t *testing.T) {
+	for _, tc := range []struct {
+		args       []string
+		predicates string
+		text, open bool
+		wantErr    bool
+	}{
+		{args: nil, text: true, open: true},
+		{args: []string{"-typed"}, text: false, open: true},
+		{args: []string{"-text=false"}, text: false, open: true},
+		{args: nil, predicates: "/p.json", text: true, open: false},
+		{args: []string{"-open"}, predicates: "/p.json", text: true, open: true},
+		{args: []string{"-text", "-typed"}, wantErr: true},
+		{args: []string{"-text=false", "-typed"}, text: false, open: true},
+	} {
+		fs := flag.NewFlagSet("test", flag.ContinueOnError)
+		text := fs.Bool("text", true, "")
+		typed := fs.Bool("typed", false, "")
+		open := fs.Bool("open", false, "")
+		if err := fs.Parse(tc.args); err != nil {
+			t.Fatal(err)
+		}
+		gotText, gotOpen, err := surface(fs, *text, *typed, *open, tc.predicates)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("%v predicates=%q: err %v, wantErr %v", tc.args, tc.predicates, err, tc.wantErr)
+			continue
+		}
+		if err == nil && (gotText != tc.text || gotOpen != tc.open) {
+			t.Errorf("%v predicates=%q: text %v open %v, want text %v open %v", tc.args, tc.predicates, gotText, gotOpen, tc.text, tc.open)
+		}
 	}
 }
