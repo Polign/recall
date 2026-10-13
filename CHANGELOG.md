@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-13
+
 ### Changed
 
 - `recall mcp` and `recall serve` serve the text-only tools by default:
