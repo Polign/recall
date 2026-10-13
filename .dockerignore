@@ -1,0 +1,11 @@
+# The image builds ./cmd/recall only. Keep the build context to the source:
+# eval/ holds many GB of local benchmark data and is never part of the image.
+.git
+dist/
+eval/
+python/
+packaging/
+**/__pycache__
+**/*.egg-info
+*.test
+*.out
