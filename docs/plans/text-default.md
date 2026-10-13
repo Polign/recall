@@ -128,12 +128,29 @@ would cost about $12 and is not approved.
   it still serves memory tools, point it at `recall mcp` in its help text
   rather than flipping it too.
 
+### 5b. Integration packages (found 2026-10-13)
+
+recall-livekit, recall-vapi and recall-pydantic-ai build or take a
+`polign_recall.Client` and use the typed calls, so the Python default flip
+breaks them. Decided: flip anyway. livekit and vapi pass `typed=True`
+themselves; pydantic-ai takes the client from the caller, so its README,
+docstring and site page say `Client(..., typed=True)`. All three pin
+`polign-recall>=0.18.0` and get patch releases (livekit 0.3.1, vapi 0.2.1,
+pydantic-ai 0.1.1) after recall 0.18.0. recall-langgraph only uses the
+resume tools and is unaffected. Branch at/recall-text-default in
+Polign/polign also carries the recall chart 0.3.0 and the plugin README;
+polign_web at/recall-text-default carries the site pages.
+
 ### 6. Release order
 
-1. recall `v0.18.0` + Python 0.18.0 on one tag; CHANGELOG heading,
-   `pyproject` and `__init__` bumped before the tag (release checklist).
-2. Plugin skill merge, then site branch.
-3. Homebrew cask follows the tag; chart `polign-chart-v0.3.0` after.
+1. recall `v0.18.0` + Python 0.18.0 on one tag; `pyproject` and
+   `__init__` are already 0.18.0 on the branch, the CHANGELOG heading is
+   set at tag time (release checklist).
+2. Polign/polign at/recall-text-default merge (chart 0.3.0, plugin README,
+   three integration packages), then tags livekit/v0.3.1, vapi/v0.2.1,
+   pydanticai/v0.1.1 and the chart tag.
+3. polign_web at/recall-text-default merge (main autodeploys).
+4. Homebrew cask follows the recall tag.
 
 ## Decisions (Anup, 2026-10-13)
 
