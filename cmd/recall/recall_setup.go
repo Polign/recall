@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -55,7 +56,8 @@ func cmdRecall(args []string, out io.Writer) error {
 	noPlugin := fs.Bool("no-plugin", false, "configure and check Recall without installing the Claude plugin")
 	claude := fs.String("claude", "", "Claude executable (otherwise auto-detected)")
 	server := fs.String("server", "", "Polign server executable (otherwise alongside this CLI)")
-	extractModel := fs.String("extract-model", "", "model that works out what remembered text says, as provider:model (anthropic:claude-haiku-4-5-20251001, openai:<model>, ollama:<model>); with one, Recall offers text-only tools. none clears a saved model")
+	extractModel := fs.String("extract-model", "", "model that works out what remembered text says, as provider:model (anthropic:claude-haiku-4-5-20251001, openai:<model>, ollama:<model>); with one, Recall serves the text-only tools. none clears a saved model")
+	typed := fs.Bool("typed", false, "serve the typed tools (remember with subject, predicate and value) even with a model saved; -typed=false goes back to the text-only tools")
 	if err := fs.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -74,7 +76,7 @@ func cmdRecall(args []string, out io.Writer) error {
 	}
 	*dir = absolute
 	if args[0] != "setup" {
-		if *endpoint != "" || *local || *collection != "" || *noPlugin || *claude != "" || *server != "" || *extractModel != "" {
+		if *endpoint != "" || *local || *collection != "" || *noPlugin || *claude != "" || *server != "" || *extractModel != "" || *typed {
 			return fmt.Errorf("connection options belong to recall setup")
 		}
 		var cfg recallsetup.Config
@@ -110,7 +112,7 @@ func cmdRecall(args []string, out io.Writer) error {
 				return err
 			}
 			spec := envOr("POLIGN_EXTRACT_MODEL", cfg.ExtractModel)
-			text := spec != ""
+			text := spec != "" && !cfg.Typed
 			mem, err := newMemoryRuntime(c, cfg.Collection, cfg.Predicates, "", cfg.Predicates == "" && (cfg.Open || text))
 			if err != nil {
 				return err
@@ -177,6 +179,21 @@ func cmdRecall(args []string, out io.Writer) error {
 			return fmt.Errorf("-extract-model: %w", err)
 		}
 		cfg.ExtractModel = *extractModel
+	}
+	typedGiven := false
+	fs.Visit(func(f *flag.Flag) { typedGiven = typedGiven || f.Name == "typed" })
+	if typedGiven {
+		cfg.Typed = *typed
+	}
+	// A first setup at a terminal is asked which model, if any; a setup
+	// that already has a model, or an answer on the command line, or no
+	// terminal to ask at, is not.
+	if *extractModel == "" && cfg.ExtractModel == "" && !cfg.Typed && isTerminal(os.Stdin) {
+		choice, err := askModel(os.Stdin, out, modelChoices())
+		if err != nil {
+			return err
+		}
+		cfg.ExtractModel = choice
 	}
 	if *endpoint != "" {
 		cfg.URL = *endpoint
@@ -655,6 +672,8 @@ func localServerPath(exe string) string {
 // describeSurface says which tools a saved setup serves, and why.
 func describeSurface(cfg recallsetup.Config) string {
 	switch {
+	case cfg.ExtractModel != "" && cfg.Typed:
+		return "Extraction model: " + cfg.ExtractModel + ", unused (typed tools, -typed; setup again with -typed=false for the text-only tools)"
 	case cfg.ExtractModel != "":
 		return "Extraction model: " + cfg.ExtractModel + " (text-only tools: remember, recall, forget)"
 	case cfg.Predicates != "":
@@ -665,12 +684,83 @@ func describeSurface(cfg recallsetup.Config) string {
 	return "Extraction model: none (typed tools with the starter predicates)"
 }
 
+// isTerminal reports whether f is a terminal, where a question can be asked.
+func isTerminal(f *os.File) bool {
+	info, err := f.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+// modelChoice is one answer to the setup question: a model spec, or "" for
+// none, and what choosing it means.
+type modelChoice struct {
+	spec, note string
+}
+
+// modelChoices lists what setup can offer at this machine: a hosted model
+// for each provider key in the environment and every local Ollama model that
+// generates text, after none. Setup never picks one itself: a hosted model
+// receives every remembered passage and bills each one, and a local one can
+// add seconds to every write, so the choice is the user's.
+func modelChoices() []modelChoice {
+	choices := []modelChoice{{"", "typed tools; the agent names the facts itself"}}
+	if os.Getenv("ANTHROPIC_API_KEY") != "" {
+		choices = append(choices, modelChoice{"anthropic:claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY is set; every remembered passage is sent to Anthropic and billed"})
+	}
+	if os.Getenv("OPENAI_API_KEY") != "" {
+		choices = append(choices, modelChoice{"openai:gpt-5-mini", "OPENAI_API_KEY is set; every remembered passage is sent to OpenAI and billed"})
+	}
+	for _, name := range ollamaModels() {
+		choices = append(choices, modelChoice{"ollama:" + name, "local; can add seconds to every write"})
+	}
+	return choices
+}
+
+// askModel puts the setup question to the user and returns the model spec
+// chosen: a number from the list, a provider:model typed in, or "" for none,
+// which an empty answer also means. A spec that does not parse is asked
+// again; end of input means none.
+func askModel(in io.Reader, out io.Writer, choices []modelChoice) (string, error) {
+	fmt.Fprintln(out, "\nExtraction model? With one, Recall works out the facts in remembered text and serves the text-only tools. Without one, text is kept as written and the agent names the facts itself.")
+	for i, c := range choices {
+		name := c.spec
+		if name == "" {
+			name = "none"
+		}
+		fmt.Fprintf(out, "  %d. %s (%s)\n", i+1, name, c.note)
+	}
+	reader := bufio.NewReader(in)
+	for {
+		fmt.Fprint(out, "Choose a number, or type provider:model [1]: ")
+		line, err := reader.ReadString('\n')
+		answer := strings.TrimSpace(line)
+		if answer == "" {
+			if err != nil {
+				fmt.Fprintln(out)
+			}
+			return "", nil
+		}
+		if n, convErr := strconv.Atoi(answer); convErr == nil {
+			if n >= 1 && n <= len(choices) {
+				return choices[n-1].spec, nil
+			}
+			fmt.Fprintf(out, "There is no choice %d.\n", n)
+		} else if _, specErr := newExtractor(answer); specErr != nil {
+			fmt.Fprintf(out, "%v\n", specErr)
+		} else {
+			return answer, nil
+		}
+		if err != nil {
+			return "", nil
+		}
+	}
+}
+
 // modelHint tells a setup without a model what one would add, naming the
 // local Ollama models it can see. Setup never picks one itself: a hosted
 // model receives every remembered passage and bills each one, and a local
 // one can add seconds to every write, so the choice is the user's.
 func modelHint() string {
-	hint := "To let Recall work out facts from text itself, and use text-only tools with no predicates in them, run setup again with -extract-model, for example -extract-model anthropic:claude-haiku-4-5-20251001 (reads ANTHROPIC_API_KEY where Claude runs)."
+	hint := "To let Recall work out facts from text itself, and serve the text-only tools with no predicates in them, run setup again with -extract-model, for example -extract-model anthropic:claude-haiku-4-5-20251001 (reads ANTHROPIC_API_KEY where Claude runs)."
 	if models := ollamaModels(); len(models) > 0 {
 		hint += " Local Ollama models found: " + strings.Join(models, ", ") + " (use -extract-model ollama:<name>)."
 	}

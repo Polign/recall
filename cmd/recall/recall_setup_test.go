@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -73,13 +74,39 @@ func TestLocalKeyShape(t *testing.T) {
 
 func TestDescribeSurface(t *testing.T) {
 	for cfg, want := range map[recallsetup.Config]string{
-		{ExtractModel: "ollama:qwen3:8b"}:   "text-only tools",
-		{Predicates: "/p.json", Open: true}: "predicates from /p.json",
-		{Open: true}:                        "defined on first use",
-		{}:                                  "starter predicates",
+		{ExtractModel: "ollama:qwen3:8b"}:              "text-only tools",
+		{ExtractModel: "ollama:qwen3:8b", Typed: true}: "unused (typed tools",
+		{Predicates: "/p.json", Open: true}:            "predicates from /p.json",
+		{Open: true}:                                   "defined on first use",
+		{}:                                             "starter predicates",
 	} {
 		if got := describeSurface(cfg); !strings.Contains(got, want) {
 			t.Errorf("%+v: %q, want it to mention %q", cfg, got, want)
+		}
+	}
+}
+
+func TestAskModel(t *testing.T) {
+	choices := []modelChoice{{"", "none"}, {"anthropic:claude-haiku-4-5-20251001", "hosted"}, {"ollama:qwen3:8b", "local"}}
+	for _, tc := range []struct {
+		in, want string
+		mentions string
+	}{
+		{"", "", "1. none"},
+		{"\n", "", ""},
+		{"1\n", "", ""},
+		{"3\n", "ollama:qwen3:8b", "3. ollama:qwen3:8b (local)"},
+		{"9\n2\n", "anthropic:claude-haiku-4-5-20251001", "no choice 9"},
+		{"nonsense\nollama:llama3.1\n", "ollama:llama3.1", "nonsense"},
+		{"nonsense", "", ""},
+	} {
+		var out bytes.Buffer
+		got, err := askModel(strings.NewReader(tc.in), &out, choices)
+		if err != nil || got != tc.want {
+			t.Errorf("askModel(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
+		}
+		if tc.mentions != "" && !strings.Contains(out.String(), tc.mentions) {
+			t.Errorf("askModel(%q) printed %q, want it to mention %q", tc.in, out.String(), tc.mentions)
 		}
 	}
 }

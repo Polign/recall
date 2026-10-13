@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `recall mcp` and `recall serve` serve the text-only tools by default:
+  `remember(text)`, `recall(question)` and `forget(text)`, with writes
+  defining predicates as they go. Give `-extract-model` so the server works
+  out the facts; without one, text is kept as written and replaces nothing,
+  and the server's instructions say so. `-typed` (`RECALL_TYPED=1`) serves
+  what every release before this one served: the typed tools over the starter
+  registry or `-predicates FILE`, with `-open` letting writes add predicates.
+  `-predicates FILE` fixes the vocabulary on either surface. `-text` is
+  accepted and does nothing. Setups made by `recall setup` are unchanged: a saved model serves
+  the text-only tools, none serves the typed tools with the agent naming
+  predicates, and `recall setup -typed` keeps the typed tools with a model
+  saved.
+  Measured on the LongMemEval user-facts subset (267 questions, gpt-4o-mini
+  extraction, gpt-4o reader and judge): the open vocabulary answered 79.4%
+  against 81.3% for the hand-tuned registry (p=0.36), retrieved better
+  (nDCG@5 80.2 against 75.7) and abstained less (80.0% against 93.3% on 15
+  questions: one answer the judge scored differently in the two runs, and one
+  fact filed under a predicate whose value dropped who gave the gift).
+- `recall setup` at a terminal asks which extraction model to use, listing
+  none, a hosted model for each provider key in the environment and every
+  local Ollama model that generates text; an empty answer means none. It never
+  picks one itself, and a setup that already saved a model, was given
+  `-extract-model`, or has no terminal is not asked.
+
 ## [0.17.0] - 2026-10-12
 
 ### Added

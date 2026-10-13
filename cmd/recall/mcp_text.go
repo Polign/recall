@@ -61,6 +61,9 @@ func (s *mcpServer) textInstructions() string {
 	b.WriteString("\n\nThis server remembers things durably, in collection " + s.collection + ".\n")
 	if s.write {
 		b.WriteString("Use remember when the user states a preference or a fact worth keeping, makes a decision, or corrects something; pass the passage as text. ")
+		if s.memory.extractor == nil {
+			b.WriteString("This server has no extraction model, so remembered text is kept as written: recall finds it by its words, but nothing replaces anything. Start the server with -extract-model to have it work out the facts. ")
+		}
 	}
 	b.WriteString("Use recall before assuming anything about the user. A newer statement replaces an older one, and recall shows what it replaced under before; mention a correction when it matters to the answer. ")
 	if s.write {

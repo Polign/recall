@@ -28,11 +28,13 @@ from reading this guide.
 
 A server can offer one of two tool surfaces:
 
-- **Text tools** (`recall mcp -text -extract-model <provider:model>`, or a setup
-  saved with `recall setup -extract-model`): `remember`, `recall`, and `forget`
-  take plain text, and the server works out the facts with its model.
-- **Typed tools** (the default): `remember` takes a subject, predicate, and
-  value, and `list_predicates`, `memory_history`, and `explain` are offered too.
+- **Text tools** (the default; `recall mcp -extract-model <provider:model>`,
+  or a setup saved with `recall setup -extract-model`): `remember`, `recall`,
+  and `forget` take plain text, and the server works out the facts with its
+  model.
+- **Typed tools** (`recall mcp -typed`, or a setup saved without a model):
+  `remember` takes a subject, predicate, and value, and `list_predicates`,
+  `memory_history`, and `explain` are offered too.
 
 Check the tool list: if `remember` takes only `text` and there is no
 `list_predicates`, use the text tools section below; otherwise use the typed
@@ -86,8 +88,8 @@ its instructions:
   When a statement is worth keeping and no predicate fits, use predicate `note`
   with the statement in the user's words as the value. Notes accumulate, never
   replace each other, and come back after typed memories.
-- **Open** (`recall mcp -open`, or new setups; they say new predicates are
-  defined by first use): reuse a listed predicate whenever one fits. Otherwise
+- **Open** (`recall mcp -typed -open`, or new setups; they say new predicates
+  are defined by first use): reuse a listed predicate whenever one fits. Otherwise
   name a short relation that many facts could share, such as `allergic_to`,
   never with the value or subject in its name. On that first write, pass
   `cardinality` (`multi` when values add up, `single` when a new value makes the

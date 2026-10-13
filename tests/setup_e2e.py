@@ -36,7 +36,9 @@ with tempfile.TemporaryDirectory(prefix="recall setup 'test ") as tmp:
             sock.close()  # An existing service already exercises the conflict.
 
     def run(*args, expected=0, extra_env=None):
-        result = subprocess.run([cli, *args], env=env | (extra_env or {}), capture_output=True, text=True, timeout=60)
+        # No terminal: setup must not stop to ask which model to use.
+        result = subprocess.run([cli, *args], env=env | (extra_env or {}), stdin=subprocess.DEVNULL,
+                                capture_output=True, text=True, timeout=60)
         require(result.returncode == expected, f"{args}: {result.stdout} {result.stderr}")
         return result
 

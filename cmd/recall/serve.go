@@ -605,8 +605,9 @@ func cmdServe(c *api, args []string) error {
 	predicates := fs.String("predicates", os.Getenv("POLIGN_PREDICATES"), "predicate registry JSON file; omitted uses the starter registry")
 	embedURL := fs.String("embed-url", os.Getenv("POLIGN_EMBED_URL"), "optional embedding service; omitted uses built-in lexical feature hashing")
 	extractModel := fs.String("extract-model", os.Getenv("POLIGN_EXTRACT_MODEL"), "model that works out the statements in text remembered without any, as provider:model")
-	text := fs.Bool("text", false, "serve the text-only tools")
-	open := fs.Bool("open", os.Getenv("RECALL_OPEN") == "1", "let writes define predicates")
+	text := fs.Bool("text", true, "serve the text-only tools (the default)")
+	typed := fs.Bool("typed", os.Getenv("RECALL_TYPED") == "1", "serve the typed tools instead (default on when $RECALL_TYPED is 1)")
+	open := fs.Bool("open", os.Getenv("RECALL_OPEN") == "1", "let writes define predicates; the text tools do unless -predicates is given, the typed tools only with this flag (default on when $RECALL_OPEN is 1)")
 	agent := fs.Bool("agent", true, "expose the resume tools when the backend provides leases")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -625,7 +626,10 @@ func cmdServe(c *api, args []string) error {
 		}
 		auth = append(auth, fileAuth)
 	}
-	openAll := *open || *text && *predicates == ""
+	serveText, openAll, err := surface(fs, *text, *typed, *open, *predicates)
+	if err != nil {
+		return fmt.Errorf("serve: %w", err)
+	}
 	registry := recall.DefaultRegistry()
 	if openAll && *predicates == "" {
 		registry = openSeeds()
@@ -655,7 +659,7 @@ func cmdServe(c *api, args []string) error {
 	if err != nil {
 		return fmt.Errorf("serve: backend: %w", err)
 	}
-	tenants := newTenantServers(serveConfig{backend: backend, registry: registry, embedder: embedder, extractor: extractor, base: *collection, open: openAll, text: *text, agents: *agent})
+	tenants := newTenantServers(serveConfig{backend: backend, registry: registry, embedder: embedder, extractor: extractor, base: *collection, open: openAll, text: serveText, agents: *agent})
 	_, leases := backend.(recall.LeaseBackend)
 	if *agent && !leases {
 		log.Printf("serve: the %s backend has no leases; the resume tools are not served", name)

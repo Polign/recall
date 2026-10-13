@@ -41,7 +41,7 @@ Served by `recall mcp` by default. A server started without write access serves 
 
 ### 2.2 Text tools
 
-Served by `recall mcp -text`. Same log, same fold; the server works out subjects and predicates from the text. Text mode is the on-ramp: a client that starts here loses nothing when it moves to typed statements, because the records are the same kind.
+Served by `recall mcp` (the default; `-typed` serves the typed tools instead). Same log, same fold; the server works out subjects and predicates from the text. Text mode is the on-ramp: a client that starts here loses nothing when it moves to typed statements, because the records are the same kind.
 
 | Tool | Required arguments | Read-only |
 | --- | --- | --- |
@@ -96,7 +96,7 @@ A remember answer carries `replaced` for what the write superseded, `related` fo
 - The registry is a closed set per namespace unless the server was started open. An unregistered predicate is refused, never invented. The `note` predicate takes anything that fits nothing else, so nothing has to be dropped.
 - Each predicate declares cardinality (single or multi), a value type, optional exclusions (stating a value under this predicate replaces the same value under the excluded ones) and whether it is historical (never replaced).
 - Registry changes are events in the same log: define, redefine, merge, split. A read as of an earlier instant uses the registry as it was then.
-- Open mode (`-open`, and always in text mode) lets a write define a predicate by first use. The definition is still a logged event.
+- Open mode (`-open`, and text mode unless `-predicates` is given) lets a write define a predicate by first use. The definition is still a logged event.
 
 ## 6. Resume API, version 1
 

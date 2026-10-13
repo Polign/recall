@@ -70,6 +70,32 @@ does not determine how long memories are kept.
 
 ## Memory tools
 
+`recall mcp` serves three tools with no predicates in them. Give
+`-extract-model <provider:model>` so the server works out the facts:
+
+| Tool | Takes | What it does |
+| --- | --- | --- |
+| `remember` | `text` | The server works out the statements in the text, files them, and keeps the text as the record. A newer statement replaces an older one. |
+| `recall` | `question` | Answers with current memories as sentences, each with what it replaced and how many days ago it was stated. |
+| `forget` | `text` | Withdraws the facts a description names, such as "my editor". The texts they came from stay. |
+
+The model is called on every `remember` and `forget`, so pick one that answers
+in a second or two: a local thinking model such as `qwen3:8b` took 24 to 82
+seconds per write in testing. Restating the same text replays the first
+extraction instead of calling the model again. Without `-extract-model`,
+`remember` keeps the text as written (searchable, but it replaces nothing)
+and `forget` reports that it needs a model. `recall setup -extract-model`
+saves the model, and the saved setup then serves these tools.
+
+Writes define predicates as they go: a predicate nothing has defined is defined
+by its first use, seeded from a starter registry. `-predicates FILE` fixes the
+vocabulary instead, and the model files into it.
+
+## Typed tools
+
+`recall mcp -typed` (or `RECALL_TYPED=1`) serves the typed tools instead, over
+the starter registry or `-predicates FILE`:
+
 | Tool | What it does |
 | --- | --- |
 | `list_predicates` | Lists the kinds of memory the application accepts. |
@@ -88,25 +114,6 @@ With `-open`, the agent is not limited to the listed kinds of memory: a
 predicate nothing has defined is defined by its first use, so no predicates
 file is needed. `remember` then also takes `cardinality` (`single` or `multi`)
 and `description` for a new one.
-
-## Text-only tools
-
-`recall mcp -text -extract-model <provider:model>` serves three tools with no
-predicates in them:
-
-| Tool | Takes | What it does |
-| --- | --- | --- |
-| `remember` | `text` | The server works out the statements in the text, files them, and keeps the text as the record. A newer statement replaces an older one. |
-| `recall` | `question` | Answers with current memories as sentences, each with what it replaced and how many days ago it was stated. |
-| `forget` | `text` | Withdraws the facts a description names, such as "my editor". The texts they came from stay. |
-
-The model is called on every `remember` and `forget`, so pick one that answers
-in a second or two: a local thinking model such as `qwen3:8b` took 24 to 82
-seconds per write in testing. Restating the same text replays the first
-extraction instead of calling the model again. Without `-extract-model`,
-`remember` keeps the text as written (searchable, but it replaces nothing)
-and `forget` reports that it needs a model. `recall setup -extract-model`
-saves the model, and the saved setup then serves these tools.
 
 ## Turning text into memories
 

@@ -1,7 +1,6 @@
 # polign-recall
 
-A Python client for Recall's typed, correctable agent memory. Requires Python
-3.10+.
+A Python client for Recall, correctable agent memory. Requires Python 3.10+.
 
 ```sh
 pip install polign-recall
@@ -15,14 +14,22 @@ there is nothing else to download.
 ```python
 from polign_recall import Client
 
-with Client(local_dir="./recall-data") as memory:
-    memory.remember("user", "prefers_editor", "vim")
-    changed = memory.remember("user", "prefers_editor", "neovim")
-    current = memory.recall("user", "prefers_editor")[0]
-    print(current.value, current.replaced[0].value)  # neovim vim
-    print(memory.history("user", "prefers_editor"))  # both statements
-    memory.forget("user", "prefers_editor", "neovim")
+with Client(local_dir="./recall-data", extract_model="anthropic:claude-haiku-4-5-20251001") as memory:
+    memory.remember(text="I switched from helix to zed last week.")
+    for m in memory.ask("Which editor do I use?"):
+        print(m.text, m.since, [e.text for e in m.before])  # user prefers editor: zed ... ['helix']
+    memory.forget_text("my editor")
 ```
+
+`remember(text=...)` hands the server a passage; the model named by
+`extract_model` works out the facts in it, and a newer fact replaces an older
+one. It returns a `TextResult` listing what was filed and what each statement
+replaced. `ask` returns `Memory` sentences, each with `since`, `days_ago`, and
+what it replaced under `before`; it accepts `as_of`. `forget_text` withdraws
+the facts a description names and returns them; the texts they came from stay
+as the record. Without `extract_model`, remembered text is kept as written:
+`ask` finds it by its words, but it replaces nothing, and `forget_text` needs
+a model.
 
 `local_dir` keeps the database on this machine. The first client to open the
 directory starts a `polign-server` for it in the background, listening on
@@ -38,52 +45,46 @@ To use a server you run yourself, leave `local_dir` out and set `POLIGN_URL`,
 `recall setup` saved, and without one connects to `http://localhost:23000`,
 where `polign-server -store fs:./recall-data` listens by default.
 
-The client owns a long-lived `recall mcp -write` subprocess and shares the Go
-implementation's validation and fold. Use `write=False` for a read-only
+The client owns a long-lived `recall mcp -write -text` subprocess and shares
+the Go implementation's validation and fold. Use `write=False` for a read-only
 connection. It runs the `recall` binary that this package's platform wheel
 installs next to `python`; on a platform without one it runs `recall` from
 `PATH`, and without `recall` it falls back to `polign mcp -memory-only`
 from polign_db 0.13 or earlier. `command=[...]` overrides all of these.
 
-`remember(text=..., statements=[...])` accepts proposals from your agent's model.
-Every statement must have subject, predicate, typed value, and evidence quoting
-the text exactly. Read `predicates()` to build your extractor prompt.
-
-To have the server work out the statements instead, name a model and pass the
-text alone:
-
-```python
-with Client(extract_model="anthropic:claude-opus-5-5") as memory:
-    memory.remember(text="I moved to Lisbon and I edit in Zed now.")
-```
-
 The model is `provider:model`: `anthropic:<model>`, `openai:<model>`, or
-`ollama:<model>`, with keys from `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. It may
-name only registered predicates and must quote the text; a proposal that does
-not is dropped, and the whole text is kept as a note either way. Statements you
-pass are used as given, and the model is not called.
+`ollama:<model>`, with keys from `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
+`POLIGN_EXTRACT_MODEL` in the environment does the same.
 
-### Text only
+### Typed memory
 
-With `text=True`, the client uses the text tools and never sees a predicate:
+With `typed=True`, the client uses the typed tools (`recall mcp -typed`,
+recall 0.18 or later): your code names the subject, predicate and value, over
+a fixed vocabulary.
 
 ```python
-with Client(text=True, extract_model="anthropic:claude-haiku-4-5-20251001") as memory:
-    memory.remember(text="I switched from helix to zed last week.")
-    for m in memory.ask("Which editor do I use?"):
-        print(m.text, m.since, [e.text for e in m.before])  # user prefers editor: zed ... ['helix']
-    memory.forget_text("my editor")
+with Client(local_dir="./recall-data", typed=True) as memory:
+    memory.remember("user", "prefers_editor", "vim")
+    changed = memory.remember("user", "prefers_editor", "neovim")
+    current = memory.recall("user", "prefers_editor")[0]
+    print(current.value, current.replaced[0].value)  # neovim vim
+    print(memory.history("user", "prefers_editor"))  # both statements
+    memory.forget("user", "prefers_editor", "neovim")
 ```
 
-`remember(text=...)` returns a `TextResult` listing what was filed and what
-each statement replaced. `ask` returns `Memory` sentences, each with `since`,
-`days_ago`, and what it replaced under `before`; it accepts `as_of`.
-`forget_text` withdraws the facts a description names and returns them; the
-texts they came from stay as the record. The server works out the facts with
-the model; without one, remembered text is kept as written and replaces
-nothing, and `forget_text` needs a model. The typed calls (`recall`,
-`forget`, `history`, `predicates`) raise `ValueError` on a text client. Needs
-recall 0.14 or later.
+Read `predicates()` for the vocabulary: the starter registry, or the file
+named by `POLIGN_PREDICATES`. `remember(text=..., statements=[...])` accepts
+proposals from your agent's model; every statement must have subject,
+predicate, typed value, and evidence quoting the text exactly. A proposal
+that names an unlisted predicate is dropped, and the whole text is kept as a
+note either way. With `extract_model` and no statements, the server's model
+proposes them over the same vocabulary.
+
+The text calls (`ask`, `forget_text`, `remember(text=...)` alone) raise
+`ValueError` on a typed client, and the typed calls (`recall`, `forget`,
+`history`, `predicates`) raise on a text client. With `command=[...]` or
+`url=...`, the client follows whichever tools the server lists; `typed=True`
+or `text=True` against the other surface is an error at open.
 
 `recall(..., as_of=...)` accepts an RFC3339 string or timezone-aware datetime.
 `forget` requires a typed value or explicit `all=True`; false and zero remain
