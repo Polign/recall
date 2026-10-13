@@ -607,7 +607,7 @@ func cmdServe(c *api, args []string) error {
 	extractModel := fs.String("extract-model", os.Getenv("POLIGN_EXTRACT_MODEL"), "model that works out the statements in text remembered without any, as provider:model")
 	text := fs.Bool("text", true, "serve the text-only tools (the default)")
 	typed := fs.Bool("typed", os.Getenv("RECALL_TYPED") == "1", "serve the typed tools instead (default on when $RECALL_TYPED is 1)")
-	open := fs.Bool("open", os.Getenv("RECALL_OPEN") == "1", "let writes define predicates even with -predicates (default on when $RECALL_OPEN is 1)")
+	open := fs.Bool("open", os.Getenv("RECALL_OPEN") == "1", "let writes define predicates; the text tools do unless -predicates is given, the typed tools only with this flag (default on when $RECALL_OPEN is 1)")
 	agent := fs.Bool("agent", true, "expose the resume tools when the backend provides leases")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

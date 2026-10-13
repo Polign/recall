@@ -9,9 +9,10 @@
   defining predicates as they go. Give `-extract-model` so the server works
   out the facts; without one, text is kept as written and replaces nothing,
   and the server's instructions say so. `-typed` (`RECALL_TYPED=1`) serves
-  the typed tools instead, as before; `-predicates FILE` fixes the vocabulary
-  as before and `-open` lets writes add to it. `-text` is accepted and does
-  nothing. Setups made by `recall setup` are unchanged: a saved model serves
+  what every release before this one served: the typed tools over the starter
+  registry or `-predicates FILE`, with `-open` letting writes add predicates.
+  `-predicates FILE` fixes the vocabulary on either surface. `-text` is
+  accepted and does nothing. Setups made by `recall setup` are unchanged: a saved model serves
   the text-only tools, none serves the typed tools with the agent naming
   predicates, and `recall setup -typed` keeps the typed tools with a model
   saved.

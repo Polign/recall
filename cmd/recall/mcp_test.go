@@ -168,12 +168,13 @@ func TestSurfaceDefaultsToTextTools(t *testing.T) {
 		wantErr    bool
 	}{
 		{args: nil, text: true, open: true},
-		{args: []string{"-typed"}, text: false, open: true},
-		{args: []string{"-text=false"}, text: false, open: true},
+		{args: []string{"-typed"}, text: false, open: false},
+		{args: []string{"-typed", "-open"}, text: false, open: true},
+		{args: []string{"-text=false"}, text: false, open: false},
 		{args: nil, predicates: "/p.json", text: true, open: false},
 		{args: []string{"-open"}, predicates: "/p.json", text: true, open: true},
 		{args: []string{"-text", "-typed"}, wantErr: true},
-		{args: []string{"-text=false", "-typed"}, text: false, open: true},
+		{args: []string{"-text=false", "-typed"}, text: false, open: false},
 	} {
 		fs := flag.NewFlagSet("test", flag.ContinueOnError)
 		text := fs.Bool("text", true, "")
