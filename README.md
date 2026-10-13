@@ -7,10 +7,16 @@ to forget.
 ```sh
 pip install polign-recall          # Python client; brings the server with it
 go get github.com/Polign/recall    # Go
-recall mcp -write                  # MCP over stdio: remember, recall, forget, history
+recall mcp -write                  # MCP over stdio: remember(text), recall(question), forget(text)
+recall mcp -write -typed           # the typed tools instead: remember(subject, predicate, value), history
 ```
 
-What a session looks like, with the personal starter registry:
+`recall mcp` serves the text tools: pass a passage to `remember`, and the model
+named by `-extract-model` works out the facts in it. Without a model the text is
+kept as written and replaces nothing. `-typed` serves the typed tools over a
+fixed vocabulary, which is what the rules below are written in.
+
+What a session looks like with the typed tools and the personal starter registry:
 
 ```text
 remember(user, likes, mangoes)
