@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-10-14
+
 ### Added
 
 - A PostgreSQL backend, `backend/pgvector`, chosen with
