@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -216,5 +217,48 @@ func TestPromptTableListsCatchAllLast(t *testing.T) {
 			t.Fatalf("%q out of order in:\n%s", line, table)
 		}
 		at = i
+	}
+}
+
+func TestAdmitProposalsRepairsEvidence(t *testing.T) {
+	reg := DefaultRegistry()
+	const text = "I Enjoy running in the mornings."
+	got := reg.AdmitProposals(text, []Proposal{
+		{Subject: "user", Predicate: "likes", Value: "running", Evidence: ""},
+		{Subject: "user", Predicate: "likes", Value: "mornings", Evidence: "i enjoy running"},
+		{Subject: "user", Predicate: "likes", Value: "x", Evidence: "something the text never says"},
+	})
+	// No quote becomes the whole text; a quote off by case becomes the
+	// exact excerpt; an invented quote still drops the proposal.
+	if len(got) != 2 || got[0].Evidence != text || got[1].Evidence != "I Enjoy running" {
+		t.Fatalf("evidence: %+v", got)
+	}
+	long := strings.Repeat("word ", MaxEvidenceBytes/4)
+	if got := reg.AdmitProposals(long, []Proposal{{Subject: "user", Predicate: "likes", Value: "x", Evidence: ""}}); len(got) != 0 {
+		t.Fatalf("a text too long to be its own evidence is not quoted whole: %+v", got)
+	}
+}
+
+func TestHeldListsWhatTheTextIsAboutBeforeTheNewest(t *testing.T) {
+	c, err := NewClient(Config{Backend: newLockedBackend(), Collection: "m", Registry: DefaultRegistry(), Embedder: LexicalEmbedder{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fact the text updates is the oldest of many, well outside the
+	// newest maxHeld.
+	if _, err := c.Remember(t.Context(), RememberRequest{Subject: "user", Predicate: "uses_technology", Value: "Kubernetes"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < maxHeld+10; i++ {
+		if _, err := c.Remember(t.Context(), RememberRequest{Subject: fmt.Sprintf("svc%d", i), Predicate: "prefers_editor", Value: "vim"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := &heldExtractor{}
+	if _, err := c.RememberText(t.Context(), "We dropped Kubernetes last month.", h); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.seen) != maxHeld || h.seen[0].Subject != "user" || h.seen[0].Value != "Kubernetes" {
+		t.Fatalf("held %d, first %+v", len(h.seen), h.seen[0])
 	}
 }

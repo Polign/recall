@@ -134,7 +134,7 @@ func (c *Client) RememberTextAt(ctx context.Context, text string, extractor Extr
 		// The extractor sees what memory holds now, so a statement that
 		// updates one of those facts lands under the same predicate.
 		if !callerProposed {
-			held, err := c.held(ctx)
+			held, err := c.held(ctx, text)
 			if err != nil {
 				return out, err
 			}
@@ -267,8 +267,8 @@ func (r Registry) AdmitProposals(text string, proposals []Proposal) []Proposal {
 		}
 		p.Subject = strings.TrimSpace(p.Subject)
 		p.Predicate = r.canonical(strings.TrimSpace(p.Predicate))
-		evidence := strings.TrimSpace(p.Evidence)
-		if normalizeSubject(p.Subject) == "" || evidence == "" || len(evidence) > MaxEvidenceBytes || !strings.Contains(text, p.Evidence) {
+		p.Evidence = repairEvidence(text, p.Evidence)
+		if normalizeSubject(p.Subject) == "" || p.Evidence == "" {
 			continue
 		}
 		if spec, ok := r[p.Predicate]; ok {
@@ -280,6 +280,32 @@ func (r Registry) AdmitProposals(text string, proposals []Proposal) []Proposal {
 		out = append(out, p)
 	}
 	return out
+}
+
+// repairEvidence returns the excerpt of text a model's evidence quotes. A
+// quote that differs only in case or surrounding space becomes the exact
+// excerpt, and no quote at all becomes the whole text when that fits
+// MaxEvidenceBytes: the model left the citation out, and the text is what
+// supports the statement. A quote the text does not contain stays empty, so
+// the proposal is dropped: a statement whose support had to be invented is
+// not a fact the text states.
+func repairEvidence(text, evidence string) string {
+	evidence = strings.TrimSpace(evidence)
+	switch {
+	case evidence == "":
+		if whole := strings.TrimSpace(text); whole != "" && len(whole) <= MaxEvidenceBytes {
+			return whole
+		}
+		return ""
+	case len(evidence) > MaxEvidenceBytes:
+		return ""
+	case strings.Contains(text, evidence):
+		return evidence
+	}
+	if i := strings.Index(strings.ToLower(text), strings.ToLower(evidence)); i >= 0 {
+		return text[i : i+len(evidence)]
+	}
+	return ""
 }
 
 // coerceValue reads a number or boolean a model wrote as a string.
@@ -332,11 +358,12 @@ type heldKey struct{}
 // maxHeld bounds how many current beliefs an extractor is shown.
 const maxHeld = 64
 
-// Held returns the beliefs memory held when the extractor was asked, newest
-// first and at most maxHeld, so it can file a statement that updates one of
-// them under that fact's predicate, or name it in Proposal.Replaces. Notes
-// and the records of earlier extractions are left out. Empty for proposals
-// the caller made itself.
+// Held returns the beliefs memory held when the extractor was asked: the
+// ones the text is about first, then the newest, at most maxHeld in all, so
+// it can file a statement that updates one of them under that fact's
+// predicate, or name it in Proposal.Replaces. Notes and the records of
+// earlier extractions are left out. Empty for proposals the caller made
+// itself.
 func Held(ctx context.Context) []Belief {
 	held, _ := ctx.Value(heldKey{}).([]Belief)
 	return held
@@ -349,21 +376,30 @@ func WithHeld(ctx context.Context, held []Belief) context.Context {
 }
 
 // held gathers what Held returns: see there.
-func (c *Client) held(ctx context.Context) ([]Belief, error) {
-	beliefs, err := c.Recall(ctx, Query{Limit: 4 * maxHeld, NoElsewhere: true})
+func (c *Client) held(ctx context.Context, text string) ([]Belief, error) {
+	// What the text is about comes first, so a fact it updates is listed
+	// however much has been remembered since, then the newest facts.
+	related, err := c.Recall(ctx, Query{Text: text, Limit: maxHeld / 2, NoElsewhere: true, NoTimeHint: true})
+	if err != nil && !nothingYet(err) {
+		// A collection with nothing persisted yet has nothing to search.
+		return nil, err
+	}
+	newest, err := c.Recall(ctx, Query{Limit: 4 * maxHeld, NoElsewhere: true})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Belief, 0, len(beliefs))
-	for _, b := range beliefs {
-		if b.Predicate == NotePredicate || b.Predicate == RegistryPredicate || b.Predicate == ExtractionPredicate || b.Subject == ExtractionSubject {
+	slices.SortStableFunc(newest, func(a, b Belief) int { return b.ObservedAt.Compare(a.ObservedAt) })
+	out := make([]Belief, 0, maxHeld)
+	seen := map[string]bool{}
+	for _, b := range slices.Concat(related, newest) {
+		if b.Predicate == NotePredicate || b.Predicate == RegistryPredicate || b.Predicate == ExtractionPredicate || b.Subject == ExtractionSubject || seen[b.EventID] {
 			continue
 		}
+		seen[b.EventID] = true
 		out = append(out, b)
-	}
-	slices.SortStableFunc(out, func(a, b Belief) int { return b.ObservedAt.Compare(a.ObservedAt) })
-	if len(out) > maxHeld {
-		out = out[:maxHeld]
+		if len(out) == maxHeld {
+			break
+		}
 	}
 	return out, nil
 }

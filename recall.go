@@ -276,9 +276,10 @@ func OpenVocabulary(ctx context.Context) bool {
 	return engine.OpenVocabulary(ctx)
 }
 
-// Held returns the beliefs memory held when the extractor was asked, newest
-// first, so it can file a statement that updates one of them under that
-// fact's predicate, or name it in Proposal.Replaces. Notes are left out.
+// Held returns the beliefs memory held when the extractor was asked: the
+// ones the text is about first, then the newest, so it can file a statement
+// that updates one of them under that fact's predicate, or name it in
+// Proposal.Replaces. Notes are left out.
 func Held(ctx context.Context) []Belief {
 	return engine.Held(ctx)
 }
