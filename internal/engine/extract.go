@@ -267,8 +267,8 @@ func (r Registry) AdmitProposals(text string, proposals []Proposal) []Proposal {
 		}
 		p.Subject = strings.TrimSpace(p.Subject)
 		p.Predicate = r.canonical(strings.TrimSpace(p.Predicate))
-		evidence := strings.TrimSpace(p.Evidence)
-		if normalizeSubject(p.Subject) == "" || evidence == "" || len(evidence) > MaxEvidenceBytes || !strings.Contains(text, p.Evidence) {
+		p.Evidence = repairEvidence(text, p.Evidence)
+		if normalizeSubject(p.Subject) == "" || p.Evidence == "" {
 			continue
 		}
 		if spec, ok := r[p.Predicate]; ok {
@@ -280,6 +280,32 @@ func (r Registry) AdmitProposals(text string, proposals []Proposal) []Proposal {
 		out = append(out, p)
 	}
 	return out
+}
+
+// repairEvidence returns the excerpt of text a model's evidence quotes. A
+// quote that differs only in case or surrounding space becomes the exact
+// excerpt, and no quote at all becomes the whole text when that fits
+// MaxEvidenceBytes: the model left the citation out, and the text is what
+// supports the statement. A quote the text does not contain stays empty, so
+// the proposal is dropped: a statement whose support had to be invented is
+// not a fact the text states.
+func repairEvidence(text, evidence string) string {
+	evidence = strings.TrimSpace(evidence)
+	switch {
+	case evidence == "":
+		if whole := strings.TrimSpace(text); whole != "" && len(whole) <= MaxEvidenceBytes {
+			return whole
+		}
+		return ""
+	case len(evidence) > MaxEvidenceBytes:
+		return ""
+	case strings.Contains(text, evidence):
+		return evidence
+	}
+	if i := strings.Index(strings.ToLower(text), strings.ToLower(evidence)); i >= 0 {
+		return text[i : i+len(evidence)]
+	}
+	return ""
 }
 
 // coerceValue reads a number or boolean a model wrote as a string.

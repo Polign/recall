@@ -218,3 +218,22 @@ func TestPromptTableListsCatchAllLast(t *testing.T) {
 		at = i
 	}
 }
+
+func TestAdmitProposalsRepairsEvidence(t *testing.T) {
+	reg := DefaultRegistry()
+	const text = "I Enjoy running in the mornings."
+	got := reg.AdmitProposals(text, []Proposal{
+		{Subject: "user", Predicate: "likes", Value: "running", Evidence: ""},
+		{Subject: "user", Predicate: "likes", Value: "mornings", Evidence: "i enjoy running"},
+		{Subject: "user", Predicate: "likes", Value: "x", Evidence: "something the text never says"},
+	})
+	// No quote becomes the whole text; a quote off by case becomes the
+	// exact excerpt; an invented quote still drops the proposal.
+	if len(got) != 2 || got[0].Evidence != text || got[1].Evidence != "I Enjoy running" {
+		t.Fatalf("evidence: %+v", got)
+	}
+	long := strings.Repeat("word ", MaxEvidenceBytes/4)
+	if got := reg.AdmitProposals(long, []Proposal{{Subject: "user", Predicate: "likes", Value: "x", Evidence: ""}}); len(got) != 0 {
+		t.Fatalf("a text too long to be its own evidence is not quoted whole: %+v", got)
+	}
+}

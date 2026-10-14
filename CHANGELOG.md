@@ -13,13 +13,22 @@
   moved to the UK office" after "works in the Germany office" could land
   under a second predicate and replace nothing. One read per `remember`.
   The prompt also says that paired predicates replace only a word-for-word
-  value, so a reversal copies the listed value instead of rewording it.
-  Measured on `eval/corrections` (68 hand-written cases, Opus 5.5
-  extracting, same day, same model on both builds): corrections made 34/40
-  against 20/40 without this change; traps left alone 28/28 on both. Three
-  of the six remaining failures replaced the old value with a new one under
-  the same predicate ("ex-girlfriend Sarah" for "girlfriend Sarah"), which
-  the eval's word check counts as a miss.
+  value, so a reversal copies the listed value instead of rewording it, and
+  that every listed belief the statement makes untrue goes in `replaces`,
+  since one fact can be held under two predicates. Measured on
+  `eval/corrections` (68 hand-written cases, Opus 5.5 extracting, same day,
+  same model on both builds): corrections made 37/40 against 20/40 without
+  this change; traps left alone 28/28 and 27/27.
+- A model proposal that cites no evidence is admitted with the whole text
+  as its evidence when the text fits the evidence limit; one whose quote is
+  off only by case or surrounding space gets the exact excerpt. Before
+  this, both were dropped without a trace, and a fact the text plainly
+  stated went unrecorded. A quote the text does not contain still drops the
+  proposal.
+- `eval/corrections` checks the exact values the setup filed, not a word:
+  a correction passes when none of them is still held, a trap when all of
+  them are. Its read client asks for the typed tools, which 0.18.0 stopped
+  serving by default.
 - The Python client runs the `recall` binary named by `RECALL_BIN` before
   the wheel's own. The corrections eval documented the variable; nothing
   read it.

@@ -4,8 +4,10 @@ Each case says one thing, then later something else. In a correction case
 the second statement makes the first untrue under another predicate ("I love
 mangoes", then "I can't stand mangoes anymore"), and the first must be gone.
 In a trap the second is related but leaves the first true ("I also like
-papayas"), and the first must remain. A case whose first statement was never
-extracted counts as neither.
+papayas"), and the first must remain. The check is on the exact values the
+setup filed: a correction passes when none of them is still held, a trap
+when all of them are. A case whose first statement was never extracted
+counts as neither.
 
 Everything goes through the product path: a text-mode Recall server with
 -extract-model, the personal starter registry, one collection per case.
@@ -73,11 +75,13 @@ def run_case(case: dict, env: dict, model: str) -> dict:
         if not all(before):
             return {"id": case["id"], "kind": case["kind"], "result": "setup-missed", "before": before}
         said = talk.remember(text=case["say"])
-        after = [held(look, c["predicates"], c["word"]) for c in checks]
+        # Everything now held under the checked predicates; the old values
+        # must be gone (correction) or all still there (trap).
+        after = [held(look, c["predicates"], "") for c in checks]
         if case["kind"] == "correction":
-            ok = not any(after)
+            ok = not any(v in now for old, now in zip(before, after) for v in old)
         else:
-            ok = all(after)
+            ok = all(v in now for old, now in zip(before, after) for v in old)
         return {"id": case["id"], "kind": case["kind"], "result": "pass" if ok else "fail",
                 "before": before, "after": after,
                 "filed": [{"text": r.text, "replaces": list(r.replaces)} for r in said.remembered]}
