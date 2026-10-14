@@ -66,7 +66,7 @@ def run_case(case: dict, env: dict, model: str) -> dict:
     env = {**env, "POLIGN_COLLECTION": "case_" + case["id"].replace("-", "_")}
     checks = case.get("gone") or case.get("kept")
     talk = Client(env=env, text=True, extract_model=model, timeout=600)
-    look = Client(env=env, timeout=120)
+    look = Client(env=env, typed=True, timeout=120)   # recall 0.18+ serves the text tools by default
     try:
         talk.remember(text=case["setup"])
         before = [held(look, c["predicates"], c["word"]) for c in checks]

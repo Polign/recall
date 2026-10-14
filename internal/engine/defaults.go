@@ -146,7 +146,7 @@ var starters = map[string]func() Registry{
 		return Registry{
 			"name":         one(typeString, "Name the subject uses"),
 			"lives_in":     one(typeString, "Where the subject lives now"),
-			"works_at":     one(typeString, "Where the subject works now"),
+			"works_at":     one(typeString, "Where the subject works now: the employer, office, or place"),
 			"role":         one(typeString, "The subject's current job or role"),
 			"status":       one(typeString, "The current state or progress of the subject, such as in repair or halfway through"),
 			"amount":       one(typeString, "A price, cost, count, or other quantity the subject has now"),
@@ -160,7 +160,7 @@ var starters = map[string]func() Registry{
 			"did":          historical(many(typeString, "Something the subject did or that happened, with its date when known")),
 			"plans":        many(typeString, "Something the subject plans or intends to do"),
 			"goal":         many(typeString, "Something the subject is working toward"),
-			"detail":       many(typeString, "Another fact about the subject worth keeping"),
+			"detail":       many(typeString, "A fact about the subject that no other predicate can hold"),
 		}
 	},
 	// A voice agent meets the same caller again with no screen to scroll

@@ -349,3 +349,52 @@ func TestSelect(t *testing.T) {
 		t.Fatalf("Select = %v, %v", got, err)
 	}
 }
+
+func TestExtractionSeesHeldAndMayReplace(t *testing.T) {
+	const text = "I moved to Lisbon last month."
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []struct {
+				Role, Content string
+			} `json:"messages"`
+			ResponseFormat struct {
+				JSONSchema struct {
+					Schema map[string]any `json:"schema"`
+				} `json:"json_schema"`
+			} `json:"response_format"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		system := body.Messages[0].Content
+		if !strings.Contains(system, "Currently believed:\n- user location: Paris\n") || !strings.Contains(system, "filed under that fact's predicate") {
+			t.Errorf("system prompt:\n%s", system)
+		}
+		items := body.ResponseFormat.JSONSchema.Schema["properties"].(map[string]any)["statements"].(map[string]any)["items"].(map[string]any)
+		if _, ok := items["properties"].(map[string]any)["replaces"]; !ok {
+			t.Error("the schema has no replaces")
+		}
+		reply := `{"statements":[
+ {"subject":"user","predicate":"location","value":"Lisbon","evidence":"I moved to Lisbon","replaces":[{"predicate":"location","value":"Paris"}]}]}`
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": reply}, "finish_reason": "stop"}}})
+	}))
+	defer srv.Close()
+	e, err := NewExtractor(Config{Provider: "openai", Model: "m1", BaseURL: srv.URL + "/v1", APIKey: "k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := recall.WithHeld(context.Background(), []recall.Belief{{Subject: "user", Predicate: "location", Value: "Paris"}})
+	got, err := e.Extract(ctx, text, registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Value != "Lisbon" || len(got[0].Replaces) != 1 || got[0].Replaces[0] != (recall.BeliefRef{Predicate: "location", Value: "Paris"}) {
+		t.Fatalf("proposals: %+v", got)
+	}
+}
+
+func TestNothingHeldSaysSo(t *testing.T) {
+	if !strings.Contains(systemPrompt(registry(), nil, time.Now()), "Currently believed: nothing yet.") {
+		t.Fatal("an empty store is not named")
+	}
+}
