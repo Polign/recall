@@ -1,5 +1,7 @@
 # Developing Recall
 
+[architecture.md](architecture.md) explains how the parts fit together.
+
 The repository root exposes the Go API through `recall.go`. Memory behavior and
 its unit tests live together in `internal/engine/`. Start there when changing
 Recall's semantics.

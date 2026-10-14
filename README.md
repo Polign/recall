@@ -320,6 +320,7 @@ test commands.
 
 ## Documentation
 
+[Architecture](docs/architecture.md) ·
 [Developer reference](docs/reference.md) ·
 [Resuming an agent](docs/reference.md#resuming-an-agent) ·
 [Connecting through MCP](docs/mcp.md) ·
