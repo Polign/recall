@@ -380,7 +380,8 @@ func (c *Client) held(ctx context.Context, text string) ([]Belief, error) {
 	// What the text is about comes first, so a fact it updates is listed
 	// however much has been remembered since, then the newest facts.
 	related, err := c.Recall(ctx, Query{Text: text, Limit: maxHeld / 2, NoElsewhere: true, NoTimeHint: true})
-	if err != nil {
+	if err != nil && !nothingYet(err) {
+		// A collection with nothing persisted yet has nothing to search.
 		return nil, err
 	}
 	newest, err := c.Recall(ctx, Query{Limit: 4 * maxHeld, NoElsewhere: true})
