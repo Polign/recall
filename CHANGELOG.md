@@ -18,8 +18,10 @@
   that every listed belief the statement makes untrue goes in `replaces`,
   since one fact can be held under two predicates. Measured on
   `eval/corrections` (68 hand-written cases, Opus 5.5 extracting, same day,
-  same model on both builds): corrections made 37/40 against 20/40 without
-  this change; traps left alone 28/28 and 27/27.
+  same model on both builds): corrections made 39/39 against 20/40 without
+  this change; traps left alone 27/27 against 27/27; one case on each side
+  missed its setup. A second run of the final build scored 37/39 and 27/27,
+  and its two misses passed three of three on retry.
 - A model proposal that cites no evidence is admitted with the whole text
   as its evidence when the text fits the evidence limit; one whose quote is
   off only by case or surrounding space gets the exact excerpt. Before
