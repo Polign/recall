@@ -319,11 +319,11 @@ def _lease_error(exc: RecallError) -> RecallError:
 
 
 def recall_bin() -> str | None:
-    """The `recall` binary to run: the one the polign-recall platform wheel
-    installed next to this interpreter, then whatever `recall` is on PATH.
-    None when neither exists."""
+    """The `recall` binary to run: RECALL_BIN when set, then the one the
+    polign-recall platform wheel installed next to this interpreter, then
+    whatever `recall` is on PATH. None when none exists."""
     exe = "recall" + (".exe" if sys.platform == "win32" else "")
-    candidates = [os.path.join(sysconfig.get_path("scripts"), exe)]
+    candidates = [os.environ.get("RECALL_BIN") or "", os.path.join(sysconfig.get_path("scripts"), exe)]
     # `pip install --user` uses a different scheme from the interpreter's own.
     if sys.version_info >= (3, 10):
         candidates.append(os.path.join(sysconfig.get_path("scripts", scheme=sysconfig.get_preferred_scheme("user")), exe))
