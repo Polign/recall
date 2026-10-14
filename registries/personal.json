@@ -21,7 +21,7 @@
   "detail": {
     "cardinality": "multi",
     "value_type": "string",
-    "description": "Another fact about the subject worth keeping"
+    "description": "A fact about the subject that no other predicate can hold"
   },
   "did": {
     "cardinality": "multi",
@@ -99,6 +99,6 @@
   "works_at": {
     "cardinality": "single",
     "value_type": "string",
-    "description": "Where the subject works now"
+    "description": "Where the subject works now: the employer, office, or place"
   }
 }

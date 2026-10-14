@@ -276,6 +276,19 @@ func OpenVocabulary(ctx context.Context) bool {
 	return engine.OpenVocabulary(ctx)
 }
 
+// Held returns the beliefs memory held when the extractor was asked, newest
+// first, so it can file a statement that updates one of them under that
+// fact's predicate, or name it in Proposal.Replaces. Notes are left out.
+func Held(ctx context.Context) []Belief {
+	return engine.Held(ctx)
+}
+
+// WithHeld returns a context on which Held reports held, for testing an
+// extractor without a store.
+func WithHeld(ctx context.Context, held []Belief) context.Context {
+	return engine.WithHeld(ctx, held)
+}
+
 // BeliefRef names a belief of a statement's own subject by its predicate and
 // value, for RememberRequest.Replaces and Proposal.Replaces.
 type BeliefRef = engine.BeliefRef

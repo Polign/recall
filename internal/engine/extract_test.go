@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -165,5 +166,55 @@ func TestExtractorSeesObservedAt(t *testing.T) {
 	at := time.Date(2023, 5, 20, 2, 21, 0, 0, time.UTC)
 	if _, err := c.RememberTextAt(t.Context(), "hello again", d, at); err != nil || !d.seen.Equal(at) {
 		t.Fatalf("dated: %v %v", d.seen, err)
+	}
+}
+
+type heldExtractor struct{ seen []Belief }
+
+func (h *heldExtractor) Extract(ctx context.Context, _ string, _ Registry) ([]Proposal, error) {
+	h.seen = Held(ctx)
+	return nil, nil
+}
+
+func TestExtractorSeesWhatIsHeld(t *testing.T) {
+	c, err := NewClient(Config{Backend: newLockedBackend(), Collection: "m", Registry: DefaultRegistry(), Embedder: LexicalEmbedder{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &heldExtractor{}
+	if _, err := c.RememberText(t.Context(), "hello", h); err != nil || len(h.seen) != 0 {
+		t.Fatalf("empty store: %+v %v", h.seen, err)
+	}
+	if _, err := c.Remember(t.Context(), RememberRequest{Subject: "user", Predicate: "prefers_editor", Value: "vim"}); err != nil {
+		t.Fatal(err)
+	}
+	// The note kept for "hello" is not a fact the extractor should repeat.
+	if _, err := c.RememberText(t.Context(), "hello again", h); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.seen) != 1 || h.seen[0].Predicate != "prefers_editor" || h.seen[0].Value != "vim" {
+		t.Fatalf("held: %+v", h.seen)
+	}
+	if Held(t.Context()) != nil {
+		t.Fatal("a bare context holds nothing")
+	}
+}
+
+func TestPromptTableListsCatchAllLast(t *testing.T) {
+	reg := Registry{
+		"zone":   {Cardinality: "single", Description: "Where the subject is"},
+		"detail": {Cardinality: "multi", Description: "A fact about the subject that no other predicate can hold"},
+		"misc":   {Cardinality: "multi", Description: "Anything that fits no other predicate"},
+		"age":    {Cardinality: "single", Description: "How old the subject is"},
+	}
+	table := reg.PromptTable()
+	want := []string{"- age ", "- zone ", "- detail ", "- misc "}
+	at := -1
+	for _, line := range want {
+		i := strings.Index(table, line)
+		if i <= at {
+			t.Fatalf("%q out of order in:\n%s", line, table)
+		}
+		at = i
 	}
 }

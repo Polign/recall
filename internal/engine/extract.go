@@ -131,6 +131,15 @@ func (c *Client) RememberTextAt(ctx context.Context, text string, extractor Extr
 		if c.open {
 			extractCtx = context.WithValue(extractCtx, openVocabularyKey{}, true)
 		}
+		// The extractor sees what memory holds now, so a statement that
+		// updates one of those facts lands under the same predicate.
+		if !callerProposed {
+			held, err := c.held(ctx)
+			if err != nil {
+				return out, err
+			}
+			extractCtx = context.WithValue(extractCtx, heldKey{}, held)
+		}
 		if proposals, err = extractor.Extract(extractCtx, text, vocab); err != nil {
 			return out, err
 		}
@@ -316,6 +325,47 @@ type openVocabularyKey struct{}
 func OpenVocabulary(ctx context.Context) bool {
 	open, _ := ctx.Value(openVocabularyKey{}).(bool)
 	return open
+}
+
+type heldKey struct{}
+
+// maxHeld bounds how many current beliefs an extractor is shown.
+const maxHeld = 64
+
+// Held returns the beliefs memory held when the extractor was asked, newest
+// first and at most maxHeld, so it can file a statement that updates one of
+// them under that fact's predicate, or name it in Proposal.Replaces. Notes
+// and the records of earlier extractions are left out. Empty for proposals
+// the caller made itself.
+func Held(ctx context.Context) []Belief {
+	held, _ := ctx.Value(heldKey{}).([]Belief)
+	return held
+}
+
+// WithHeld returns a context carrying held as what Held reports, for testing
+// an extractor without a store.
+func WithHeld(ctx context.Context, held []Belief) context.Context {
+	return context.WithValue(ctx, heldKey{}, held)
+}
+
+// held gathers what Held returns: see there.
+func (c *Client) held(ctx context.Context) ([]Belief, error) {
+	beliefs, err := c.Recall(ctx, Query{Limit: 4 * maxHeld, NoElsewhere: true})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Belief, 0, len(beliefs))
+	for _, b := range beliefs {
+		if b.Predicate == NotePredicate || b.Predicate == RegistryPredicate || b.Predicate == ExtractionPredicate || b.Subject == ExtractionSubject {
+			continue
+		}
+		out = append(out, b)
+	}
+	slices.SortStableFunc(out, func(a, b Belief) int { return b.ObservedAt.Compare(a.ObservedAt) })
+	if len(out) > maxHeld {
+		out = out[:maxHeld]
+	}
+	return out, nil
 }
 
 // recordedExtraction returns the proposals recorded for the episode that

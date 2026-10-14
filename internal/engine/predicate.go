@@ -288,11 +288,24 @@ func (r Registry) Names() []string {
 // PromptTable renders the registry for an agent's system prompt.
 func (r Registry) PromptTable() string {
 	var b strings.Builder
-	for _, name := range r.Names() {
-		p := r[name]
-		fmt.Fprintf(&b, "- %s (%s-valued %s): %s%s%s\n", name, p.Cardinality, p.valueType(), p.Description, valueHint(p), r.exclusionHint(name))
+	// A catch-all is read last, after every predicate that names a relation,
+	// so a fact with a predicate of its own is not filed under it.
+	for _, last := range []bool{false, true} {
+		for _, name := range r.Names() {
+			if r.catchAll(name) != last {
+				continue
+			}
+			p := r[name]
+			fmt.Fprintf(&b, "- %s (%s-valued %s): %s%s%s\n", name, p.Cardinality, p.valueType(), p.Description, valueHint(p), r.exclusionHint(name))
+		}
 	}
 	return b.String()
+}
+
+// catchAll reports a predicate that holds whatever fits no other, such as
+// the starter registries' detail and note.
+func (r Registry) catchAll(name string) bool {
+	return name == "detail" || name == NotePredicate || strings.Contains(strings.ToLower(r[name].Description), "no other predicate")
 }
 
 // exclusionHint tells an agent that a value stated here withdraws it from

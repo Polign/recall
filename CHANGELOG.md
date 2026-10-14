@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Changed
+
+- The extraction model sees what memory holds. `Client.RememberText` passes
+  the current beliefs (newest first, at most 64, notes left out) to the
+  extractor, which reads them with `recall.Held(ctx)`, and the bundled
+  extractor lists them in its prompt under one rule: a statement that
+  updates one of them is filed under that fact's predicate, or names it in
+  `replaces`, which the extraction schema now carries. Before this, "I've
+  moved to the UK office" after "works in the Germany office" could land
+  under a second predicate and replace nothing. One read per `remember`.
+- The predicate table an agent or extractor is shown lists a catch-all
+  predicate (`detail`, `note`, or one described as holding what no other
+  predicate can) last, and `detail` says so, so a fact with a predicate of
+  its own is not filed under it.
+
 ## [0.18.0] - 2026-10-13
 
 ### Changed
