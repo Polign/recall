@@ -238,7 +238,7 @@ unrelated notes. A query that names both subject and predicate returns every
 value of that pair, whatever the text.
 
 When the backend also offers a lexical search (`TextSearchBackend`, which the
-Polign backend implements), semantic recall runs it beside the vector search.
+Polign and pgvector backends implement), semantic recall runs it beside the vector search.
 With the built-in lexical embedder the text ranking leads, followed by vector
 hits it lacks; with a model embedder the two are fused by reciprocal rank.
 Polign indexes text as it persists segments, so a statement written in the
@@ -403,7 +403,8 @@ decode as a memory event. Records are embedded with the client's embedder,
 or the lexical embedder when it has none.
 
 **One process per agent.** Resume needs a backend that implements
-`LeaseBackend`; the Polign adapter does, against a server with the lease API.
+`LeaseBackend`; the Polign adapter does, against a server with the lease API,
+and so does the pgvector backend.
 A second process resuming the same agent gets `ErrLeaseHeld` (a
 `*LeaseHeldError` names the holder). The holder renews in the background every
 third of the TTL (60 seconds by default), and every write renews first when a

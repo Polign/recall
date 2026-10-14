@@ -266,18 +266,43 @@ does not add transaction isolation or replication.
 
 ### Backends
 
-| | polign_db (default) | Qdrant |
-| --- | --- | --- |
-| Package | [`polign/`](polign) | [`backend/qdrant/`](backend/qdrant) |
-| `recall mcp` | default | `-backend qdrant` |
-| URL and key variables | `POLIGN_URL`, `POLIGN_API_KEY` | `QDRANT_URL`, `QDRANT_API_KEY` |
-| Server version | 0.8.0 or later | 1.10 or later |
-| Remember, recall, forget, history, as-of | yes | yes |
-| Evidence links, audit export | yes | yes |
-| Keyword (BM25) search | yes | no, vector search only |
-| Cached reads | yes | no, every read refolds the history |
-| Agent leases (`recall mcp -agent`) | yes | no; Go `Resume` with `Unleased: true` only |
-| `recall setup` and the Claude plugin | yes | no, add `recall mcp` by hand |
+| | polign_db (default) | PostgreSQL + pgvector | Qdrant |
+| --- | --- | --- | --- |
+| Package | [`polign/`](polign) | [`backend/pgvector/`](backend/pgvector) | [`backend/qdrant/`](backend/qdrant) |
+| `recall mcp` | default | `-backend pgvector` | `-backend qdrant` |
+| URL and key variables | `POLIGN_URL`, `POLIGN_API_KEY` | `DATABASE_URL`, `PGPASSWORD` | `QDRANT_URL`, `QDRANT_API_KEY` |
+| Server version | 0.8.0 or later | PostgreSQL 13 or later with pgvector 0.6.0 or later; 0.8.0 or later recommended | 1.10 or later |
+| Remember, recall, forget, history, as-of | yes | yes | yes |
+| Evidence links, audit export | yes | yes | yes |
+| Keyword search | yes, BM25 | yes, PostgreSQL full-text search | no, vector search only |
+| Cached reads | yes | yes | no, every read refolds the history |
+| Agent leases (`recall mcp -agent`) | yes | yes | no; Go `Resume` with `Unleased: true` only |
+| `recall setup` and the Claude plugin | yes | no, add `recall mcp` by hand | no, add `recall mcp` by hand |
+
+To run Recall on a PostgreSQL database:
+
+```sh
+export DATABASE_URL=postgres://user:password@localhost:5432/mydb
+recall -backend pgvector mcp -write
+```
+
+The first write creates a `recall` schema with one table per collection and
+two bookkeeping tables. The role needs `CREATE` on the database, and the
+`vector` extension must be installed or creatable by that role.
+
+Pitfalls on PostgreSQL:
+
+- A collection takes its vector size from the first write. Changing embedders
+  needs a new collection.
+- Every write to a collection takes a row lock on that collection's revision,
+  so writes to one collection are serialized. That is fine at conversation
+  pace but slows a bulk import.
+- Keyword search uses the `english` text search configuration unless the Go
+  `Config.TextSearchConfig` says otherwise. It is fixed when a collection is
+  created.
+- On pgvector older than 0.8.0, a filtered vector search can return fewer
+  hits than asked for, because the index stops scanning at `ef_search`
+  candidates before the filter applies.
 
 Pitfalls on Qdrant:
 
@@ -296,7 +321,9 @@ To add a backend, implement `Put`, `List` and `Search`
 `recall.RegisterBackend` in `init`, pass [`backendtest`](backendtest), and import
 it in [`cmd/recall/backends.go`](cmd/recall/backends.go).
 
-The Go library has no external module dependencies. Its built-in lexical
+The Go library has no external module dependencies. The pgvector backend uses
+[pgx](https://github.com/jackc/pgx), which a program pulls in only by
+importing that package. Its built-in lexical
 embedder supports word-overlap search; applications can supply a model-based
 embedder for semantic search. See the [embedding guide](docs/reference.md#embeddings).
 
@@ -307,6 +334,7 @@ embedder for semantic search. See the [embedding guide](docs/reference.md#embedd
 | [`recall.go`](recall.go), [`doc.go`](doc.go) | Public Go API at `github.com/Polign/recall` |
 | [`internal/engine/`](internal/engine) | Memory implementation and unit tests |
 | [`polign/`](polign) | polign_db backend |
+| [`backend/pgvector/`](backend/pgvector) | PostgreSQL + pgvector backend |
 | [`backend/qdrant/`](backend/qdrant) | Qdrant backend |
 | [`backendtest/`](backendtest) | Conformance suite for backends |
 | [`python/`](python) | Python package and tests |

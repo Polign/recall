@@ -74,6 +74,14 @@ docker run -d -p 6333:6333 qdrant/qdrant
 RECALL_QDRANT_URL=http://localhost:6333 go test ./backend/qdrant
 ```
 
+The pgvector backend does the same with `RECALL_PGVECTOR_URL`. Its tests use a
+`recall_test` schema:
+
+```sh
+docker run -d -e POSTGRES_PASSWORD=recall -p 5433:5432 pgvector/pgvector:pg17
+RECALL_PGVECTOR_URL=postgres://postgres:recall@localhost:5433/postgres go test ./backend/pgvector
+```
+
 To run only the memory implementation or verify an audit fixture:
 
 ```sh
