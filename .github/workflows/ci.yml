@@ -1,7 +1,8 @@
 # Test and lint gate for every push and PR. The library itself needs no
 # services; cmd/recall's integration tests run a real polign-server from the
 # latest polign_db wheel, so the HTTP contract Recall depends on is checked
-# against what users install.
+# against what users install. A PostgreSQL service runs the pgvector
+# backend's conformance suite.
 name: ci
 
 on:
@@ -15,6 +16,18 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.1-pg17
+        env:
+          POSTGRES_PASSWORD: recall
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -49,6 +62,7 @@ jobs:
       - name: Test (race)
         env:
           RECALL_REQUIRE_POLIGN: "1"
+          RECALL_PGVECTOR_URL: postgres://postgres:recall@localhost:5432/postgres
         run: go test -race -timeout 10m ./...
 
       - name: Wheel builder tests

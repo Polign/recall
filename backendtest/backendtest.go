@@ -13,8 +13,10 @@ package backendtest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,19 +24,34 @@ import (
 )
 
 // Run runs every conformance check. newBackend is called once per subtest.
+// The checks for optional capabilities (Get, text search, watermarks, leases)
+// skip on a backend that does not offer them.
 func Run(t *testing.T, newBackend func(t *testing.T) recall.Backend) {
 	t.Helper()
-	run := time.Now().UnixNano()
-	collection := func(t *testing.T) string {
-		name := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
-		return fmt.Sprintf("recall_conformance_%s_%d", strings.ToLower(name), run)
-	}
+	collection := Collection
 	t.Run("MissingCollectionIsEmpty", func(t *testing.T) { missingCollection(t, newBackend(t), collection(t)) })
 	t.Run("ListExactAndOrdered", func(t *testing.T) { listExact(t, newBackend(t), collection(t)) })
 	t.Run("Filters", func(t *testing.T) { filters(t, newBackend(t), collection(t)) })
 	t.Run("Search", func(t *testing.T) { search(t, newBackend(t), collection(t)) })
 	t.Run("Get", func(t *testing.T) { get(t, newBackend(t), collection(t)) })
 	t.Run("Client", func(t *testing.T) { client(t, newBackend(t), collection(t)) })
+	t.Run("TextSearch", func(t *testing.T) { textSearch(t, newBackend(t), collection(t)) })
+	t.Run("Watermark", func(t *testing.T) { watermark(t, newBackend(t), collection(t)) })
+	t.Run("Leases", func(t *testing.T) { leases(t, newBackend(t), collection(t)) })
+	t.Run("Agent", func(t *testing.T) { agent(t, newBackend(t), collection(t)) })
+}
+
+var (
+	run = time.Now().UnixNano()
+	seq atomic.Int64
+)
+
+// Collection names a fresh collection for one test, from the test's name,
+// the time the process started and a counter, so suites can share a
+// database with other runs and with repeats of themselves (go test -count).
+func Collection(t *testing.T) string {
+	name := strings.NewReplacer("/", "_", " ", "_", "#", "_").Replace(t.Name())
+	return fmt.Sprintf("recall_conformance_%s_%d_%d", strings.ToLower(name), run, seq.Add(1))
 }
 
 func vec(i int) []float32 {
@@ -283,5 +300,206 @@ func client(t *testing.T, b recall.Backend, c string) {
 	}
 	if !found {
 		t.Fatalf("semantic recall missed prefers_editor: %+v", beliefs)
+	}
+}
+
+func textSearch(t *testing.T, b recall.Backend, c string) {
+	ts, ok := b.(recall.TextSearchBackend)
+	if !ok {
+		t.Skip("backend does not implement recall.TextSearchBackend")
+	}
+	ctx := context.Background()
+	texts := []string{"the user prefers the vim editor", "the user works in Seattle", "the project is written in go", "the user dislikes emacs"}
+	put(t, b, c, len(texts), func(i int) map[string]any {
+		return map[string]any{"subject": map[bool]string{true: "user", false: "project"}[i != 2], recall.TextField: texts[i]}
+	})
+	hits, err := ts.SearchText(ctx, c, "which editor does the user prefer", 10, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) == 0 || hits[0].ID != "m-0000" {
+		ids := make([]string, len(hits))
+		for i, h := range hits {
+			ids[i] = h.ID
+		}
+		t.Fatalf("text search ranked %v, want m-0000 first", ids)
+	}
+	if hits[0].Metadata["subject"] != "user" {
+		t.Fatalf("hit metadata %v", hits[0].Metadata)
+	}
+	hits, err = ts.SearchText(ctx, c, "user", 10, map[string]any{"subject": "project"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range hits {
+		if h.Metadata["subject"] != "project" {
+			t.Fatalf("filtered text search returned %s for %v", h.ID, h.Metadata["subject"])
+		}
+	}
+	if _, err := ts.SearchText(ctx, c, "zzzz qqqq", 10, nil); err != nil {
+		t.Fatalf("text search with no match: %v", err)
+	}
+}
+
+func watermark(t *testing.T, b recall.Backend, c string) {
+	wb, ok := b.(recall.WatermarkBackend)
+	if !ok {
+		t.Skip("backend does not implement recall.WatermarkBackend")
+	}
+	ctx := context.Background()
+	w0, err := wb.Watermark(ctx, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	put(t, b, c, 1, func(int) map[string]any { return map[string]any{"subject": "user"} })
+	w1, err := wb.Watermark(ctx, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w1 == w0 {
+		t.Fatalf("watermark %q did not change on the first write", w1)
+	}
+	again, err := wb.Watermark(ctx, c)
+	if err != nil || again != w1 {
+		t.Fatalf("watermark moved without a write: %q then %q (%v)", w1, again, err)
+	}
+	// An overwrite of an existing ID is a visible mutation too.
+	if err := b.Put(ctx, c, "m-0000", vec(0), map[string]any{"subject": "user", "n": float64(1)}); err != nil {
+		t.Fatal(err)
+	}
+	w2, err := wb.Watermark(ctx, c)
+	if err != nil || w2 == w1 {
+		t.Fatalf("watermark %q did not change on an overwrite (%v)", w2, err)
+	}
+	// With watermarks, a materializing client serves the same answers.
+	cl, err := recall.NewClient(recall.Config{Backend: b, Collection: c + "_m", Registry: recall.DefaultRegistry(), Embedder: recall.LexicalEmbedder{}, Materialize: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{"vim", "neovim"} {
+		if _, err := cl.Remember(ctx, recall.RememberRequest{Subject: "user", Predicate: "prefers_editor", Value: v}); err != nil {
+			t.Fatal(err)
+		}
+		beliefs, err := cl.Recall(ctx, recall.Query{Subject: "user", Predicate: "prefers_editor"})
+		if err != nil || len(beliefs) != 1 || beliefs[0].Value != v {
+			t.Fatalf("materialized recall after %s: %+v, %v", v, beliefs, err)
+		}
+	}
+}
+
+func leases(t *testing.T, b recall.Backend, c string) {
+	lb, ok := b.(recall.LeaseBackend)
+	if !ok {
+		t.Skip("backend does not implement recall.LeaseBackend")
+	}
+	ctx := context.Background()
+	g1, err := lb.AcquireLease(ctx, c, "agent-1", "pod-a", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g1.Epoch != 1 || g1.Holder != "pod-a" {
+		t.Fatalf("first grant %+v", g1)
+	}
+	_, err = lb.AcquireLease(ctx, c, "agent-1", "pod-b", time.Minute)
+	var held *recall.LeaseHeldError
+	if !errors.As(err, &held) || held.Holder != "pod-a" || held.Expires.Before(time.Now()) {
+		t.Fatalf("second acquire: %v, want LeaseHeldError for pod-a", err)
+	}
+	// Another lease name is independent.
+	if _, err := lb.AcquireLease(ctx, c, "agent-2", "pod-b", time.Minute); err != nil {
+		t.Fatalf("other agent: %v", err)
+	}
+	g2, err := lb.RenewLease(ctx, c, "agent-1", "pod-a", g1.Epoch, time.Minute)
+	if err != nil || g2.Epoch <= g1.Epoch {
+		t.Fatalf("renew: %+v, %v", g2, err)
+	}
+	if _, err := lb.RenewLease(ctx, c, "agent-1", "pod-a", g1.Epoch, time.Minute); !errors.Is(err, recall.ErrLeaseLost) {
+		t.Fatalf("renew with a stale epoch: %v, want ErrLeaseLost", err)
+	}
+	// Release with a stale epoch does nothing; with the current one it frees the lease.
+	if err := lb.ReleaseLease(ctx, c, "agent-1", "pod-a", g1.Epoch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lb.AcquireLease(ctx, c, "agent-1", "pod-b", time.Minute); !errors.As(err, &held) {
+		t.Fatalf("acquire after a stale release: %v, want held", err)
+	}
+	if err := lb.ReleaseLease(ctx, c, "agent-1", "pod-a", g2.Epoch); err != nil {
+		t.Fatal(err)
+	}
+	g3, err := lb.AcquireLease(ctx, c, "agent-1", "pod-b", time.Minute)
+	if err != nil || g3.Epoch <= g2.Epoch || g3.Holder != "pod-b" {
+		t.Fatalf("acquire after release: %+v, %v", g3, err)
+	}
+	if _, err := lb.RenewLease(ctx, c, "agent-1", "pod-a", g2.Epoch, time.Minute); !errors.Is(err, recall.ErrLeaseLost) {
+		t.Fatalf("old holder renew: %v, want ErrLeaseLost", err)
+	}
+	// A lapsed lease can be taken, and the epoch keeps growing.
+	if _, err := lb.AcquireLease(ctx, c, "agent-3", "pod-a", 50*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(120 * time.Millisecond)
+	g4, err := lb.AcquireLease(ctx, c, "agent-3", "pod-b", time.Minute)
+	if err != nil || g4.Epoch != 2 {
+		t.Fatalf("acquire after lapse: %+v, %v", g4, err)
+	}
+}
+
+// agent drives Client.Resume end to end: with a lease where the backend
+// grants them, and unleased otherwise.
+func agent(t *testing.T, b recall.Backend, c string) {
+	ctx := context.Background()
+	_, leased := b.(recall.LeaseBackend)
+	cl, err := recall.NewClient(recall.Config{Backend: b, Collection: c, Registry: recall.DefaultRegistry(), Embedder: recall.LexicalEmbedder{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := recall.ResumeRequest{AgentID: "a1", Unleased: !leased}
+	if leased {
+		if _, err := cl.Resume(ctx, recall.ResumeRequest{AgentID: "a1", Unleased: true}); err != nil {
+			t.Fatalf("unleased resume on a leasing backend: %v", err)
+		}
+	} else if _, err := cl.Resume(ctx, recall.ResumeRequest{AgentID: "a1"}); !errors.Is(err, recall.ErrLeaseUnsupported) {
+		t.Fatalf("leased resume: %v, want ErrLeaseUnsupported", err)
+	}
+	a, err := cl.Resume(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.UpdateWorkingState(ctx, recall.WorkingState{Goal: "ship it"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		if _, err := a.RecordTurn(ctx, recall.Turn{Role: "user", Content: fmt.Sprintf("turn %d", i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := a.SetPointer(ctx, recall.Pointer{Name: "repo", Type: recall.PointerGitRef, Fields: map[string]string{"branch": "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	if leased {
+		if _, err := cl.Resume(ctx, req); !errors.Is(err, recall.ErrLeaseHeld) {
+			t.Fatalf("second leased resume: %v, want ErrLeaseHeld", err)
+		}
+		if err := a.Release(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	again, err := cl.Resume(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := again.WorkingState().Goal; got != "ship it" {
+		t.Fatalf("goal %q after resume", got)
+	}
+	if turns, err := again.RecentTurns(ctx, 10); err != nil || len(turns) != 3 {
+		t.Fatalf("turns %d, %v; want 3", len(turns), err)
+	}
+	if ps, err := again.Pointers(ctx); err != nil || len(ps) != 1 {
+		t.Fatalf("pointers %d, %v; want 1", len(ps), err)
+	}
+	if leased {
+		if err := again.Release(ctx); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

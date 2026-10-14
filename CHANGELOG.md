@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- A PostgreSQL backend, `backend/pgvector`, chosen with
+  `recall -backend pgvector`. It reads the connection string from
+  `DATABASE_URL` and a password from `PGPASSWORD`. It supports everything
+  polign_db does except `recall setup`: exact histories, evidence reads,
+  keyword search through PostgreSQL full-text search, cached reads through a
+  per-collection revision, and agent leases, so `recall mcp -agent` works.
+  Each collection is a table in a `recall` schema, created on first write.
+- The conformance suite in `backendtest` now also checks text search,
+  watermarks, leases and agent resume, skipping each on a backend that does
+  not offer it. `backendtest.Collection` names a fresh collection per call.
+
 ## [0.18.0] - 2026-10-13
 
 ### Changed
