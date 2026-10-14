@@ -12,6 +12,17 @@
   `replaces`, which the extraction schema now carries. Before this, "I've
   moved to the UK office" after "works in the Germany office" could land
   under a second predicate and replace nothing. One read per `remember`.
+  The prompt also says that paired predicates replace only a word-for-word
+  value, so a reversal copies the listed value instead of rewording it.
+  Measured on `eval/corrections` (68 hand-written cases, Opus 5.5
+  extracting, same day, same model on both builds): corrections made 34/40
+  against 20/40 without this change; traps left alone 28/28 on both. Three
+  of the six remaining failures replaced the old value with a new one under
+  the same predicate ("ex-girlfriend Sarah" for "girlfriend Sarah"), which
+  the eval's word check counts as a miss.
+- The Python client runs the `recall` binary named by `RECALL_BIN` before
+  the wheel's own. The corrections eval documented the variable; nothing
+  read it.
 - The predicate table an agent or extractor is shown lists a catch-all
   predicate (`detail`, `note`, or one described as holding what no other
   predicate can) last, and `detail` says so, so a fact with a predicate of
