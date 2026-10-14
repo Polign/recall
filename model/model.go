@@ -320,7 +320,7 @@ func heldSection(held []recall.Belief) string {
 
 // heldRule keeps a correction on the predicate of the fact it corrects, so
 // that it replaces it instead of standing beside it.
-const heldRule = `- A statement that updates, corrects, or ends a fact listed under "Currently believed" is filed under that fact's predicate, so the new value replaces it: with "user lives_in: Paris" listed, "I moved to Lisbon" is lives_in with value Lisbon, never a second predicate. When the new fact has to go under a different predicate, set replaces to the belief it makes untrue, predicate and value copied exactly as listed. Otherwise replaces is an empty list.`
+const heldRule = `- A statement that updates, corrects, or ends a fact listed under "Currently believed" is filed under that fact's predicate, so the new value replaces it: with "user lives_in: Paris" listed, "I moved to Lisbon" is lives_in with value Lisbon, never a second predicate. When the new fact has to go under a different predicate, including one that contradicts the listed fact's predicate, copy the listed value word for word (cancelled with value "trip to Japan in the fall" for a listed "plans: trip to Japan in the fall", not "Japan trip") and set replaces to that belief, predicate and value exactly as listed. Paired predicates replace only a value that matches word for word, so a reworded value replaces nothing. Otherwise replaces is an empty list.`
 
 // openSchema is schema without a fixed predicate list. Every field is
 // required, as strict structured output demands; the fields that only a
