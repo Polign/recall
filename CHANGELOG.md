@@ -5,8 +5,9 @@
 ### Changed
 
 - The extraction model sees what memory holds. `Client.RememberText` passes
-  the current beliefs (newest first, at most 64, notes left out) to the
-  extractor, which reads them with `recall.Held(ctx)`, and the bundled
+  the current beliefs (the ones the text is about first, then the newest,
+  at most 64, notes left out) to the extractor, which reads them with
+  `recall.Held(ctx)`, and the bundled
   extractor lists them in its prompt under one rule: a statement that
   updates one of them is filed under that fact's predicate, or names it in
   `replaces`, which the extraction schema now carries. Before this, "I've

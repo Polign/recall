@@ -134,7 +134,7 @@ func (c *Client) RememberTextAt(ctx context.Context, text string, extractor Extr
 		// The extractor sees what memory holds now, so a statement that
 		// updates one of those facts lands under the same predicate.
 		if !callerProposed {
-			held, err := c.held(ctx)
+			held, err := c.held(ctx, text)
 			if err != nil {
 				return out, err
 			}
@@ -358,11 +358,12 @@ type heldKey struct{}
 // maxHeld bounds how many current beliefs an extractor is shown.
 const maxHeld = 64
 
-// Held returns the beliefs memory held when the extractor was asked, newest
-// first and at most maxHeld, so it can file a statement that updates one of
-// them under that fact's predicate, or name it in Proposal.Replaces. Notes
-// and the records of earlier extractions are left out. Empty for proposals
-// the caller made itself.
+// Held returns the beliefs memory held when the extractor was asked: the
+// ones the text is about first, then the newest, at most maxHeld in all, so
+// it can file a statement that updates one of them under that fact's
+// predicate, or name it in Proposal.Replaces. Notes and the records of
+// earlier extractions are left out. Empty for proposals the caller made
+// itself.
 func Held(ctx context.Context) []Belief {
 	held, _ := ctx.Value(heldKey{}).([]Belief)
 	return held
@@ -375,21 +376,29 @@ func WithHeld(ctx context.Context, held []Belief) context.Context {
 }
 
 // held gathers what Held returns: see there.
-func (c *Client) held(ctx context.Context) ([]Belief, error) {
-	beliefs, err := c.Recall(ctx, Query{Limit: 4 * maxHeld, NoElsewhere: true})
+func (c *Client) held(ctx context.Context, text string) ([]Belief, error) {
+	// What the text is about comes first, so a fact it updates is listed
+	// however much has been remembered since, then the newest facts.
+	related, err := c.Recall(ctx, Query{Text: text, Limit: maxHeld / 2, NoElsewhere: true, NoTimeHint: true})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Belief, 0, len(beliefs))
-	for _, b := range beliefs {
-		if b.Predicate == NotePredicate || b.Predicate == RegistryPredicate || b.Predicate == ExtractionPredicate || b.Subject == ExtractionSubject {
+	newest, err := c.Recall(ctx, Query{Limit: 4 * maxHeld, NoElsewhere: true})
+	if err != nil {
+		return nil, err
+	}
+	slices.SortStableFunc(newest, func(a, b Belief) int { return b.ObservedAt.Compare(a.ObservedAt) })
+	out := make([]Belief, 0, maxHeld)
+	seen := map[string]bool{}
+	for _, b := range slices.Concat(related, newest) {
+		if b.Predicate == NotePredicate || b.Predicate == RegistryPredicate || b.Predicate == ExtractionPredicate || b.Subject == ExtractionSubject || seen[b.EventID] {
 			continue
 		}
+		seen[b.EventID] = true
 		out = append(out, b)
-	}
-	slices.SortStableFunc(out, func(a, b Belief) int { return b.ObservedAt.Compare(a.ObservedAt) })
-	if len(out) > maxHeld {
-		out = out[:maxHeld]
+		if len(out) == maxHeld {
+			break
+		}
 	}
 	return out, nil
 }
