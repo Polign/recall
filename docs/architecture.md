@@ -106,9 +106,9 @@ ceiling.
 
 ```mermaid
 flowchart LR
-    e1["Sep 12 · approved<br/>assert, user_stated"] --> e2["Oct 2 · revoked<br/>assert, replaces approved"]
-    r1["recall as_of Sep 20<br/>fold stops at Sep 20: approved"] -.-> e1
-    r2["recall now<br/>revoked, replaced: approved"] -.-> e2
+    e1["Sep 12 · 12 Pine St<br/>assert, user_stated"] --> e2["Oct 2 · 48 Oak Ave<br/>assert, replaces 12 Pine St"]
+    r1["recall as_of Sep 20<br/>fold stops at Sep 20: 12 Pine St"] -.-> e1
+    r2["recall now<br/>48 Oak Ave, replaced: 12 Pine St"] -.-> e2
     h["history<br/>both events, oldest first"]
 ```
 
