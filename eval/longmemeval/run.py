@@ -15,6 +15,9 @@ Methods:
   recall-notes  Recall as a note store; see recall_method.py
   recall-typed  Recall over typed statements from an extractor model
   recall-linked recall-typed with each fact linked to its source round
+  recall-server each session goes to remember(text) alone and Recall's own
+                extraction model (--extractor) works out the statements,
+                seeing what the store already holds: the product path
 """
 from __future__ import annotations
 
@@ -30,7 +33,7 @@ from typing import Any
 import lme
 from bm25 import BM25
 
-METHODS = ("full", "oracle", "bm25-session", "bm25-turn", "recall-notes", "recall-typed", "recall-linked")
+METHODS = ("full", "oracle", "bm25-session", "bm25-turn", "recall-notes", "recall-typed", "recall-linked", "recall-server")
 
 
 def rounds(turns: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
@@ -89,7 +92,8 @@ def main() -> None:
     ap.add_argument("--k", type=int, default=10, help="chunks or beliefs passed to the reader")
     ap.add_argument("--as-of", choices=("question", "none"), default="question",
                     help="recall methods: answer as of the question date, or over all history as the baselines do")
-    ap.add_argument("--extractor", default="gpt-4o-mini-2024-07-18", help="recall-typed extraction model")
+    ap.add_argument("--extractor", default="gpt-4o-mini-2024-07-18",
+                    help="recall-typed extraction model; for recall-server, provider:model as recall's -extract-model takes it")
     ap.add_argument("--cot", action="store_true", help="upstream's step-by-step reader prompt")
     ap.add_argument("--ages", action="store_true", help="say how many days before the question each session date is")
     ap.add_argument("--list-k", type=int, default=0,
@@ -141,7 +145,7 @@ def main() -> None:
         history, history_tokens = lme.truncate_history(
             lme.format_history(chunks, entry["question_date"] if args.ages else None), history_budget)
         prompt = lme.reader_prompt(history, entry, args.cot, facts=args.method == "recall-typed",
-                                   merge=args.method == "recall-linked")
+                                   merge=args.method in ("recall-linked", "recall-server"))
         hyp = "" if args.dry_run else lme.complete(args.reader, prompt, args.max_tokens)
         return {"question_id": entry["question_id"], "hypothesis": hyp,
                 "retrieved_session_ids": retrieved, "history_tokens": history_tokens,
