@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -177,5 +178,49 @@ func TestDigestOfEmptyLogIsStable(t *testing.T) {
 	}
 	if Digest(nil) == "" {
 		t.Fatal("empty digest")
+	}
+}
+
+func TestImportEventsReembedsIntoAnotherCollection(t *testing.T) {
+	backend := newLockedBackend()
+	src, err := NewClient(Config{Backend: backend, Collection: "src", Registry: DefaultRegistry(), Embedder: LexicalEmbedder{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := src.Remember(t.Context(), RememberRequest{Subject: "user", Predicate: "prefers_editor", Value: "vim"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := src.Remember(t.Context(), RememberRequest{Subject: "user", Predicate: "prefers_editor", Value: "neovim"}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := src.ExportEvents(t.Context(), Export{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	embed := EmbedFunc(func(ctx context.Context, text string) ([]float32, error) {
+		calls++
+		return LexicalEmbedder{}.Embed(ctx, text)
+	})
+	dst, err := NewClient(Config{Backend: backend, Collection: "dst", Registry: DefaultRegistry(), Embedder: embed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 { // twice: the second import stores nothing new
+		n, err := dst.ImportEvents(t.Context(), events)
+		if err != nil || n != len(events) {
+			t.Fatalf("import: %d %v", n, err)
+		}
+	}
+	if calls < len(events) {
+		t.Fatalf("embedded %d of %d events", calls, len(events))
+	}
+	got, err := dst.Recall(t.Context(), Query{Subject: "user", Predicate: "prefers_editor"})
+	if err != nil || len(got) != 1 || got[0].Value != "neovim" || len(got[0].Replaced) != 1 {
+		t.Fatalf("recall after import: %+v %v", got, err)
+	}
+	again, _ := dst.ExportEvents(t.Context(), Export{})
+	if len(again) != len(events) {
+		t.Fatalf("exported %d after two imports of %d", len(again), len(events))
 	}
 }

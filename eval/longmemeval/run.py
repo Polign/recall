@@ -12,6 +12,7 @@ Methods:
   oracle        only the answer sessions: the ceiling for any retriever
   bm25-session  top-k sessions by BM25 over session text
   bm25-turn     top-k rounds (a user turn and the reply after it) by BM25
+  none          no history at all: the question alone
   recall-notes  Recall as a note store; see recall_method.py
   recall-typed  Recall over typed statements from an extractor model
   recall-linked recall-typed with each fact linked to its source round
@@ -33,7 +34,7 @@ from typing import Any
 import lme
 from bm25 import BM25
 
-METHODS = ("full", "oracle", "bm25-session", "bm25-turn", "recall-notes", "recall-typed", "recall-linked", "recall-server")
+METHODS = ("none", "full", "oracle", "bm25-session", "bm25-turn", "recall-notes", "recall-typed", "recall-linked", "recall-server")
 
 
 def rounds(turns: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
@@ -61,6 +62,8 @@ def context(entry: dict[str, Any], method: str, k: int) -> tuple[list[tuple[str,
     """The chunks the reader sees, as (date, turns), and the session ids they
     came from in retrieval rank order (deduplicated)."""
     sess = lme.sessions(entry)
+    if method == "none":  # the question alone: the floor
+        return [], []
     if method == "full":
         return [(d, t) for _, d, t in sess], [s for s, _, _ in sess]
     if method == "oracle":

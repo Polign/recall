@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- `Client.ImportEvents` writes events exported from another collection or
+  backend, embedding each with this client's embedder and keeping its ID, so
+  importing twice stores each event once. Moving a log to a model embedder
+  this way re-embeds it without running the extractor again.
+
 ## [0.19.0] - 2026-10-14
 
 ### Added

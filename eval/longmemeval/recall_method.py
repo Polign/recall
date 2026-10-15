@@ -348,13 +348,24 @@ def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
             when = instant(entry["question_date"]) if as_of == "question" else None
             beliefs = client.recall(query=entry["question"], limit=k, as_of=when,
                                     with_sources=method in ("recall-linked", "recall-server"))
-            if profile and reg.get("preference"):
+            if profile:
                 # The user's stated preferences about what the question is
-                # about, whatever subject they were filed under.
+                # about, whatever subject they were filed under: the
+                # registry's preference predicate, or the open store's likes,
+                # dislikes, interests and prefers_* predicates.
                 have = {b.event_id for b in beliefs}
-                prefs = client.recall(predicate="preference", query=entry["question"], limit=profile,
-                                      as_of=when, with_sources=method in ("recall-linked", "recall-server"))
-                beliefs += [b for b in prefs if b.event_id not in have]
+                preds = ["preference"] if reg.get("preference") else [
+                    name for name in reg if name in ("likes", "dislikes", "interested_in", "interests", "hobby") or name.startswith("prefers_")]
+                prefs = []
+                for pred in preds:
+                    prefs += client.recall(predicate=pred, query=entry["question"], limit=profile,
+                                           as_of=when, with_sources=method in ("recall-linked", "recall-server"))
+                added = 0
+                for b in prefs:
+                    if b.event_id not in have and added < profile:
+                        beliefs.append(b)
+                        have.add(b.event_id)
+                        added += 1
             recall_ms = (time.monotonic() - t1) * 1000
 
             where = {r["event_id"]: r for r in log}

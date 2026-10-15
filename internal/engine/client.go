@@ -335,6 +335,32 @@ func (c *Client) ExportEvents(ctx context.Context, q Export) ([]Event, error) {
 	return result, nil
 }
 
+// ImportEvents writes events exported from another collection or backend into
+// this one, each embedded with this client's embedder, and returns how many
+// were written. Event IDs are kept, and a write with an ID already stored
+// replaces it with the same event, so importing twice stores each event once.
+// Moving a log to a new embedder this way re-embeds it without asking an
+// extractor again.
+func (c *Client) ImportEvents(ctx context.Context, events []Event) (int, error) {
+	s, err := c.forContext(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for i, e := range events {
+		if err := ctx.Err(); err != nil {
+			return i, err
+		}
+		if e.ID == "" {
+			return i, fmt.Errorf("recall: import: event %d has no id", i)
+		}
+		if err := s.append(e); err != nil {
+			return i, fmt.Errorf("recall: import: event %d (%s): %w", i, e.ID, err)
+		}
+	}
+	s.reglog.invalidate()
+	return len(events), nil
+}
+
 // This adapter exists only for one operation; no context or embedding error is
 // ever written into shared client configuration.
 func (c *Client) forContext(ctx context.Context) (*Store, error) {
