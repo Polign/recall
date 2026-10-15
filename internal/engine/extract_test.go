@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -165,5 +167,98 @@ func TestExtractorSeesObservedAt(t *testing.T) {
 	at := time.Date(2023, 5, 20, 2, 21, 0, 0, time.UTC)
 	if _, err := c.RememberTextAt(t.Context(), "hello again", d, at); err != nil || !d.seen.Equal(at) {
 		t.Fatalf("dated: %v %v", d.seen, err)
+	}
+}
+
+type heldExtractor struct{ seen []Belief }
+
+func (h *heldExtractor) Extract(ctx context.Context, _ string, _ Registry) ([]Proposal, error) {
+	h.seen = Held(ctx)
+	return nil, nil
+}
+
+func TestExtractorSeesWhatIsHeld(t *testing.T) {
+	c, err := NewClient(Config{Backend: newLockedBackend(), Collection: "m", Registry: DefaultRegistry(), Embedder: LexicalEmbedder{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &heldExtractor{}
+	if _, err := c.RememberText(t.Context(), "hello", h); err != nil || len(h.seen) != 0 {
+		t.Fatalf("empty store: %+v %v", h.seen, err)
+	}
+	if _, err := c.Remember(t.Context(), RememberRequest{Subject: "user", Predicate: "prefers_editor", Value: "vim"}); err != nil {
+		t.Fatal(err)
+	}
+	// The note kept for "hello" is not a fact the extractor should repeat.
+	if _, err := c.RememberText(t.Context(), "hello again", h); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.seen) != 1 || h.seen[0].Predicate != "prefers_editor" || h.seen[0].Value != "vim" {
+		t.Fatalf("held: %+v", h.seen)
+	}
+	if Held(t.Context()) != nil {
+		t.Fatal("a bare context holds nothing")
+	}
+}
+
+func TestPromptTableListsCatchAllLast(t *testing.T) {
+	reg := Registry{
+		"zone":   {Cardinality: "single", Description: "Where the subject is"},
+		"detail": {Cardinality: "multi", Description: "A fact about the subject that no other predicate can hold"},
+		"misc":   {Cardinality: "multi", Description: "Anything that fits no other predicate"},
+		"age":    {Cardinality: "single", Description: "How old the subject is"},
+	}
+	table := reg.PromptTable()
+	want := []string{"- age ", "- zone ", "- detail ", "- misc "}
+	at := -1
+	for _, line := range want {
+		i := strings.Index(table, line)
+		if i <= at {
+			t.Fatalf("%q out of order in:\n%s", line, table)
+		}
+		at = i
+	}
+}
+
+func TestAdmitProposalsRepairsEvidence(t *testing.T) {
+	reg := DefaultRegistry()
+	const text = "I Enjoy running in the mornings."
+	got := reg.AdmitProposals(text, []Proposal{
+		{Subject: "user", Predicate: "likes", Value: "running", Evidence: ""},
+		{Subject: "user", Predicate: "likes", Value: "mornings", Evidence: "i enjoy running"},
+		{Subject: "user", Predicate: "likes", Value: "x", Evidence: "something the text never says"},
+	})
+	// No quote becomes the whole text; a quote off by case becomes the
+	// exact excerpt; an invented quote still drops the proposal.
+	if len(got) != 2 || got[0].Evidence != text || got[1].Evidence != "I Enjoy running" {
+		t.Fatalf("evidence: %+v", got)
+	}
+	long := strings.Repeat("word ", MaxEvidenceBytes/4)
+	if got := reg.AdmitProposals(long, []Proposal{{Subject: "user", Predicate: "likes", Value: "x", Evidence: ""}}); len(got) != 0 {
+		t.Fatalf("a text too long to be its own evidence is not quoted whole: %+v", got)
+	}
+}
+
+func TestHeldListsWhatTheTextIsAboutBeforeTheNewest(t *testing.T) {
+	c, err := NewClient(Config{Backend: newLockedBackend(), Collection: "m", Registry: DefaultRegistry(), Embedder: LexicalEmbedder{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fact the text updates is the oldest of many, well outside the
+	// newest maxHeld.
+	if _, err := c.Remember(t.Context(), RememberRequest{Subject: "user", Predicate: "uses_technology", Value: "Kubernetes"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < maxHeld+10; i++ {
+		if _, err := c.Remember(t.Context(), RememberRequest{Subject: fmt.Sprintf("svc%d", i), Predicate: "prefers_editor", Value: "vim"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := &heldExtractor{}
+	if _, err := c.RememberText(t.Context(), "We dropped Kubernetes last month.", h); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.seen) != maxHeld || h.seen[0].Subject != "user" || h.seen[0].Value != "Kubernetes" {
+		t.Fatalf("held %d, first %+v", len(h.seen), h.seen[0])
 	}
 }

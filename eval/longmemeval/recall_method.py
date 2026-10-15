@@ -9,6 +9,10 @@ returns.
   recall-typed  an extractor model turns each session into typed statements
                 over registry.json (see extract.py); the reader sees beliefs,
                 with the values a single-valued belief replaced.
+  recall-server each session chunk goes to remember(text) alone; the server's
+                extraction model works out the statements, seeing what the
+                store already holds (recall 0.19), and keeps the chunk as the
+                episode each statement links to
   recall-linked recall-typed plus every round kept whole as a note, with each
                 statement written from the round it quotes; the reader sees
                 each fact with its source round, and matching rounds directly.
@@ -123,6 +127,27 @@ def write(client: Any, text: str, statements: list, sid: str, date: str, log: li
             log.append({"event_id": rr.stored.event_id, "session_id": sid, "date": date,
                         "predicate": rr.stored.predicate,
                         "probe": f"{rr.stored.subject} {rr.stored.predicate} {rr.stored.value}"})
+
+
+def ingest_server(client: Any, entry: dict[str, Any], rounds, stats: dict) -> list[dict[str, Any]]:
+    """Each session chunk goes to remember(text) with no statements, so the
+    server's extraction model (-extract-model) proposes them, with the
+    store's current beliefs in its prompt. No harness-side cache applies:
+    what the extractor sees depends on what was stored before."""
+    log = []
+    for sid, date, turns in lme.sessions(entry):
+        for text in chunks_of(turns, rounds):
+            result = client.remember(text=text, observed_at=instant(date))
+            stats["proposed"] += len(result.proposals)
+            stats["unfiled"] = stats.get("unfiled", 0) + len(result.unfiled)
+            written = list(result.results)
+            if result.episode is not None and all(r.stored.event_id != result.episode.stored.event_id for r in written):
+                written.insert(0, result.episode)
+            for rr in written:
+                log.append({"event_id": rr.stored.event_id, "session_id": sid, "date": date,
+                            "predicate": rr.stored.predicate,
+                            "probe": f"{rr.stored.subject} {rr.stored.predicate} {rr.stored.value}"})
+    return log
 
 
 def ingest_typed(client: Any, entry: dict[str, Any], rounds, extractor: str, stats: dict,
@@ -259,7 +284,13 @@ def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
         env["POLIGN_EMBED_URL"] = EMBED_URL
         env["POLIGN_COLLECTION"] = COLLECTION
     reg: dict[str, Any] = {}
-    if method in ("recall-typed", "recall-linked"):
+    if method == "recall-server":
+        # The server extracts with an open vocabulary seeded from the
+        # personal starter, as an open Recall store does.
+        import extract
+        env["POLIGN_PREDICATES"] = str(extract.SEEDS_PATH)
+        env["RECALL_OPEN"] = "1"
+    elif method in ("recall-typed", "recall-linked"):
         import extract
         if extract.OPEN:
             # The personal starter with -open: the store defines everything
@@ -274,7 +305,7 @@ def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
     # of writing the whole haystack again.
     stores = os.environ.get("LME_STORES")
     if stores:
-        store = Path(stores) / f"{method}-{extractor}{'-events' if os.environ.get('LME_EXTRACT_EVENTS') else ''}{'-embed' if EMBED_URL else ''}{'-open' if os.environ.get('LME_OPEN_VOCAB') else ''}" / entry["question_id"]
+        store = Path(stores) / f"{method}-{extractor.replace(':', '_')}{'-events' if os.environ.get('LME_EXTRACT_EVENTS') else ''}{'-embed' if EMBED_URL else ''}{'-open' if os.environ.get('LME_OPEN_VOCAB') else ''}" / entry["question_id"]
         if store.exists() and not (store / "ingest.jsonl").exists():
             shutil.rmtree(store, ignore_errors=True)  # left by an ingest that failed
         store.mkdir(parents=True, exist_ok=True)
@@ -282,13 +313,18 @@ def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
         store = Path(tempfile.mkdtemp(prefix=f"lme-{entry['question_id']}-"))
     done = store / "ingest.jsonl"
     try:
-        with Client(local_dir=store, write=True, timeout=600, env=env) as client:
+        # The harness reads with the typed tools; recall-server also has the
+        # server extract (recall 0.18+ serves the text tools unless asked).
+        with Client(local_dir=store, write=True, timeout=600, env=env, typed=True,
+                    extract_model=extractor if method == "recall-server" else None) as client:
             t0 = time.monotonic()
             if done.exists():
                 log = lme.read_jsonl(done)
                 stats["reused_store"] = True
             elif method == "recall-notes":
                 log = ingest_notes(client, entry, rounds)
+            elif method == "recall-server":
+                log = ingest_server(client, entry, rounds, stats)
             elif method in ("recall-typed", "recall-linked"):
                 log = ingest_typed(client, entry, rounds, extractor, stats, link=method == "recall-linked")
             else:
@@ -299,7 +335,7 @@ def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
                 if stores:
                     done.write_text("".join(json.dumps(r) + "\n" for r in log))
 
-            if os.environ.get("LME_OPEN_VOCAB") and method in ("recall-typed", "recall-linked"):
+            if method == "recall-server" or (os.environ.get("LME_OPEN_VOCAB") and method in ("recall-typed", "recall-linked")):
                 # What the store defined, so describe() knows which beliefs
                 # are single-valued.
                 reg = {e["predicate"]: e for e in client.predicates()}
@@ -311,14 +347,25 @@ def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
             # dated after the question).
             when = instant(entry["question_date"]) if as_of == "question" else None
             beliefs = client.recall(query=entry["question"], limit=k, as_of=when,
-                                    with_sources=method == "recall-linked")
-            if profile and reg.get("preference"):
+                                    with_sources=method in ("recall-linked", "recall-server"))
+            if profile:
                 # The user's stated preferences about what the question is
-                # about, whatever subject they were filed under.
+                # about, whatever subject they were filed under: the
+                # registry's preference predicate, or the open store's likes,
+                # dislikes, interests and prefers_* predicates.
                 have = {b.event_id for b in beliefs}
-                prefs = client.recall(predicate="preference", query=entry["question"], limit=profile,
-                                      as_of=when, with_sources=method == "recall-linked")
-                beliefs += [b for b in prefs if b.event_id not in have]
+                preds = ["preference"] if reg.get("preference") else [
+                    name for name in reg if name in ("likes", "dislikes", "interested_in", "interests", "hobby") or name.startswith("prefers_")]
+                prefs = []
+                for pred in preds:
+                    prefs += client.recall(predicate=pred, query=entry["question"], limit=profile,
+                                           as_of=when, with_sources=method in ("recall-linked", "recall-server"))
+                added = 0
+                for b in prefs:
+                    if b.event_id not in have and added < profile:
+                        beliefs.append(b)
+                        have.add(b.event_id)
+                        added += 1
             recall_ms = (time.monotonic() - t1) * 1000
 
             where = {r["event_id"]: r for r in log}
@@ -327,7 +374,7 @@ def context(entry: dict[str, Any], method: str, k: int, rounds, cache_dir: Path,
             for b in beliefs:
                 src = where.get(b.event_id, {})
                 content = describe(b, client, reg)
-                if method == "recall-linked":
+                if method in ("recall-linked", "recall-server"):
                     source = b.source_text
                     if b.predicate == "note":
                         if content in shown:

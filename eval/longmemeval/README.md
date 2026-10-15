@@ -39,6 +39,9 @@ Useful flags on `run.py`:
 - `--cot` uses upstream's step-by-step reader prompt.
 - `--dry-run` builds retrieval and prompts without calling a model, so the
   retrieval metrics in `report.py` are free.
+- `recall-server` needs `LME_RECALL_BIN` pointing at a recall 0.19.0 or later
+  and the extractor's API key in the environment; `uf_server.sh` runs it on
+  the user-facts subset beside the oracle and BM25 baselines, all on one model.
 
 ## Methods
 
@@ -48,6 +51,9 @@ Useful flags on `run.py`:
 | `oracle` | only the sessions that hold the answer (the ceiling for any retriever) |
 | `bm25-session` | the top `k` sessions by BM25 on the question |
 | `bm25-turn` | the top `k` rounds (a user turn plus the reply after it) |
+| `recall-notes` | every round kept in Recall as a note; the reader sees the `k` best |
+| `recall-typed`, `recall-linked` | the harness's own extractor (`--extractor`, cached) proposes typed statements to Recall |
+| `recall-server` | each session chunk goes to `remember(text)` alone and Recall's own extractor (`--extractor` as `provider:model`, the server's `-extract-model`) files it, seeing what the store already holds; no cache, since each extraction depends on the ones before it |
 
 ## Output
 

@@ -1,3 +1,4 @@
 openai>=1.40
 anthropic>=0.40
 tiktoken>=0.7
+polign-recall>=0.19.0
