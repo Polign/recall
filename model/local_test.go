@@ -139,4 +139,10 @@ func TestLocalEmbedderRuns(t *testing.T) {
 	if _, err := e.Embed(ctx, strings.Repeat("long text ", 2000)); err != nil {
 		t.Errorf("long text: %v", err)
 	}
+	// Pasted terminal output runs near one token per character, so the
+	// first cut is still over the model's 512 tokens.
+	dense := strings.Repeat("npm warn publish \"bin[recall]\" script name was cleaned; ~/.npm/_logs/2026-10-12T17_02_11Z-debug-0.log ", 40)
+	if v, err := e.Embed(ctx, dense); err != nil || len(v) != 384 {
+		t.Errorf("dense text: %d values, %v", len(v), err)
+	}
 }
