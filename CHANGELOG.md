@@ -41,6 +41,15 @@
   importing twice stores each event once. Moving a log to a model embedder
   this way re-embeds it without running the extractor again.
 
+- The `personal` starter registry, which seeds the text tools, has
+  single-valued `email`, `work_email` and `phone`. Before, the extraction
+  model coined `email` itself as multi-valued, so a new work address stood
+  beside the old ones instead of replacing them.
+- Word search drops question words and the user's own name, and matches
+  common word endings, in both the hashed vectors and the keyword index.
+  "Where does Maya live now?" used to rank Maya's name and every email
+  address containing "maya" above where she lives.
+
 ### Fixed
 
 - `recall setup` with an extraction model failed its own launcher check,

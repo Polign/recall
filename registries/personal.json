@@ -34,6 +34,11 @@
     "value_type": "string",
     "description": "Something the subject dislikes or avoids"
   },
+  "email": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "The email address to use for the subject now; a new address replaces it. An address only for work goes under work_email"
+  },
   "gave_away": {
     "cardinality": "multi",
     "value_type": "string",
@@ -76,6 +81,11 @@
     "value_type": "string",
     "description": "Something the subject owns or has"
   },
+  "phone": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "The phone number to use for the subject now; a new number replaces it"
+  },
   "plans": {
     "cardinality": "multi",
     "value_type": "string",
@@ -95,6 +105,11 @@
     "cardinality": "single",
     "value_type": "string",
     "description": "The current state or progress of the subject, such as in repair or halfway through"
+  },
+  "work_email": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "The address to use for the subject's work now; a new work address replaces it, as with a new job"
   },
   "works_at": {
     "cardinality": "single",
