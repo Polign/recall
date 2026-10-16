@@ -174,3 +174,30 @@ func TestOpenSeedsJoinCodingAndPersonal(t *testing.T) {
 		t.Fatalf("seed definitions: likes %+v, role %+v", seeds["likes"], seeds["role"])
 	}
 }
+
+// seenModel records the text it was asked to extract from.
+type seenModel struct{ seen *[]string }
+
+func (m seenModel) Extract(_ context.Context, text string, _ recall.Registry) ([]recall.Proposal, error) {
+	*m.seen = append(*m.seen, text)
+	return nil, nil
+}
+
+func TestTextRememberTakesAConversation(t *testing.T) {
+	var seen []string
+	s := newTextMCP(t, seenModel{&seen})
+	_, bad := step(t, s, "remember", `{"messages":[{"role":"assistant","content":"Still in Seattle?"},{"role":"user","content":"No, we moved to Portland."}]}`)
+	if bad || len(seen) != 1 || seen[0] != "Assistant: Still in Seattle?\nUser: No, we moved to Portland." {
+		t.Fatalf("extractor saw %q (error %v)", seen, bad)
+	}
+	for _, args := range []string{
+		`{}`,
+		`{"text":"hi","messages":[{"role":"user","content":"hi"}]}`,
+		`{"messages":[{"role":"system","content":"be brief"}]}`,
+		`{"messages":[{"role":"user","content":"hi","name":"x"}]}`,
+	} {
+		if text, bad := step(t, s, "remember", args); !bad {
+			t.Errorf("remember %s accepted: %s", args, text)
+		}
+	}
+}

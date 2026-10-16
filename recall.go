@@ -300,6 +300,12 @@ type Memory = engine.Memory
 // AskRequest is a read in words: a question, a profile, or what changed since a time.
 type AskRequest = engine.AskRequest
 
+// Message is one turn of a conversation to remember.
+type Message = engine.Message
+
+// Transcript writes a conversation as User: and Assistant: lines for an extractor.
+func Transcript(messages []Message) (string, error) { return engine.Transcript(messages) }
+
 // Earlier is a value a Memory replaced.
 type Earlier = engine.Earlier
 

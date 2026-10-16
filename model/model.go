@@ -274,6 +274,7 @@ Rules:
 - value is short and self-contained, keeps the text's capitalization, and matches the predicate's type. Write a number as plain digits and a boolean as true or false. Resolve relative dates such as "last week" against today's date and write them as YYYY-MM-DD.
 - evidence is an exact excerpt of the text that supports the statement, copied character for character, at most 200 characters.
 - One sentence can hold several facts; record each as its own statement, and never drop one because another from the same sentence was recorded: "I'm pescatarian now, but no shellfish, I'm allergic" is diet pescatarian and allergic_to shellfish.
+- When the text is a conversation whose lines start with "User:" and "Assistant:", record what the user states or confirms. What the assistant says (a suggestion, a guess, a summary, a question) is not a fact about the user unless the user agrees with it; quote the user's line as evidence. "I" and "we" in the user's lines are the user.
 - Record only what the text states. Do not guess at facts it leaves out.
 - If no predicate fits anything in the text, return an empty list.`
 }
@@ -303,6 +304,7 @@ Rules:
 - value is short and self-contained and keeps the text's capitalization. Write a number as plain digits and a boolean as true or false. Resolve relative dates such as "last week" against today's date and write them as YYYY-MM-DD.
 - evidence is an exact excerpt of the text that supports the statement, copied character for character, at most 200 characters.
 - One sentence can hold several facts; record each as its own statement, and never drop one because another from the same sentence was recorded: "I'm pescatarian now, but no shellfish, I'm allergic" is diet pescatarian and allergic_to shellfish.
+- When the text is a conversation whose lines start with "User:" and "Assistant:", record what the user states or confirms. What the assistant says (a suggestion, a guess, a summary, a question) is not a fact about the user unless the user agrees with it; quote the user's line as evidence. "I" and "we" in the user's lines are the user.
 - Record only what the text states. Do not guess at facts it leaves out.
 - If the text holds nothing worth remembering, return an empty list.`
 }

@@ -4,6 +4,13 @@
 
 ### Added
 
+- Remember a conversation with its roles: text `remember` takes `messages`,
+  `{role, content}` turns with role `user` or `assistant`, instead of `text`.
+  The extractor reads them as `User:` and `Assistant:` lines and keeps only
+  what the user said or agreed to, so an assistant's guess or suggestion is
+  not filed as a fact about the user. Python: `remember(messages=[...])`;
+  Go: `recall.Transcript(messages)`.
+
 - A profile in one call: text `recall` with no question returns everything
   believed about the user, current values only, each with what it replaced.
   No model and no search. Python: `ask()`; Go: `AskWith(AskRequest{})`.

@@ -402,6 +402,20 @@ class TextModeTests(unittest.TestCase):
                              [Memory("user prefers editor: zed", "2026-10-03", 7, (Earlier("helix", "2026-09-01"),))])
             self.assertEqual(memory.forget_text("my editor"), ["user prefers editor: zed"])
 
+    def test_remember_a_conversation(self):
+        with Client(command=self.command) as memory:
+            sent = []
+            tool = memory._tool
+            memory._tool = lambda name, args: sent.append((name, args)) or tool(name, args)
+            memory.remember(messages=[{"role": "assistant", "content": "Still in Seattle?"},
+                                      {"role": "user", "content": "No, Portland."}])
+            self.assertEqual(sent, [("remember", {"messages": [{"role": "assistant", "content": "Still in Seattle?"},
+                                                               {"role": "user", "content": "No, Portland."}]})])
+            with self.assertRaises(ValueError):
+                memory.remember(text="x", messages=[{"role": "user", "content": "x"}])
+            with self.assertRaises(ValueError):
+                memory.remember()
+
     def test_ask_without_a_question_and_since(self):
         # A profile is an ask with no question; since narrows to what changed.
         with Client(command=self.command) as memory:

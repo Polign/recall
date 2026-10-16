@@ -45,11 +45,11 @@ Served by `recall mcp` (the default; `-typed` serves the typed tools instead). S
 
 | Tool | Required arguments | Read-only |
 | --- | --- | --- |
-| remember | text | no |
+| remember | none | no |
 | recall | none | yes |
 | forget | text | no |
 
-Text `recall` takes `question`, `as_of` and `since`, all optional. With a question it searches; without one it reads with no model and no search: everything believed about the user, or with `since`, everything stated after that instant about anyone, newest first, each with what it replaced. With a model embedder, an answer to a question leaves out beliefs scoring under half the best match's similarity.
+Text `remember` takes `text` or `messages`, one of them: messages are `{role, content}` turns with role `user` or `assistant`, and only what the user said or agreed to is kept. Text `recall` takes `question`, `as_of` and `since`, all optional. With a question it searches; without one it reads with no model and no search: everything believed about the user, or with `since`, everything stated after that instant about anyone, newest first, each with what it replaced. With a model embedder, an answer to a question leaves out beliefs scoring under half the best match's similarity.
 
 ### 2.3 Argument conventions
 

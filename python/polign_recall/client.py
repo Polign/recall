@@ -794,6 +794,7 @@ class Client:
 
     def remember(self, subject: str | None = None, predicate: str | None = None,
                  value: Any = _MISSING, *, text: str | None = None,
+                 messages: Sequence[Mapping[str, str]] | None = None,
                  statements: Sequence[Mapping[str, Any]] | None = None,
                  kind: str | None = None, confidence: float | None = None,
                  source: str | None = None,
@@ -804,7 +805,9 @@ class Client:
         In text mode, pass `statements` your agent proposes, or leave them out
         and the server's extraction model (`extract_model`) proposes them.
 
-        On a client opened with text=True, pass `text` alone; the result is a
+        On a client opened with text=True, pass `text` alone, or `messages`, a
+        conversation as {"role": "user" | "assistant", "content": ...} turns,
+        of which only what the user said or agreed to is kept; the result is a
         TextResult saying what was filed and what each statement replaced.
 
         `observed_at` dates a statement made earlier, such as a line of an
@@ -821,14 +824,18 @@ class Client:
         """
         dated = {"observed_at": _instant(observed_at, "observed_at")} if observed_at is not None else {}
         if self._text:
-            if text is None or statements is not None or value is not _MISSING or any(
+            if (text is None) == (messages is None) or statements is not None or value is not _MISSING or any(
                     x is not None for x in (subject, predicate, kind, confidence, source, replaces)):
-                raise ValueError("a text client remembers text alone: remember(text=...)")
-            data = self._tool("remember", {"text": text, **dated})
+                raise ValueError("a text client remembers text or messages alone: remember(text=...) or remember(messages=[...])")
+            said = {"text": text} if text is not None else {
+                "messages": [{"role": m["role"], "content": m["content"]} for m in messages]}
+            data = self._tool("remember", {**said, **dated})
             return TextResult(tuple(Remembered(r.get("text", ""), tuple(r.get("replaces") or ()),
                                                bool(r.get("already_known")))
                                     for r in data.get("remembered") or ()),
                               bool(data.get("kept_as_text")))
+        if messages is not None:
+            raise ValueError("messages need a text client: Client(text=True)")
         if text is not None:
             if any(x is not None for x in (subject, predicate, kind, confidence, source, replaces)) or value is not _MISSING:
                 raise ValueError("text mode cannot be combined with typed fields; put replaces on each statement")

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -19,14 +20,27 @@ func (s *mcpServer) textTools() []mcpTool {
 		{
 			Name:        "remember",
 			Title:       "Remember",
-			Description: "Keep something worth remembering about the user or their work: a preference, a fact, a decision, or a correction. Pass the passage as text, in the user's words where you can. The server works out what it says. A newer statement replaces an older one about the same thing, and the older one stays in the history. Restating something already known changes nothing.",
+			Description: "Keep something worth remembering about the user or their work: a preference, a fact, a decision, or a correction. Pass the passage as text, in the user's words where you can, or pass the conversation as messages with their roles, so that only what the user said or agreed to is kept and nothing the assistant suggested. The server works out what it says. A newer statement replaces an older one about the same thing, and the older one stays in the history. Restating something already known changes nothing.",
 			InputSchema: schema(map[string]any{
-				"text": map[string]any{"type": "string", "maxLength": 32768, "description": "what to remember"},
+				"text": map[string]any{"type": "string", "maxLength": 32768, "description": "what to remember; or pass messages"},
+				"messages": map[string]any{
+					"type":        "array",
+					"description": "a conversation to remember instead of text, in order: only what the user said or agreed to is kept",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"role":    map[string]any{"type": "string", "enum": []string{"user", "assistant"}},
+							"content": map[string]any{"type": "string"},
+						},
+						"required":             []string{"role", "content"},
+						"additionalProperties": false,
+					},
+				},
 				"observed_at": map[string]any{
 					"type":        "string",
 					"description": "when it was said, as an RFC3339 instant like 2023-05-20T02:21:00Z; omit for now. Use it only for something said earlier, such as an imported conversation.",
 				},
-			}, "text"),
+			}),
 		},
 		{
 			Name:        "recall",
@@ -101,11 +115,24 @@ type remembered struct {
 
 func (m *memoryRuntime) textRemember(args json.RawMessage) (string, error) {
 	var a struct {
-		Text       string `json:"text"`
-		ObservedAt string `json:"observed_at"`
+		Text       string           `json:"text"`
+		Messages   []recall.Message `json:"messages"`
+		ObservedAt string           `json:"observed_at"`
 	}
 	if err := strictArgs(args, &a); err != nil {
 		return "", err
+	}
+	switch {
+	case a.Text != "" && len(a.Messages) > 0:
+		return "", errors.New("pass text or messages, not both")
+	case len(a.Messages) > 0:
+		t, err := recall.Transcript(a.Messages)
+		if err != nil {
+			return "", err
+		}
+		a.Text = t
+	case strings.TrimSpace(a.Text) == "":
+		return "", errors.New("text or messages is required")
 	}
 	var observedAt time.Time
 	if a.ObservedAt != "" {
