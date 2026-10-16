@@ -154,3 +154,70 @@ func TestSentenceAround(t *testing.T) {
 		t.Errorf("transcript line: %q", got)
 	}
 }
+
+// bothFacts files a diet and an allergy from one sentence.
+type bothFacts struct{}
+
+func (bothFacts) Extract(_ context.Context, text string, _ Registry) ([]Proposal, error) {
+	return []Proposal{
+		{Subject: "user", Predicate: "diet", Value: "pescatarian", Evidence: "so I'm pescatarian now"},
+		{Subject: "user", Predicate: "allergic_to", Value: "shellfish", Evidence: "no shellfish, I'm allergic"},
+	}, nil
+}
+
+// gettingBackend is lockedBackend that can also read records by id, as the
+// real backends do, so Said can read the text a statement came from.
+type gettingBackend struct{ *lockedBackend }
+
+func (b gettingBackend) Get(ctx context.Context, c string, ids []string) ([]StoredVector, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []StoredVector
+	for _, id := range ids {
+		if r, ok := b.db.records[id]; ok {
+			out = append(out, r)
+		}
+	}
+	return out, ctx.Err()
+}
+
+// A forgotten fact must not come back through the sentence another fact
+// was drawn from.
+func TestSaidDoesNotQuoteWhatWasForgotten(t *testing.T) {
+	ctx := context.Background()
+	c := openClient(t, gettingBackend{newLockedBackend()})
+	remember(t, c, "diet", "vegetarian", "")
+	if _, err := c.RememberText(ctx, "I've started eating fish again, so I'm pescatarian now, but no shellfish, I'm allergic.", bothFacts{}); err != nil {
+		t.Fatal(err)
+	}
+	said := func() string {
+		t.Helper()
+		got, err := c.Ask(ctx, "what is my diet")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range got {
+			if strings.Contains(m.Text, "pescatarian") {
+				return m.Said
+			}
+		}
+		t.Fatalf("no diet in %+v", got)
+		return ""
+	}
+	if s := said(); !strings.Contains(s, "allergic") {
+		t.Fatalf("before forgetting, said = %q, want the whole sentence", s)
+	}
+	if _, err := c.ForgetText(ctx, "forget my shellfish allergy", selectFunc(func(_ string, cands []Belief) []int {
+		for i, b := range cands {
+			if b.Predicate == "allergic_to" {
+				return []int{i}
+			}
+		}
+		return nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if s := said(); strings.Contains(s, "allergic") || strings.Contains(s, "shellfish") || s != "so I'm pescatarian now" {
+		t.Fatalf("after forgetting the allergy, said = %q", s)
+	}
+}

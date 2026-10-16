@@ -105,7 +105,7 @@ func (c *Client) AskWith(ctx context.Context, r AskRequest) ([]Memory, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.addSaid(ctx, beliefs, memories)
+	c.addSaid(ctx, s, beliefs, memories)
 	return memories, nil
 }
 
@@ -116,7 +116,7 @@ const maxSaid = 300
 // the sentence around the quoted evidence, read in one batch. A belief with
 // no source text keeps its evidence excerpt; a read that fails leaves Said
 // empty rather than failing the answer.
-func (c *Client) addSaid(ctx context.Context, beliefs []Belief, memories []Memory) {
+func (c *Client) addSaid(ctx context.Context, s *Store, beliefs []Belief, memories []Memory) {
 	byEvent := map[string]Belief{}
 	var ids []string
 	for _, b := range beliefs {
@@ -135,13 +135,67 @@ func (c *Client) addSaid(ctx context.Context, beliefs []Belief, memories []Memor
 			}
 		}
 	}
+	withdrawn := map[string][]string{}
+	for id := range sources {
+		withdrawn[id] = s.withdrawnExcerpts(id)
+	}
 	for i := range memories {
 		b, ok := byEvent[memories[i].EventID]
 		if !ok || b.Evidence == "" {
 			continue
 		}
-		memories[i].Said = sentenceAround(sources[b.EvidenceID], b.Evidence)
+		said := sentenceAround(sources[b.EvidenceID], b.Evidence)
+		// A sentence that also says something the user asked to forget
+		// must not bring it back: say only this fact's own excerpt, or
+		// nothing when even that holds the forgotten words.
+		for _, w := range withdrawn[b.EvidenceID] {
+			if strings.Contains(said, w) {
+				said = cutSaid(b.Evidence)
+				if strings.Contains(said, w) {
+					said = ""
+				}
+			}
+		}
+		memories[i].Said = said
 	}
+}
+
+// withdrawnExcerpts lists the evidence of statements drawn from one source
+// text that have since been withdrawn (forgotten), so nothing quotes them.
+// A value that was replaced rather than withdrawn is history, not
+// withdrawn. A failed read yields none.
+func (s *Store) withdrawnExcerpts(sourceID string) []string {
+	events, err := s.eventsMatching(map[string]any{"evidence_id": sourceID}, 200)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range events {
+		if e.Retraction || strings.TrimSpace(e.Evidence) == "" {
+			continue
+		}
+		history, err := s.History(e.Subject, e.Predicate)
+		if err != nil {
+			continue
+		}
+		key := ValueKey(e.Value)
+		gone := false
+		for _, h := range history {
+			if h.ObservedAt.Before(e.ObservedAt) {
+				continue
+			}
+			switch {
+			case h.Retraction && (h.Value == nil || ValueKey(h.Value) == key):
+				gone = true
+			case !h.Retraction && ValueKey(h.Value) == key:
+				gone = false // stated again after being withdrawn
+			}
+		}
+		if gone {
+			out = append(out, strings.TrimSpace(e.Evidence))
+		}
+	}
+	return out
 }
 
 // sentenceAround returns the sentence of source that holds excerpt, or the
