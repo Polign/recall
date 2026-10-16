@@ -142,3 +142,11 @@ func TestDescribeSearch(t *testing.T) {
 		}
 	}
 }
+
+func TestAskYes(t *testing.T) {
+	for in, want := range map[string]bool{"\n": true, "y\n": true, "no\n": false, "": false} {
+		if got := askYes(strings.NewReader(in), io.Discard, "Copy?", true); got != want {
+			t.Errorf("answer %q: %v, want %v", in, got, want)
+		}
+	}
+}

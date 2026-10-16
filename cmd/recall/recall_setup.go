@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/Polign/recall/internal/recallsetup"
+	"golang.org/x/term"
 )
 
 func recallHome() string {
@@ -100,7 +101,7 @@ func cmdRecall(args []string, out io.Writer) error {
 				return err
 			}
 			fmt.Fprintf(out, "Database: %s\nAuthentication and memory read: OK\n", c.base)
-			if err := checkRecallLauncher(filepath.Join(*dir, "launch")); err != nil {
+			if err := checkRecallLauncher(filepath.Join(*dir, "launch"), cfg); err != nil {
 				return err
 			}
 			fmt.Fprintln(out, "MCP handshake and memory tools: OK\nIf Claude still shows a cached failure, restart Claude and check /mcp.")
@@ -325,7 +326,7 @@ func cmdRecall(args []string, out io.Writer) error {
 	if err := recallsetup.WriteFile(launchPath, []byte(launcher), 0o700); err != nil {
 		return err
 	}
-	if err := checkRecallLauncher(launchPath); err != nil {
+	if err := checkRecallLauncher(launchPath, cfg); err != nil {
 		restoreRecallFile(configPath, previousConfig, configExisted, 0o600)
 		restoreRecallFile(launchPath, previousLaunch, launchExisted, 0o700)
 		return err
@@ -630,9 +631,11 @@ func restoreRecallFile(path string, previous []byte, readErr error, mode os.File
 }
 
 // checkRecallLauncher runs the exact command the plugin runs, over stdio,
-// without a model call or a memory write. Database authentication is checked
+// without a model call or a memory write, and checks it lists the tools the
+// setup serves: remember, recall and forget, plus memory_history and
+// list_predicates for the typed tools. Database authentication is checked
 // separately above.
-func checkRecallLauncher(launchPath string) error {
+func checkRecallLauncher(launchPath string, cfg recallsetup.Config) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/bin/sh", launchPath)
@@ -672,13 +675,27 @@ func checkRecallLauncher(launchPath string) error {
 			for _, tool := range reply.Result.Tools {
 				names[tool.Name] = true
 			}
-			listed = names["remember"] && names["recall"] && names["forget"] && names["memory_history"] && names["list_predicates"]
+			listed = names["remember"] && names["recall"] && names["forget"]
+			if typedSetup(cfg) {
+				listed = listed && names["memory_history"] && names["list_predicates"]
+			}
 		}
 	}
 	if !initialized || !listed {
-		return fmt.Errorf("the configured launcher does not expose the Recall MCP protocol and five memory tools")
+		want := "remember, recall and forget"
+		if typedSetup(cfg) {
+			want = "remember, recall, forget, memory_history and list_predicates"
+		}
+		return fmt.Errorf("the configured launcher does not expose the Recall MCP protocol and the memory tools %s", want)
 	}
 	return nil
+}
+
+// typedSetup reports whether a saved setup serves the typed tools: it has
+// no extraction model, or keeps the typed tools with -typed. Others serve
+// the text-only tools.
+func typedSetup(cfg recallsetup.Config) bool {
+	return envOr("POLIGN_EXTRACT_MODEL", cfg.ExtractModel) == "" || cfg.Typed
 }
 
 // serveConfigured serves memory over MCP from what recall setup saved in dir.
@@ -721,9 +738,9 @@ func describeSurface(cfg recallsetup.Config) string {
 }
 
 // isTerminal reports whether f is a terminal, where a question can be asked.
+// A character device is not enough: /dev/null is one too.
 func isTerminal(f *os.File) bool {
-	info, err := f.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(f.Fd())) // #nosec G115 -- a file descriptor fits an int.
 }
 
 // modelChoice is one answer to the setup question: a model spec, or "" for

@@ -105,14 +105,19 @@ func askChoice(in io.Reader, out io.Writer, question string, choices []modelChoi
 	}
 }
 
-// askYes asks a yes/no question; an empty answer or end of input is def.
+// askYes asks a yes/no question; an empty answer is def, and end of input
+// is no, so nothing is done that nobody agreed to.
 func askYes(in io.Reader, out io.Writer, question string, def bool) bool {
 	hint := "[y/N]"
 	if def {
 		hint = "[Y/n]"
 	}
 	fmt.Fprintf(out, "%s %s ", question, hint)
-	line, _ := bufio.NewReader(in).ReadString('\n')
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && strings.TrimSpace(line) == "" {
+		fmt.Fprintln(out)
+		return false
+	}
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
 		return true
