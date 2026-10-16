@@ -66,3 +66,23 @@ func TestAskTellsTheUserByName(t *testing.T) {
 		t.Errorf("memories %v, want the name", got)
 	}
 }
+
+func TestKeepRelevant(t *testing.T) {
+	in := []Belief{
+		{Predicate: "diet", Relevance: 0.59},
+		{Predicate: "allergic_to", Relevance: 0.36},
+		{Predicate: "email", Relevance: 0.06},
+		{Predicate: "keyword_only"},
+	}
+	var got []string
+	for _, b := range keepRelevant(in, 0.5) {
+		got = append(got, b.Predicate)
+	}
+	if strings.Join(got, ",") != "diet,allergic_to,keyword_only" {
+		t.Fatalf("kept %v", got)
+	}
+	unscored := []Belief{{Predicate: "a"}, {Predicate: "b"}}
+	if len(keepRelevant(unscored, 0.5)) != 2 {
+		t.Fatal("beliefs without scores were dropped")
+	}
+}

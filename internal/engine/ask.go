@@ -53,6 +53,12 @@ func (c *Client) AskAt(ctx context.Context, question string, asOf time.Time) ([]
 	if err != nil {
 		return nil, err
 	}
+	// A model embedder's similarities mean something, so an answer leaves
+	// out what is far less related than its best match instead of padding
+	// the reader's context with it. Hashed word vectors are not compared.
+	if !s.textFirst {
+		beliefs = keepRelevant(beliefs, askRelevanceRatio)
+	}
 	out := make([]Memory, 0, len(beliefs))
 	// Statements about the user are told under the user's name when one is
 	// known ("Maya lives in: Portland"), so a reader asked about Maya knows
@@ -144,4 +150,32 @@ func namedIn(question string, name any) bool {
 		}
 	}
 	return true
+}
+
+// askRelevanceRatio is how close to the best match a belief must score to
+// stay in an answer. Measured on Recall's own comparison questions with
+// all-MiniLM-L6-v2: the facts that answer a question scored at least 0.6 of
+// the best one, and unrelated facts (an email for a question about food)
+// under 0.3.
+const askRelevanceRatio = 0.5
+
+// keepRelevant drops beliefs whose relevance is known and under ratio of the
+// best one's. A belief with no score (an exact read, a keyword-only hit) is
+// kept, since nothing says it is unrelated.
+func keepRelevant(beliefs []Belief, ratio float32) []Belief {
+	var top float32
+	for _, b := range beliefs {
+		top = max(top, b.Relevance)
+	}
+	if top <= 0 {
+		return beliefs
+	}
+	out := beliefs[:0:0]
+	for _, b := range beliefs {
+		if b.Relevance > 0 && b.Relevance < top*ratio {
+			continue
+		}
+		out = append(out, b)
+	}
+	return out
 }

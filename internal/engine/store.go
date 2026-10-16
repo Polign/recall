@@ -3,6 +3,8 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -635,6 +637,7 @@ func (s *Store) recallRanked(sc *schema, q Query, limit int, asOf time.Time) ([]
 				continue
 			}
 			rank := c.rank
+			b.Relevance = c.relevance
 			if c.values != nil && multi {
 				// A multi-valued pair holds values that have nothing to do
 				// with each other, so each one answers the query only when
@@ -645,6 +648,7 @@ func (s *Store) recallRanked(sc *schema, q Query, limit int, asOf time.Time) ([]
 					continue
 				}
 				rank = r
+				b.Relevance = c.valueRelevance[ValueKey(b.Value)]
 			}
 			// A single-valued pair ranks by its best-matching event: a hit on
 			// a superseded value still means the question is about this pair,
@@ -910,6 +914,10 @@ type candidate struct {
 	// values is nil when the query named the pair outright, which asks for
 	// all of it rather than for the values the search happened to match.
 	values map[string]int
+	// relevance is the best vector similarity of the pair's matched events,
+	// and valueRelevance the same per value; zero when unknown.
+	relevance      float32
+	valueRelevance map[string]float32
 }
 
 func (s *Store) candidatePairs(sc *schema, q Query, limit int, asOf time.Time) ([]candidate, error) {
@@ -939,6 +947,7 @@ func (s *Store) candidatePairs(sc *schema, q Query, limit int, asOf time.Time) (
 		}
 	}
 	var first, rest []Event
+	scores := map[string]float32{}
 	for _, filter := range s.filters(sc, q) {
 		filter = withObserved(filter, q.ObservedAfter, q.ObservedBefore)
 		if hinted {
@@ -950,21 +959,25 @@ func (s *Store) candidatePairs(sc *schema, q Query, limit int, asOf time.Time) (
 				to = q.ObservedBefore
 			}
 			if from.Before(to) {
-				found, err := s.searchEvents(text, withObserved(filter, from, to), limit)
+				found, sc2, err := s.searchEventsScored(text, withObserved(filter, from, to), limit)
 				if err != nil {
 					return nil, err
 				}
 				first = append(first, found...)
+				maps.Copy(scores, sc2)
 			}
 		}
-		found, err := s.searchEvents(text, filter, width)
+		found, sc2, err := s.searchEventsScored(text, filter, width)
 		if err != nil {
 			return nil, err
 		}
 		rest = append(rest, found...)
+		for id, v := range sc2 {
+			scores[id] = max(scores[id], v)
+		}
 	}
 	events := append(first, rest...)
-	return rankCandidates(sc.candidates(events, q.Predicate == RegistryPredicate || q.Predicate == ExtractionPredicate)), nil
+	return rankCandidates(sc.candidates(events, q.Predicate == RegistryPredicate || q.Predicate == ExtractionPredicate), scores), nil
 }
 
 // candidates prepares discovered events for grouping into pairs: each takes
@@ -1001,7 +1014,7 @@ func (s *Store) filters(sc *schema, q Query) []map[string]any {
 // rank of each pair's best event and of the best event asserting each value.
 // A retraction matching the query says the pair is relevant but asserts no
 // value, so it ranks the pair and nothing inside it.
-func rankCandidates(events []Event) []candidate {
+func rankCandidates(events []Event, scores map[string]float32) []candidate {
 	index := map[pair]int{}
 	var out []candidate
 	for rank, e := range events {
@@ -1013,14 +1026,18 @@ func rankCandidates(events []Event) []candidate {
 		if !seen {
 			i = len(out)
 			index[p] = i
-			out = append(out, candidate{pair: p, rank: rank, values: map[string]int{}})
+			out = append(out, candidate{pair: p, rank: rank, values: map[string]int{}, valueRelevance: map[string]float32{}})
 		}
+		rel := scores[e.ID]
+		out[i].relevance = max(out[i].relevance, rel)
 		if e.Retraction {
 			continue
 		}
-		if _, ok := out[i].values[ValueKey(e.Value)]; !ok {
-			out[i].values[ValueKey(e.Value)] = rank
+		key := ValueKey(e.Value)
+		if _, ok := out[i].values[key]; !ok {
+			out[i].values[key] = rank
 		}
+		out[i].valueRelevance[key] = max(out[i].valueRelevance[key], rel)
 	}
 	return out
 }
@@ -1094,6 +1111,14 @@ func (s *Store) append(e Event) error {
 // fused with a lexical search when the database has one. The vector search
 // stays in because it also reaches events too new for the text index.
 func (s *Store) searchEvents(query string, filter map[string]any, limit int) ([]Event, error) {
+	events, _, err := s.searchEventsScored(query, filter, limit)
+	return events, err
+}
+
+// searchEventsScored is searchEvents that also returns, per event ID, the
+// vector search's similarity for the events it found. Events only the
+// keyword search found have none.
+func (s *Store) searchEventsScored(query string, filter map[string]any, limit int) ([]Event, map[string]float32, error) {
 	// With word search, both rankings search the cleaned question: the
 	// keyword index ranks first, and the user's name would otherwise match
 	// every address and handle that contains it.
@@ -1104,18 +1129,19 @@ func (s *Store) searchEvents(query string, filter map[string]any, limit int) ([]
 	}
 	values, err := s.embed(query)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	hits, err := s.db.Search(s.collection, values, limit, filter)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	scores := s.similarities(values, hits)
 	if ts, ok := s.db.(TextSearcher); ok {
 		text, err := ts.SearchText(s.collection, query, limit, filter)
 		switch {
 		case errors.Is(err, ErrTextSearchUnsupported):
 		case err != nil:
-			return nil, err
+			return nil, nil, err
 		default:
 			hits = fuseHits(hits, text, s.textFirst, limit)
 		}
@@ -1124,11 +1150,61 @@ func (s *Store) searchEvents(query string, filter map[string]any, limit int) ([]
 	for _, h := range hits {
 		e, err := s.decodeEvent(h.ID, h.Metadata)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		out = append(out, e)
 	}
-	return out, nil
+	return out, scores, nil
+}
+
+// vectorGetter reads stored records by id; requestBackend provides it when
+// the backend can.
+type vectorGetter interface {
+	getVectors(collection string, ids []string) ([]StoredVector, bool, error)
+}
+
+// similarities is each vector hit's cosine similarity to the query vector.
+// Backends report closeness in their own units (a similarity, a cosine
+// distance, a squared Euclidean distance), so with a model embedder the
+// stored vectors are read back and compared here, the same way everywhere.
+// Without that, or with hashed word vectors, it falls back to the
+// backend's own score.
+func (s *Store) similarities(query []float32, hits []Hit) map[string]float32 {
+	out := make(map[string]float32, len(hits))
+	for _, h := range hits {
+		out[h.ID] = h.Score
+	}
+	g, ok := s.db.(vectorGetter)
+	if s.textFirst || !ok || len(hits) == 0 {
+		return out
+	}
+	ids := make([]string, len(hits))
+	for i, h := range hits {
+		ids[i] = h.ID
+	}
+	rows, ok, err := g.getVectors(s.collection, ids)
+	if !ok || err != nil {
+		return out
+	}
+	for _, r := range rows {
+		if len(r.Values) == len(query) {
+			out[r.ID] = float32(cosine(query, r.Values))
+		}
+	}
+	return out
+}
+
+func cosine(a, b []float32) float64 {
+	var dot, na, nb float64
+	for i := range a {
+		dot += float64(a[i]) * float64(b[i])
+		na += float64(a[i]) * float64(a[i])
+		nb += float64(b[i]) * float64(b[i])
+	}
+	if na == 0 || nb == 0 {
+		return 0
+	}
+	return dot / math.Sqrt(na*nb)
 }
 
 // userNames are the names the user goes by, from the user's current name

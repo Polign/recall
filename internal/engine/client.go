@@ -423,6 +423,20 @@ func (b requestBackend) List(collection string, f map[string]any, limit int) ([]
 	return rows, total, nil
 }
 
+// getVectors reads stored records by id when the backend can; ok is false
+// when it cannot.
+func (b requestBackend) getVectors(collection string, ids []string) ([]StoredVector, bool, error) {
+	g, ok := b.backend.(GetBackend)
+	if !ok {
+		return nil, false, nil
+	}
+	if err := b.ctx.Err(); err != nil {
+		return nil, true, err
+	}
+	rows, err := g.Get(b.ctx, collection, ids)
+	return rows, true, err
+}
+
 // GetBackend is an optional Backend capability: reading records by id. It
 // is how a caller follows a belief's EvidenceID to the text it came from.
 // Unknown ids are omitted from the result, not reported as errors.

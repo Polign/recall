@@ -4,6 +4,14 @@
 
 ### Added
 
+- With a model embedder, `recall(question)` in text mode leaves out facts
+  that score under half the best match's similarity, so the reader gets the
+  facts that answer the question instead of up to twenty. "Why did Maya
+  leave Bluefin?" now returns 3 facts (her employer, her work email, and the
+  acquisition) where it returned 12. Similarity is computed by Recall from
+  the stored vectors, the same on every backend. Beliefs carry the score as
+  `relevance`.
+
 - Memory is searched by meaning whenever the extraction model can embed.
   `recall mcp` with `-extract-model openai:*` embeds with
   `text-embedding-3-small` at 512 dimensions, and with `ollama:*` with
