@@ -35,3 +35,32 @@ func TestAskTellsBeliefsAsSentences(t *testing.T) {
 		t.Fatal("an empty question was accepted")
 	}
 }
+
+func TestAskLeavesOutTheNameItWasAskedBy(t *testing.T) {
+	ctx := context.Background()
+	c := openClient(t, newLockedBackend())
+	remember(t, c, "name", "Maya", "")
+	remember(t, c, "favorite_editor", "zed", "")
+	has := func(question, text string) bool {
+		t.Helper()
+		got, err := c.Ask(ctx, question)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range got {
+			if m.Text == text {
+				return true
+			}
+		}
+		return false
+	}
+	if has("which editor does Maya like", "user name: Maya") {
+		t.Error("a question naming Maya got her name back")
+	}
+	if !has("what is the user's name", "user name: Maya") {
+		t.Error("a question about the name did not get it")
+	}
+	if !has("what name does Maya go by", "user name: Maya") {
+		t.Error("a question about her name, naming her, did not get it")
+	}
+}

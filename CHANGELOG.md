@@ -50,6 +50,10 @@
   "Where does Maya live now?" used to rank Maya's name and every email
   address containing "maya" above where she lives.
 
+- `recall(question)` in text mode leaves out the user's name when the
+  question already calls them by it, so "Where does Maya live?" spends its
+  places on answers. A question about the name still gets it.
+
 ### Fixed
 
 - `recall setup` with an extraction model failed its own launcher check,

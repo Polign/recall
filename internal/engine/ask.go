@@ -55,6 +55,11 @@ func (c *Client) AskAt(ctx context.Context, question string, asOf time.Time) ([]
 	}
 	out := make([]Memory, 0, len(beliefs))
 	for _, b := range beliefs {
+		// The name a question calls the user by tells the asker nothing
+		// and would take a place an answer could use.
+		if b.Predicate == "name" && normalizeSubject(b.Subject) == DefaultSubject && namedIn(question, b.Value) {
+			continue
+		}
 		// A text that statements were filed from is told by those
 		// statements; repeating it would say everything twice.
 		if b.Predicate == NotePredicate {
@@ -101,4 +106,27 @@ func valueText(v any) string {
 		return strconv.FormatFloat(x, 'f', -1, 64)
 	}
 	return fmt.Sprint(v)
+}
+
+// namedIn reports whether question calls someone by name, every word of it,
+// without asking about the name itself ("what is my name", "what am I
+// called").
+func namedIn(question string, name any) bool {
+	n, ok := name.(string)
+	if !ok || strings.TrimSpace(n) == "" {
+		return false
+	}
+	asked := map[string]bool{}
+	for _, w := range words(question) {
+		asked[w] = true
+	}
+	if asked["name"] || asked["named"] || asked["called"] {
+		return false
+	}
+	for _, w := range words(n) {
+		if !asked[w] {
+			return false
+		}
+	}
+	return true
 }
