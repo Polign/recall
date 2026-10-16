@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Memory is one belief told as a sentence, for callers that never see
@@ -27,6 +28,10 @@ type Memory struct {
 	Elsewhere []Earlier `json:"elsewhere,omitempty"`
 	// EventID identifies the statement, for history and audits.
 	EventID string `json:"event_id"`
+	// Said is the sentence of the original text the memory was drawn from,
+	// so a reader sees how it was said ("Bluefin got acquired by Orca Labs,
+	// so I work at Orca Labs now, same role."), not only the fact.
+	Said string `json:"said,omitempty"`
 }
 
 // Earlier is a value a memory replaced.
@@ -96,7 +101,76 @@ func (c *Client) AskWith(ctx context.Context, r AskRequest) ([]Memory, error) {
 		// not compared.
 		beliefs = keepRelevant(beliefs, askRelevanceRatio)
 	}
-	return s.tell(beliefs, q.Text)
+	memories, err := s.tell(beliefs, q.Text)
+	if err != nil {
+		return nil, err
+	}
+	c.addSaid(ctx, beliefs, memories)
+	return memories, nil
+}
+
+// maxSaid bounds the sentence a memory carries.
+const maxSaid = 300
+
+// addSaid fills each memory's Said from the text its belief was drawn from:
+// the sentence around the quoted evidence, read in one batch. A belief with
+// no source text keeps its evidence excerpt; a read that fails leaves Said
+// empty rather than failing the answer.
+func (c *Client) addSaid(ctx context.Context, beliefs []Belief, memories []Memory) {
+	byEvent := map[string]Belief{}
+	var ids []string
+	for _, b := range beliefs {
+		byEvent[b.EventID] = b
+		if b.EvidenceID != "" {
+			ids = append(ids, b.EvidenceID)
+		}
+	}
+	sources := map[string]string{}
+	if len(ids) > 0 {
+		if events, err := c.Events(ctx, ids); err == nil {
+			for _, e := range events {
+				if text, ok := e.Value.(string); ok {
+					sources[e.ID] = text
+				}
+			}
+		}
+	}
+	for i := range memories {
+		b, ok := byEvent[memories[i].EventID]
+		if !ok || b.Evidence == "" {
+			continue
+		}
+		memories[i].Said = sentenceAround(sources[b.EvidenceID], b.Evidence)
+	}
+}
+
+// sentenceAround returns the sentence of source that holds excerpt, or the
+// excerpt itself when source does not hold it. Long sentences are cut to
+// maxSaid around the excerpt.
+func sentenceAround(source, excerpt string) string {
+	i := strings.Index(source, excerpt)
+	if i < 0 {
+		return cutSaid(excerpt)
+	}
+	from := strings.LastIndexAny(source[:i], ".!?\n") + 1
+	end := i + len(excerpt)
+	if j := strings.IndexAny(source[end:], ".!?\n"); j >= 0 {
+		end += j + 1
+	} else {
+		end = len(source)
+	}
+	return cutSaid(strings.TrimSpace(strings.TrimRight(source[from:end], "\n")))
+}
+
+func cutSaid(s string) string {
+	if len(s) <= maxSaid {
+		return s
+	}
+	n := maxSaid
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return strings.TrimSpace(s[:n]) + "…"
 }
 
 // tell turns beliefs into Memories. Statements about the user are told under

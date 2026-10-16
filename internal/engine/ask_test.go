@@ -141,3 +141,16 @@ func TestAskWithoutAQuestionTellsTheProfile(t *testing.T) {
 		t.Errorf("nothing changed after day 30, got %v", got)
 	}
 }
+
+func TestSentenceAround(t *testing.T) {
+	src := "Hi. Bluefin got acquired by Orca Labs, so I work at Orca Labs now, same role. My email is maya@orcalabs.com."
+	if got := sentenceAround(src, "so I work at Orca Labs now, same role"); got != "Bluefin got acquired by Orca Labs, so I work at Orca Labs now, same role." {
+		t.Errorf("sentence = %q", got)
+	}
+	if got := sentenceAround("", "I use zed"); got != "I use zed" {
+		t.Errorf("no source: %q", got)
+	}
+	if got := sentenceAround("User: Still in Seattle?\nUser: No, we moved to Portland", "we moved to Portland"); got != "User: No, we moved to Portland" {
+		t.Errorf("transcript line: %q", got)
+	}
+}

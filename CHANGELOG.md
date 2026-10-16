@@ -4,6 +4,12 @@
 
 ### Added
 
+- Each memory from text `recall` carries `said`: the sentence of the
+  original text it was drawn from, so a reader sees how a fact was stated
+  and what it was tied to ("Bluefin got acquired by Orca Labs, so I work at
+  Orca Labs now, same role."), not only the fact. Read in one batch per
+  answer. Python: `Memory.said`; Go: `Memory.Said`.
+
 - Remember a conversation with its roles: text `remember` takes `messages`,
   `{role, content}` turns with role `user` or `assistant`, instead of `text`.
   The extractor reads them as `User:` and `Assistant:` lines and keeps only

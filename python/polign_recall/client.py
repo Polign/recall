@@ -152,6 +152,8 @@ class Memory:
     before: tuple[Earlier, ...] = ()
     # What else is believed about the same thing in other words.
     elsewhere: tuple[Earlier, ...] = ()
+    # The sentence the memory was drawn from, as it was said.
+    said: str = ""
 
 
 def _known(cls: type, data: Any) -> dict[str, Any]:
@@ -873,7 +875,8 @@ class Client:
         data = self._tool("recall", args)
         return [Memory(m.get("text", ""), m.get("since", ""), int(m.get("days_ago", 0)),
                        tuple(Earlier(e.get("text", ""), e.get("since", "")) for e in m.get("before") or ()),
-                       tuple(Earlier(e.get("text", ""), e.get("since", "")) for e in m.get("elsewhere") or ()))
+                       tuple(Earlier(e.get("text", ""), e.get("since", "")) for e in m.get("elsewhere") or ()),
+                       m.get("said", ""))
                 for m in data.get("memories") or ()]
 
     def forget_text(self, text: str) -> list[str]:

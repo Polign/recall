@@ -45,7 +45,7 @@ func (s *mcpServer) textTools() []mcpTool {
 		{
 			Name:        "recall",
 			Title:       "Recall",
-			Description: "Ask what is remembered, in words, before assuming anything about the user. Answers are what is believed now, as sentences. Each lists under before what it replaced and when, so a correction comes with the answer, and under elsewhere anything else believed about the same thing in other words, such as a later dislike beside a like; the newer statement usually holds. days_ago says how long ago it was stated. A time named in the question, such as \"last week\", is searched first. Pass as_of to ask what was believed at an earlier instant. Leave out question to get everything believed about the user, a profile to start a conversation with. Pass since to get only what changed after then, newest first: at the start of a session, since the last one, it says what is new.",
+			Description: "Ask what is remembered, in words, before assuming anything about the user. Answers are what is believed now, as sentences. Each lists under before what it replaced and when, so a correction comes with the answer, and under elsewhere anything else believed about the same thing in other words, such as a later dislike beside a like; the newer statement usually holds. days_ago says how long ago it was stated. A time named in the question, such as \"last week\", is searched first. Each also gives under said the sentence it was drawn from, as the user said it. Pass as_of to ask what was believed at an earlier instant. Leave out question to get everything believed about the user, a profile to start a conversation with. Pass since to get only what changed after then, newest first: at the start of a session, since the last one, it says what is new.",
 			InputSchema: schema(map[string]any{
 				"question": map[string]any{"type": "string", "description": "what you want to know; omit for the user's profile, or with since for everything that changed"},
 				"as_of": map[string]any{
@@ -181,6 +181,8 @@ type recalled struct {
 	// Elsewhere is what else is believed about the same thing in other words,
 	// such as a later dislike beside a like.
 	Elsewhere []earlier `json:"elsewhere,omitempty"`
+	// Said is the sentence the memory was drawn from, as it was said.
+	Said string `json:"said,omitempty"`
 }
 
 type earlier struct {
@@ -225,7 +227,7 @@ func (m *memoryRuntime) textRecall(args json.RawMessage) (string, error) {
 	}
 	out := make([]recalled, 0, len(memories))
 	for _, mem := range memories {
-		r := recalled{Text: mem.Text, Since: day(mem.Since), DaysAgo: int(ref.Sub(mem.Since).Hours() / 24)}
+		r := recalled{Text: mem.Text, Since: day(mem.Since), DaysAgo: int(ref.Sub(mem.Since).Hours() / 24), Said: mem.Said}
 		for _, e := range mem.Before {
 			r.Before = append(r.Before, earlier{Text: e.Text, Since: day(e.Since)})
 		}
