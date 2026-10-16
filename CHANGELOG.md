@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.20.2] - 2026-10-16
+
 ### Fixed
 
 - A forgotten fact could come back through `said`: when a diet and an
