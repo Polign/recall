@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.20.2] - 2026-10-16
+
+### Fixed
+
+- A forgotten fact could come back through `said`: when a diet and an
+  allergy came from one sentence and the allergy was forgotten, the diet's
+  `said` still quoted "…but no shellfish, I'm allergic." `said` now leaves
+  out a sentence that holds a withdrawn statement's words and gives the
+  fact's own excerpt instead, or nothing when that excerpt holds them too.
+
 ## [0.20.1] - 2026-10-16
 
 ### Fixed
