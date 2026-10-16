@@ -611,8 +611,8 @@ func (m *memoryRuntime) forRequest(ctx context.Context) *memoryRuntime {
 // newMemoryRuntime wires recall to the database c names.
 //
 // With open, writes may define predicates and the registry only seeds the
-// vocabulary.
-func newMemoryRuntime(c *api, collection, predicatesPath, embedURL string, open bool) (*memoryRuntime, error) {
+// vocabulary. A nil embedder means Recall's built-in lexical hashing.
+func newMemoryRuntime(c *api, collection, predicatesPath string, embedder recall.Embedder, open bool) (*memoryRuntime, error) {
 	registry := recall.DefaultRegistry()
 	if open && predicatesPath == "" {
 		registry = openSeeds()
@@ -627,15 +627,10 @@ func newMemoryRuntime(c *api, collection, predicatesPath, embedURL string, open 
 			return nil, err
 		}
 	}
-	var embedder recall.Embedder = recall.LexicalEmbedder{}
-	if embedURL != "" {
-		embedder = newRemoteEmbedder(embedURL, 0)
+	if embedder == nil {
+		embedder = recall.LexicalEmbedder{}
 	}
-	name := c.backend
-	if name == "" {
-		name = setupBackend
-	}
-	backend, err := recall.OpenBackend(name, recall.BackendOptions{URL: c.base, APIKey: c.key})
+	backend, err := openMemoryBackend(c)
 	if err != nil {
 		return nil, err
 	}

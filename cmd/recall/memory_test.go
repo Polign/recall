@@ -47,7 +47,7 @@ func memoryHTTP(t *testing.T, db *fakeMemoryDB, pageCap int) *httptest.Server {
 			end := min(start+min(limit, pageCap), total)
 			vectors := make([]map[string]any, 0, end-start)
 			for _, row := range rows[start:end] {
-				vectors = append(vectors, map[string]any{"id": row.ID, "metadata": row.Metadata})
+				vectors = append(vectors, map[string]any{"id": row.ID, "values": row.Values, "metadata": row.Metadata})
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"vectors": vectors, "total": total})
 		case http.MethodPut:
@@ -164,7 +164,7 @@ func TestConcurrentMCPMemoryKeepsEmbeddingErrorsPerRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	apiClient := &api{base: ts.URL}
-	memory, err := newMemoryRuntime(apiClient, "memories", predicates, embedder.URL, false)
+	memory, err := newMemoryRuntime(apiClient, "memories", predicates, newRemoteEmbedder(embedder.URL, 0), false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -603,7 +603,8 @@ func cmdServe(c *api, args []string) error {
 	kubeAgentLabel := fs.String("kubernetes-agent-label", os.Getenv("RECALL_KUBERNETES_AGENT_LABEL"), "label on the pod that names the agent, for pods handed out by a pool under generated names; empty uses the pod's name. The namespace stays <tenant>:<agent>")
 	collection := fs.String("collection", envOr("POLIGN_COLLECTION", "recall_lexical_v1"), "collection name prefix; each namespace gets its own collection under it")
 	predicates := fs.String("predicates", os.Getenv("POLIGN_PREDICATES"), "predicate registry JSON file; omitted uses the starter registry")
-	embedURL := fs.String("embed-url", os.Getenv("POLIGN_EMBED_URL"), "optional embedding service; omitted uses built-in lexical feature hashing")
+	embedURL := fs.String("embed-url", os.Getenv("POLIGN_EMBED_URL"), "embedding service that answers POST /embed {text} with {values}")
+	embedModel := fs.String("embed-model", os.Getenv("POLIGN_EMBED_MODEL"), "model that embeds memory so recall searches by meaning, as provider:model[@dim]: openai:text-embedding-3-small@512, ollama:nomic-embed-text, or voyage:voyage-3.5. Omitted is word search; unlike recall mcp, serve does not follow -extract-model, because every tenant's collection was written with the embedder it was started with (default $POLIGN_EMBED_MODEL)")
 	extractModel := fs.String("extract-model", os.Getenv("POLIGN_EXTRACT_MODEL"), "model that works out the statements in text remembered without any, as provider:model")
 	text := fs.Bool("text", true, "serve the text-only tools (the default)")
 	typed := fs.Bool("typed", os.Getenv("RECALL_TYPED") == "1", "serve the typed tools instead (default on when $RECALL_TYPED is 1)")
@@ -643,10 +644,11 @@ func cmdServe(c *api, args []string) error {
 			return fmt.Errorf("serve: predicates: %w", err)
 		}
 	}
-	var embedder recall.Embedder = recall.LexicalEmbedder{}
-	if *embedURL != "" {
-		embedder = newRemoteEmbedder(*embedURL, 0)
+	emb, err := chooseEmbedding(*embedURL, *embedModel, "")
+	if err != nil {
+		return fmt.Errorf("serve: %w", err)
 	}
+	var embedder recall.Embedder = emb
 	extractor, err := newExtractor(*extractModel)
 	if err != nil {
 		return fmt.Errorf("serve: -extract-model: %w", err)
