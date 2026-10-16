@@ -4,10 +4,51 @@
 
 ### Added
 
+- Memory is searched by meaning whenever the extraction model can embed.
+  `recall mcp` with `-extract-model openai:*` embeds with
+  `text-embedding-3-small` at 512 dimensions, and with `ollama:*` with
+  `nomic-embed-text`. On LongMemEval user-facts (Sonnet 5.5 throughout),
+  Recall scored 88.8 with word search and 92.9 with that OpenAI embedder;
+  the Ollama and Voyage embedders have not been measured. `anthropic:*` has
+  no embedding API and keeps word search unless an embedder is named.
+- `-embed-model provider:model[@dim]` (and `POLIGN_EMBED_MODEL`) names the
+  embedder on `recall mcp`, `recall serve` and `recall setup`: `openai`,
+  `ollama`, `voyage` (reads `VOYAGE_API_KEY`), or `lexical` for word search.
+  `recall serve` uses only what it is given, because every tenant's
+  collection was written with the embedder it started with.
+- Each embedder writes its own default collection, such as
+  `recall_openai_text_embedding_3_small_512_v1`, and Recall checks a
+  collection's stored vectors before using it. An embedder that only
+  followed the extraction model gives way to memory already kept with word
+  search, so an upgrade never hides what was remembered; a named embedder
+  that does not fit the collection is an error that says what to do.
+- `recall reembed -embed-model <spec>` copies a collection into a new one
+  with a new embedder, keeping every event and its ID, so beliefs, histories
+  and `as_of` reads are unchanged. Run against a saved setup, it switches the
+  setup to the copy and leaves the old collection in place.
+- `recall setup` saves the embedder. A new setup follows the extraction
+  model and pulls `nomic-embed-text` into Ollama when it is missing. With an
+  `anthropic:*` model it asks at a terminal: word search, a local Ollama
+  embedder, or Voyage (offered only when `VOYAGE_API_KEY` is set). Without a
+  terminal it uses an Ollama embedder already pulled, else word search.
+  Setups saved before this release keep word search until setup runs again
+  with a new model or `-embed-model`, which offers to copy the memory.
+  `recall setup` and `recall doctor` print one line saying how memory is
+  searched and whether text leaves the machine.
+
 - `Client.ImportEvents` writes events exported from another collection or
   backend, embedding each with this client's embedder and keeping its ID, so
   importing twice stores each event once. Moving a log to a model embedder
   this way re-embeds it without running the extractor again.
+
+### Fixed
+
+- `recall setup` with an extraction model failed its own launcher check,
+  which required two tools only the typed surface serves. The check now asks
+  for the tools the saved setup serves.
+- Setup asked its questions whenever stdin was a character device, including
+  `/dev/null`. It now asks only at a real terminal, and end of input answers
+  no to copying memory.
 
 ## [0.19.0] - 2026-10-14
 

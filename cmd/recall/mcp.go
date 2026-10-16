@@ -80,8 +80,11 @@ var readOnlyTool = map[string]any{"readOnlyHint": true, "openWorldHint": false}
 type mcpServer struct {
 	api        *api
 	collection string // the memory collection
-	write      bool   // expose the writing tools
-	memory     *memoryRuntime
+	// search names the embedder when memory is searched by meaning; empty
+	// is word search.
+	search string
+	write  bool // expose the writing tools
+	memory *memoryRuntime
 	// agents holds the agents this session resumed; nil unless -agent.
 	agents *agentRuntime
 
@@ -165,7 +168,7 @@ func cmdMCP(c *api, urlGiven bool, args []string) error {
 		return fmt.Errorf("mcp: -extract-model: %w", err)
 	}
 	mem.text = serveText
-	s := &mcpServer{api: c, collection: *collection, write: *write, memory: mem, enc: json.NewEncoder(os.Stdout)}
+	s := &mcpServer{api: c, collection: *collection, search: emb.spec, write: *write, memory: mem, enc: json.NewEncoder(os.Stdout)}
 	if *agent {
 		if !*write {
 			return errors.New("mcp: -agent requires -write")
@@ -309,7 +312,14 @@ func (s *mcpServer) initialize(params json.RawMessage) any {
 // instructions tell the model what this server remembers and whether it
 // may write.
 func (s *mcpServer) instructions() string {
-	instructions := "Recall agent memory. Search uses lexical word overlap unless a model embedder was explicitly configured."
+	instructions := "Recall agent memory. Search uses lexical word overlap, so ask with the words the memory would use."
+	if s.search != "" {
+		by := s.search
+		if strings.HasPrefix(by, "url:") {
+			by = "an embedding service" // the operator's address is not the model's business
+		}
+		instructions = "Recall agent memory. Search matches meaning (" + by + ") as well as words."
+	}
 	if !s.write {
 		instructions += " This server is read-only."
 	}

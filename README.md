@@ -314,7 +314,7 @@ Pitfalls on Qdrant:
   agent. Without a lease, a crashed process that comes back can overwrite its
   replacement.
 - With the built-in lexical embedder, exact-word queries rank worse than on
-  polign_db. A model embedder (`-embed-url`) helps paraphrases, not keywords.
+  polign_db. A model embedder (`-embed-model`) helps paraphrases, not keywords.
 
 To add a backend, implement `Put`, `List` and `Search`
 ([contract](docs/reference.md#complete-histories)), register it with

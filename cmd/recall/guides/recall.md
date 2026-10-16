@@ -115,8 +115,9 @@ Call `recall` with the exact pair:
 
 The current value is `concise`. Call `memory_history` with the same pair to see
 both statements. `recall` also accepts `as_of`, an RFC3339 time, for a historical
-interpretation. Search with `query` uses lexical word overlap by default; prefer
-an exact pair when known. Empty search results do not establish absence.
+interpretation. Search with `query` matches meaning when the server has an
+embedding model and word overlap otherwise; the server's instructions say
+which. Prefer an exact pair when known. Empty search results do not establish absence.
 
 Call `explain` with a question to see why each matching memory is held: the
 text it came from, the predicate it was filed under, the definitions that

@@ -141,7 +141,7 @@ func cmdRecall(args []string, out io.Writer) error {
 				return fmt.Errorf("extraction model %q: %w", spec, err)
 			}
 			mem.text = text
-			s := &mcpServer{api: c, collection: cfg.Collection, memory: mem, write: true, enc: json.NewEncoder(os.Stdout)}
+			s := &mcpServer{api: c, collection: cfg.Collection, search: emb.spec, memory: mem, write: true, enc: json.NewEncoder(os.Stdout)}
 			return s.serve(context.Background(), os.Stdin)
 		default:
 			return fmt.Errorf("unknown Recall command %q (want setup, doctor, mcp)", args[0])

@@ -62,10 +62,34 @@ extractor)` searches the current beliefs for the request, asks the model which
 of them it names, and withdraws those. It returns what it withdrew. Like
 `Forget`, it records retractions and deletes nothing.
 
-The default search uses local lexical word overlap, not semantic synonyms.
-Set `-embed-url` with a dedicated collection to use model embeddings instead.
-Never mix embedding spaces in one collection. Exact subject/predicate reads
-work without semantic search.
+Search matches meaning when an embedding model is configured, and word
+overlap otherwise. `recall mcp` picks the embedder from `-extract-model`
+unless `-embed-model` names one:
+
+| Extraction model | Embedder | Text sent to |
+| --- | --- | --- |
+| `openai:*` | `openai:text-embedding-3-small@512` | OpenAI |
+| `ollama:*` | `ollama:nomic-embed-text` | nowhere (local) |
+| `anthropic:*` or none | word search (`lexical`) | nowhere |
+
+`-embed-model` takes `openai:<model>[@dim]`, `ollama:<model>`,
+`voyage:<model>[@dim]` (reads `VOYAGE_API_KEY`) or `lexical`. `-embed-url`
+still names a service that answers `POST /embed {"text": ...}` with
+`{"values": [...]}`, and needs an explicit collection.
+
+A collection holds vectors from one embedder. Each embedder has its own
+default collection, and Recall reads one stored vector before using a
+collection: a followed embedder gives way to a collection of word-search
+vectors, and a named one that does not fit is refused. To move memory to
+another embedder, copy it:
+
+```sh
+recall reembed -from recall_lexical_v1 -embed-model openai
+```
+
+The copy keeps every event and its ID, so beliefs, histories and `as_of`
+reads come out the same. Exact subject/predicate reads work without semantic
+search.
 
 ## Go library
 
