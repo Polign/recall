@@ -4,6 +4,15 @@
 
 ### Added
 
+- A profile in one call: text `recall` with no question returns everything
+  believed about the user, current values only, each with what it replaced.
+  No model and no search. Python: `ask()`; Go: `AskWith(AskRequest{})`.
+- What changed since: text `recall` with `since` returns only what was stated
+  after that instant, about anyone, newest first, each with what it
+  replaced, so an agent starting a session learns what is new since the
+  last one. With a question, `since` narrows the search the same way.
+  Python: `ask(since=...)`; Go: `AskWith(AskRequest{Since: t})`.
+
 - With a model embedder, `recall(question)` in text mode leaves out facts
   that score under half the best match's similarity, so the reader gets the
   facts that answer the question instead of up to twenty. "Why did Maya

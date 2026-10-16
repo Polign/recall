@@ -402,6 +402,19 @@ class TextModeTests(unittest.TestCase):
                              [Memory("user prefers editor: zed", "2026-10-03", 7, (Earlier("helix", "2026-09-01"),))])
             self.assertEqual(memory.forget_text("my editor"), ["user prefers editor: zed"])
 
+    def test_ask_without_a_question_and_since(self):
+        # A profile is an ask with no question; since narrows to what changed.
+        with Client(command=self.command) as memory:
+            sent = []
+            tool = memory._tool
+            memory._tool = lambda name, args: sent.append((name, args)) or tool(name, args)
+            self.assertEqual(len(memory.ask()), 1)
+            memory.ask(since="2026-10-01T00:00:00Z")
+            memory.ask("which editor?", since="2026-10-01T00:00:00Z")
+            self.assertEqual(sent, [("recall", {}),
+                                    ("recall", {"since": "2026-10-01T00:00:00Z"}),
+                                    ("recall", {"question": "which editor?", "since": "2026-10-01T00:00:00Z"})])
+
     def test_typed_and_text_calls_do_not_mix(self):
         with Client(command=self.command, text=True) as memory:
             with self.assertRaises(ValueError):

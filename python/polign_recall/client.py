@@ -848,14 +848,21 @@ class Client:
             args["replaces"] = [{"predicate": r["predicate"], "value": r["value"]} for r in replaces]
         return RememberResult.decode(self._tool("remember", args))
 
-    def ask(self, question: str, *, as_of: str | datetime | None = None) -> list[Memory]:
+    def ask(self, question: str | None = None, *, as_of: str | datetime | None = None,
+            since: str | datetime | None = None) -> list[Memory]:
         """What is believed about `question`, as sentences (text=True only).
         Each Memory lists under `before` what it replaced. `as_of` asks about
-        an earlier time."""
+        an earlier time. Without a question, everything believed about the
+        user (a profile); with `since`, only what was stated after then,
+        newest first."""
         self._need_text("ask")
-        args: dict[str, Any] = {"question": question}
+        args: dict[str, Any] = {}
+        if question:
+            args["question"] = question
         if as_of is not None:
             args["as_of"] = _instant(as_of, "as_of")
+        if since is not None:
+            args["since"] = _instant(since, "since")
         data = self._tool("recall", args)
         return [Memory(m.get("text", ""), m.get("since", ""), int(m.get("days_ago", 0)),
                        tuple(Earlier(e.get("text", ""), e.get("since", "")) for e in m.get("before") or ()),

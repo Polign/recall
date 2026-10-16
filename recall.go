@@ -297,6 +297,9 @@ type BeliefRef = engine.BeliefRef
 // Memory is one belief told as a sentence, as Client.Ask returns it.
 type Memory = engine.Memory
 
+// AskRequest is a read in words: a question, a profile, or what changed since a time.
+type AskRequest = engine.AskRequest
+
 // Earlier is a value a Memory replaced.
 type Earlier = engine.Earlier
 

@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -45,7 +47,36 @@ func (c *Client) AskAt(ctx context.Context, question string, asOf time.Time) ([]
 	if strings.TrimSpace(question) == "" {
 		return nil, fmt.Errorf("recall: a question is required")
 	}
-	beliefs, err := c.Recall(ctx, Query{Text: question, AsOf: asOf})
+	return c.AskWith(ctx, AskRequest{Question: question, AsOf: asOf})
+}
+
+// AskRequest is a read in words.
+type AskRequest struct {
+	// Question searches what is remembered. Empty reads without searching:
+	// everything believed about the user (a profile), or, with Since,
+	// everything that changed.
+	Question string
+	// AsOf answers as of an earlier instant; zero means now.
+	AsOf time.Time
+	// Since keeps only what was stated after this instant, each with what
+	// it replaced: what changed since an agent last looked. Zero means any
+	// time.
+	Since time.Time
+}
+
+// AskWith answers an AskRequest. With a question it searches, as Ask does.
+// Without one it reads, with no model and no search: the user's current
+// beliefs, or with Since, every subject's beliefs stated since then,
+// newest first.
+func (c *Client) AskWith(ctx context.Context, r AskRequest) ([]Memory, error) {
+	q := Query{Text: strings.TrimSpace(r.Question), AsOf: r.AsOf, ObservedAfter: r.Since}
+	if q.Text == "" {
+		q.Limit = MaxRecall
+		if r.Since.IsZero() {
+			q.Subject = DefaultSubject
+		}
+	}
+	beliefs, err := c.Recall(ctx, q)
 	if err != nil {
 		return nil, err
 	}
@@ -53,17 +84,27 @@ func (c *Client) AskAt(ctx context.Context, question string, asOf time.Time) ([]
 	if err != nil {
 		return nil, err
 	}
-	// A model embedder's similarities mean something, so an answer leaves
-	// out what is far less related than its best match instead of padding
-	// the reader's context with it. Hashed word vectors are not compared.
-	if !s.textFirst {
+	if q.Text == "" {
+		beliefs = slices.DeleteFunc(beliefs, func(b Belief) bool { return isReservedPair(pair{normalizeSubject(b.Subject), b.Predicate}) })
+		if !r.Since.IsZero() {
+			sort.SliceStable(beliefs, func(i, j int) bool { return beliefs[i].ObservedAt.After(beliefs[j].ObservedAt) })
+		}
+	} else if !s.textFirst {
+		// A model embedder's similarities mean something, so an answer
+		// leaves out what is far less related than its best match instead
+		// of padding the reader's context with it. Hashed word vectors are
+		// not compared.
 		beliefs = keepRelevant(beliefs, askRelevanceRatio)
 	}
+	return s.tell(beliefs, q.Text)
+}
+
+// tell turns beliefs into Memories. Statements about the user are told under
+// the user's name when one is known ("Maya lives in: Portland"), so a
+// reader asked about Maya knows each memory is hers; the name itself is
+// left out when the question already calls her by it.
+func (s *Store) tell(beliefs []Belief, question string) ([]Memory, error) {
 	out := make([]Memory, 0, len(beliefs))
-	// Statements about the user are told under the user's name when one is
-	// known ("Maya lives in: Portland"), so a reader asked about Maya knows
-	// each memory is hers. The name itself is then left out when the
-	// question already calls her by it: it would lead every answer.
 	who := func(subject string) string { return subject }
 	if names := s.userNames(); len(names) > 0 && strings.TrimSpace(names[0]) != "" {
 		who = func(subject string) string {
@@ -74,7 +115,7 @@ func (c *Client) AskAt(ctx context.Context, question string, asOf time.Time) ([]
 		}
 	}
 	for _, b := range beliefs {
-		if b.Predicate == "name" && normalizeSubject(b.Subject) == DefaultSubject && namedIn(question, b.Value) {
+		if b.Predicate == "name" && normalizeSubject(b.Subject) == DefaultSubject && question != "" && namedIn(question, b.Value) {
 			continue
 		}
 		// A text that statements were filed from is told by those

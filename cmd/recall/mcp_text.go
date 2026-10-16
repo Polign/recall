@@ -31,14 +31,18 @@ func (s *mcpServer) textTools() []mcpTool {
 		{
 			Name:        "recall",
 			Title:       "Recall",
-			Description: "Ask what is remembered, in words, before assuming anything about the user. Answers are what is believed now, as sentences. Each lists under before what it replaced and when, so a correction comes with the answer, and under elsewhere anything else believed about the same thing in other words, such as a later dislike beside a like; the newer statement usually holds. days_ago says how long ago it was stated. A time named in the question, such as \"last week\", is searched first. Pass as_of to ask what was believed at an earlier instant.",
+			Description: "Ask what is remembered, in words, before assuming anything about the user. Answers are what is believed now, as sentences. Each lists under before what it replaced and when, so a correction comes with the answer, and under elsewhere anything else believed about the same thing in other words, such as a later dislike beside a like; the newer statement usually holds. days_ago says how long ago it was stated. A time named in the question, such as \"last week\", is searched first. Pass as_of to ask what was believed at an earlier instant. Leave out question to get everything believed about the user, a profile to start a conversation with. Pass since to get only what changed after then, newest first: at the start of a session, since the last one, it says what is new.",
 			InputSchema: schema(map[string]any{
-				"question": map[string]any{"type": "string", "description": "what you want to know"},
+				"question": map[string]any{"type": "string", "description": "what you want to know; omit for the user's profile, or with since for everything that changed"},
 				"as_of": map[string]any{
 					"type":        "string",
 					"description": "RFC3339 instant, e.g. 2026-09-01T00:00:00Z. Answers as of then rather than now.",
 				},
-			}, "question"),
+				"since": map[string]any{
+					"type":        "string",
+					"description": "RFC3339 instant. Only what was stated after then, each with what it replaced.",
+				},
+			}),
 			Annotations: readOnlyTool,
 		},
 		{
@@ -161,19 +165,30 @@ func (m *memoryRuntime) textRecall(args json.RawMessage) (string, error) {
 	var a struct {
 		Question string `json:"question"`
 		AsOf     string `json:"as_of"`
+		Since    string `json:"since"`
 	}
 	if err := strictArgs(args, &a); err != nil {
 		return "", err
 	}
-	var asOf time.Time
-	if a.AsOf != "" {
-		t, err := time.Parse(time.RFC3339, a.AsOf)
-		if err != nil {
-			return "", fmt.Errorf("as_of must be an RFC3339 instant like 2026-09-01T00:00:00Z: %w", err)
+	instant := func(name, v string) (time.Time, error) {
+		if v == "" {
+			return time.Time{}, nil
 		}
-		asOf = t
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("%s must be an RFC3339 instant like 2026-09-01T00:00:00Z: %w", name, err)
+		}
+		return t, nil
 	}
-	memories, err := m.client.AskAt(m.ctx, a.Question, asOf)
+	asOf, err := instant("as_of", a.AsOf)
+	if err != nil {
+		return "", err
+	}
+	since, err := instant("since", a.Since)
+	if err != nil {
+		return "", err
+	}
+	memories, err := m.client.AskWith(m.ctx, recall.AskRequest{Question: a.Question, AsOf: asOf, Since: since})
 	if err != nil {
 		return "", err
 	}
