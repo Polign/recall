@@ -41,39 +41,29 @@ func setupEmbedding(cfg recallsetup.Config, flagSpec string, follow bool, in io.
 	if !follow || cfg.ExtractModel == "" || cfg.Typed {
 		return cfg.EmbedModel, false, nil
 	}
-	if spec := model.EmbedFor(cfg.ExtractModel); spec != "" {
-		return spec, false, nil
-	}
+	local := "local:" + model.DefaultLocalEmbedModel
 	if !strings.HasPrefix(cfg.ExtractModel, "anthropic") {
-		return "", false, nil
+		return model.EmbedFor(cfg.ExtractModel), false, nil
 	}
-	ollama := ollamaUp()
-	pulled := ollama && slices.Contains(ollamaEmbedModels(), model.DefaultOllamaEmbedModel)
+	// Anthropic has no embedding API. The model built into recall needs no
+	// key and keeps text on this machine, so it is the default; at a
+	// terminal, the alternatives are offered too.
 	if !interactive {
-		if pulled {
-			return "ollama:" + model.DefaultOllamaEmbedModel, false, nil
-		}
-		return "", false, nil
+		return local, false, nil
 	}
-	choices := []modelChoice{{"", "word search; matches words, not meaning"}}
-	if ollama {
-		note := "local; nothing leaves this machine"
-		if !pulled {
-			note += "; pulled now (about 270 MB)"
-		}
-		choices = append(choices, modelChoice{"ollama:" + model.DefaultOllamaEmbedModel, note})
+	note := "built into recall; nothing leaves this machine"
+	if !model.LocalModelReady(model.DefaultLocalEmbedModel, model.LocalModelDir()) {
+		note += fmt.Sprintf("; downloads %d MB once", model.LocalModelSize(model.DefaultLocalEmbedModel)>>20)
+	}
+	choices := []modelChoice{{local, note}}
+	if ollamaUp() && slices.Contains(ollamaEmbedModels(), model.DefaultOllamaEmbedModel) {
+		choices = append(choices, modelChoice{"ollama:" + model.DefaultOllamaEmbedModel, "your local Ollama; nothing leaves this machine"})
 	}
 	if os.Getenv("VOYAGE_API_KEY") != "" {
 		choices = append(choices, modelChoice{"voyage:" + model.DefaultVoyageEmbedModel, "VOYAGE_API_KEY is set; every remembered passage and every question is sent to Voyage AI and billed"})
 	}
-	if len(choices) == 1 {
-		return "", false, nil
-	}
-	def := 1
-	if pulled {
-		def = 2
-	}
-	spec, err := askChoice(in, out, "\nSearch? Anthropic has no embedding model, so Recall needs another one to search memory by meaning. Without one, it matches words.", choices, def)
+	choices = append(choices, modelChoice{"", "word search; matches words, not meaning"})
+	spec, err := askChoice(in, out, "\nSearch? Anthropic has no embedding model, so Recall needs another one to search memory by meaning.", choices, 1)
 	return spec, false, err
 }
 
@@ -146,6 +136,12 @@ func prepareEmbedding(spec string, named bool, out io.Writer) (string, error) {
 		return fail(err)
 	}
 	cfg, _ := model.ParseEmbed(spec)
+	if cfg.Provider == "local" {
+		if err := model.FetchLocalModel(context.Background(), cfg.Model, model.LocalModelDir(), out); err != nil {
+			return fail(err)
+		}
+		return spec, nil
+	}
 	if cfg.Provider != "ollama" {
 		return spec, nil
 	}

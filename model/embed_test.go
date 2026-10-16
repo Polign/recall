@@ -52,7 +52,7 @@ func TestEmbedFor(t *testing.T) {
 	for extract, want := range map[string]string{
 		"openai:gpt-5-mini":    "openai:text-embedding-3-small@512",
 		"ollama:qwen3:8b":      "ollama:nomic-embed-text",
-		"anthropic:claude-x":   "",
+		"anthropic:claude-x":   "local:all-minilm-l6-v2",
 		"":                     "",
 		"not-a-provider:model": "",
 	} {

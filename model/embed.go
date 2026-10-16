@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Default embedding models. Each follows the extractor's provider, so a
@@ -28,6 +29,17 @@ const (
 // (text-embedding-3 takes 8191 tokens). A longer text is embedded by its
 // start; the whole text is still stored and searched by words.
 const maxEmbedChars = 24000
+
+// cutText keeps at most n bytes of text, ending on a whole character.
+func cutText(text string, n int) string {
+	if len(text) <= n {
+		return text
+	}
+	for n > 0 && !utf8.RuneStart(text[n]) {
+		n--
+	}
+	return text[:n]
+}
 
 // EmbedConfig selects an embedding model. Empty BaseURL and APIKey are read
 // from the provider's usual environment variables.
@@ -61,6 +73,9 @@ func (c EmbedConfig) Spec() string {
 func (c EmbedConfig) KnownDim() int {
 	if c.Dim > 0 {
 		return c.Dim
+	}
+	if m, ok := localModels[c.Model]; ok && c.Provider == "local" {
+		return m.dim
 	}
 	switch c.Model {
 	case "text-embedding-3-small":
@@ -105,17 +120,26 @@ func ParseEmbed(spec string) (EmbedConfig, error) {
 		if cfg.Model == "" {
 			cfg.Model = DefaultVoyageEmbedModel
 		}
+	case "local":
+		if cfg.Model == "" {
+			cfg.Model = DefaultLocalEmbedModel
+		}
+		cfg.Model = strings.ToLower(cfg.Model)
+		if _, ok := localModels[cfg.Model]; !ok {
+			return EmbedConfig{}, fmt.Errorf("model: no local embedding model %q; the local models are: %s", cfg.Model, DefaultLocalEmbedModel)
+		}
 	default:
-		return EmbedConfig{}, fmt.Errorf("model: unknown embedding provider in %q; use openai:<model>, ollama:<model>, or voyage:<model>", spec)
+		return EmbedConfig{}, fmt.Errorf("model: unknown embedding provider in %q; use local, openai:<model>, ollama:<model>, or voyage:<model>", spec)
 	}
 	return cfg, nil
 }
 
 // EmbedFor is the embedding model that follows an extraction model spec:
-// openai:* embeds with text-embedding-3-small at 512 dimensions and
-// ollama:* with nomic-embed-text. It returns "" for anthropic:*, which has
-// no embedding API, for an openai spec pointed at another endpoint by
-// OPENAI_BASE_URL, which may not serve embeddings, and for no model.
+// openai:* embeds with text-embedding-3-small at 512 dimensions, ollama:*
+// with nomic-embed-text, and anthropic:*, which has no embedding API, with
+// the local model that runs inside recall. It returns "" for an openai spec
+// pointed at another endpoint by OPENAI_BASE_URL, which may not serve
+// embeddings, and for no model.
 func EmbedFor(extractSpec string) string {
 	cfg, err := Parse(extractSpec)
 	if err != nil || strings.TrimSpace(extractSpec) == "" {
@@ -129,8 +153,27 @@ func EmbedFor(extractSpec string) string {
 		return "openai:" + DefaultOpenAIEmbedModel + "@" + strconv.Itoa(DefaultOpenAIEmbedDim)
 	case "ollama":
 		return "ollama:" + DefaultOllamaEmbedModel
+	case "anthropic":
+		return "local:" + DefaultLocalEmbedModel
 	}
 	return ""
+}
+
+// Embedding is an embedder that names its vector space and their size.
+type Embedding interface {
+	Embed(ctx context.Context, text string) ([]float32, error)
+	Spec() string
+	Dim() int
+}
+
+// OpenEmbedding builds the embedder a configuration names: a hosted or
+// Ollama model, or a local one that runs in this process (progress hears
+// about its first download).
+func OpenEmbedding(cfg EmbedConfig, progress io.Writer) (Embedding, error) {
+	if cfg.Provider == "local" {
+		return NewLocalEmbedder(cfg, progress)
+	}
+	return NewEmbedder(cfg)
 }
 
 // Embedder is a recall.Embedder backed by an embeddings API. OpenAI, Ollama
@@ -192,9 +235,7 @@ func (e *Embedder) Dim() int { return e.cfg.KnownDim() }
 
 // Embed returns the vector for text.
 func (e *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
-	if len(text) > maxEmbedChars {
-		text = text[:maxEmbedChars]
-	}
+	text = cutText(text, maxEmbedChars)
 	req := map[string]any{"model": e.cfg.Model, "input": []string{text}}
 	if e.cfg.Dim > 0 {
 		switch e.cfg.Provider {

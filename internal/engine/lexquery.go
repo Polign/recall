@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"regexp"
 	"strings"
 	"unicode"
 )
@@ -94,4 +95,22 @@ func init() {
 		tell know say said please`) {
 		stopWords[w] = true
 	}
+}
+
+// asUser rewrites a question for a model embedder: statements about the user
+// say "user", not the user's name, so "What can Maya eat?" is searched as
+// "What can the user eat?". With the name left in, a model ranks every
+// statement that contains it (her name, an email address with it) above
+// the one asked about.
+func asUser(question string, names []string) string {
+	for _, name := range names {
+		for _, w := range words(name) {
+			if len(w) < 2 || stopWords[w] {
+				continue
+			}
+			re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(w) + `\b`)
+			question = re.ReplaceAllString(question, "the user")
+		}
+	}
+	return question
 }

@@ -48,7 +48,7 @@ func TestSetupEmbedding(t *testing.T) {
 		{"openai follows", recallsetup.Config{ExtractModel: "openai:gpt-5-mini"}, "", true, "openai:text-embedding-3-small@512", false},
 		{"ollama follows", recallsetup.Config{ExtractModel: "ollama:qwen3:8b"}, "", true, "ollama:nomic-embed-text", false},
 		{"typed tools do not", recallsetup.Config{ExtractModel: "openai:gpt-5-mini", Typed: true}, "", true, "", false},
-		{"anthropic, no Ollama", recallsetup.Config{ExtractModel: "anthropic:claude-opus-5-5"}, "", true, "", false},
+		{"anthropic, built-in model", recallsetup.Config{ExtractModel: "anthropic:claude-opus-5-5"}, "", true, "local:all-minilm-l6-v2", false},
 		{"saved setup keeps", recallsetup.Config{ExtractModel: "openai:gpt-5-mini", EmbedModel: "voyage:voyage-3.5"}, "", false, "voyage:voyage-3.5", false},
 		{"saved lexical keeps", recallsetup.Config{ExtractModel: "openai:gpt-5-mini"}, "", false, "", false},
 	} {
@@ -62,30 +62,32 @@ func TestSetupEmbedding(t *testing.T) {
 	}
 }
 
-func TestSetupEmbeddingAnthropicUsesPulledOllama(t *testing.T) {
-	// Without a terminal, an anthropic setup embeds locally only with a model
-	// already pulled; it never sends text to a provider nobody chose.
+func TestSetupEmbeddingAnthropicChoices(t *testing.T) {
+	// Without a terminal, an anthropic setup embeds with the model built
+	// into recall: no key, and no text leaves the machine.
 	t.Setenv("VOYAGE_API_KEY", "vo-test")
-	_, host := fakeOllama(t, map[string]any{"name": "qwen3:8b", "capabilities": []string{"completion"}})
+	t.Setenv("RECALL_MODEL_DIR", t.TempDir())
+	_, host := fakeOllama(t, map[string]any{"name": "nomic-embed-text:latest", "capabilities": []string{"embedding"}})
 	t.Setenv("OLLAMA_HOST", host)
 	cfg := recallsetup.Config{ExtractModel: "anthropic:claude-opus-5-5"}
-	if got, _, _ := setupEmbedding(cfg, "", true, nil, false, io.Discard); got != "" {
-		t.Errorf("nothing pulled: %q, want word search", got)
+	if got, _, _ := setupEmbedding(cfg, "", true, nil, false, io.Discard); got != "local:all-minilm-l6-v2" {
+		t.Errorf("no terminal: %q", got)
 	}
-	_, host = fakeOllama(t, map[string]any{"name": "nomic-embed-text:latest", "capabilities": []string{"embedding"}})
-	t.Setenv("OLLAMA_HOST", host)
-	if got, _, _ := setupEmbedding(cfg, "", true, nil, false, io.Discard); got != "ollama:nomic-embed-text" {
-		t.Errorf("pulled: %q", got)
-	}
-	// At a terminal it asks, offering Voyage only because its key is set,
-	// and defaults to the local model.
+	// At a terminal it asks: the built-in model first, then Ollama, Voyage
+	// (offered only because its key is set) and word search.
 	var out strings.Builder
 	got, _, err := setupEmbedding(cfg, "", true, strings.NewReader("\n"), true, &out)
-	if err != nil || got != "ollama:nomic-embed-text" || !strings.Contains(out.String(), "sent to Voyage AI") {
+	if err != nil || got != "local:all-minilm-l6-v2" || !strings.Contains(out.String(), "downloads 86 MB once") || !strings.Contains(out.String(), "sent to Voyage AI") {
 		t.Errorf("asked: %q, %v\n%s", got, err, out.String())
 	}
-	if got, _, _ := setupEmbedding(cfg, "", true, strings.NewReader("3\n"), true, io.Discard); got != "voyage:voyage-3.5" {
-		t.Errorf("chose Voyage: %q", got)
+	for answer, want := range map[string]string{"2\n": "ollama:nomic-embed-text", "3\n": "voyage:voyage-3.5", "4\n": ""} {
+		if got, _, _ := setupEmbedding(cfg, "", true, strings.NewReader(answer), true, io.Discard); got != want {
+			t.Errorf("answer %q: %q, want %q", answer, got, want)
+		}
+	}
+	t.Setenv("VOYAGE_API_KEY", "")
+	if got, _, _ := setupEmbedding(cfg, "", true, strings.NewReader("3\n"), true, io.Discard); got != "" {
+		t.Errorf("without a Voyage key, choice 3 is word search: %q", got)
 	}
 }
 

@@ -1099,6 +1099,8 @@ func (s *Store) searchEvents(query string, filter map[string]any, limit int) ([]
 	// every address and handle that contains it.
 	if s.textFirst {
 		query = lexicalQuery(query, s.userNames())
+	} else {
+		query = asUser(query, s.userNames())
 	}
 	values, err := s.embed(query)
 	if err != nil {

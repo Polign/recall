@@ -9,11 +9,21 @@
   `text-embedding-3-small` at 512 dimensions, and with `ollama:*` with
   `nomic-embed-text`. On LongMemEval user-facts (Sonnet 5.5 throughout),
   Recall scored 88.8 with word search and 92.9 with that OpenAI embedder;
-  the Ollama and Voyage embedders have not been measured. `anthropic:*` has
-  no embedding API and keeps word search unless an embedder is named.
+  the Ollama, Voyage and built-in embedders have not been measured on it.
+- A built-in embedding model, `local:all-minilm-l6-v2`, runs inside the
+  recall binary in pure Go (no cgo, no service, no key), so `anthropic:*`
+  setups, which have no embedding API, search by meaning too. Its 86 MB of
+  weights download once on first use, pinned to one Hugging Face revision
+  and checked against SHA-256, into `~/.config/polign/recall/models` (or
+  `$RECALL_MODEL_DIR`; copy the files there for machines without internet).
+  One embedding takes about 8 ms on an Apple M4 Pro. The binary grows from
+  about 11 MB to about 25 MB.
+- Model search reads the user's name in a question as "the user", which is
+  how statements about the user are stored, so "What can Maya eat?" finds
+  her diet rather than every fact that mentions her name.
 - `-embed-model provider:model[@dim]` (and `POLIGN_EMBED_MODEL`) names the
-  embedder on `recall mcp`, `recall serve` and `recall setup`: `openai`,
-  `ollama`, `voyage` (reads `VOYAGE_API_KEY`), or `lexical` for word search.
+  embedder on `recall mcp`, `recall serve` and `recall setup`: `local`,
+  `openai`, `ollama`, `voyage` (reads `VOYAGE_API_KEY`), or `lexical` for word search.
   `recall serve` uses only what it is given, because every tenant's
   collection was written with the embedder it started with.
 - Each embedder writes its own default collection, such as

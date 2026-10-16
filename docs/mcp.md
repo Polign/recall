@@ -39,7 +39,7 @@ Set the connection environment for that process:
 | --- | --- | --- |
 | `POLIGN_URL` | Your Polign server's address | `http://localhost:23000` |
 | `POLIGN_COLLECTION` | The collection holding your memories | One per embedder: `recall_lexical_v1` for word search |
-| `POLIGN_EMBED_MODEL` | Embedder for search by meaning, as `provider:model[@dim]` or `lexical` | Follows `POLIGN_EXTRACT_MODEL`: OpenAI and Ollama embed, Anthropic uses word search |
+| `POLIGN_EMBED_MODEL` | Embedder for search by meaning, as `provider:model[@dim]` or `lexical` | Follows `POLIGN_EXTRACT_MODEL`: OpenAI and Ollama embed with their own models, Anthropic with the model built into recall |
 | `POLIGN_API_KEY` | Credential for a server that requires authentication | Unset |
 | `POLIGN_PREDICATES` | Path to a custom registry of allowed memory types | Built-in registry |
 

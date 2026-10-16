@@ -22,6 +22,18 @@ func TestLexicalQuery(t *testing.T) {
 	}
 }
 
+func TestAsUser(t *testing.T) {
+	for q, want := range map[string]string{
+		"What can Maya eat?":             "What can the user eat?",
+		"Where does maya's sister live?": "Where does the user's sister live?",
+		"Where does Mayabelle live?":     "Where does Mayabelle live?",
+	} {
+		if got := asUser(q, []string{"Maya"}); got != want {
+			t.Errorf("asUser(%q) = %q, want %q", q, got, want)
+		}
+	}
+}
+
 // A person whose facts change, written in the order they were said and asked
 // about at once, before any keyword index could have caught up: the hashed
 // word vectors are the only ranking. Before the query was cleaned, "Maya"

@@ -70,9 +70,12 @@ unless `-embed-model` names one:
 | --- | --- | --- |
 | `openai:*` | `openai:text-embedding-3-small@512` | OpenAI |
 | `ollama:*` | `ollama:nomic-embed-text` | nowhere (local) |
-| `anthropic:*` or none | word search (`lexical`) | nowhere |
+| `anthropic:*` | `local:all-minilm-l6-v2`, built into recall | nowhere (local) |
+| none | word search (`lexical`) | nowhere |
 
-`-embed-model` takes `openai:<model>[@dim]`, `ollama:<model>`,
+`-embed-model` takes `local` (the built-in model; its weights download once
+into `~/.config/polign/recall/models` or `$RECALL_MODEL_DIR`),
+`openai:<model>[@dim]`, `ollama:<model>`,
 `voyage:<model>[@dim]` (reads `VOYAGE_API_KEY`) or `lexical`. `-embed-url`
 still names a service that answers `POST /embed {"text": ...}` with
 `{"values": [...]}`, and needs an explicit collection.

@@ -107,7 +107,7 @@ func TestChooseEmbedding(t *testing.T) {
 		derived             bool
 	}{
 		{"", "", "", "", false},
-		{"", "", "anthropic:claude-opus-5-5", "", false},
+		{"", "", "anthropic:claude-opus-5-5", "local:all-minilm-l6-v2", true},
 		{"", "", "openai:gpt-5-mini", "openai:text-embedding-3-small@512", true},
 		{"", "", "ollama:qwen3:8b", "ollama:nomic-embed-text", true},
 		{"", "lexical", "openai:gpt-5-mini", "", false},
@@ -258,7 +258,7 @@ func TestReembed(t *testing.T) {
 // recall.LexicalEmbedder itself; a wrapper around it silently fused the two
 // rankings evenly and skipped the question cleanup.
 func TestWordSearchKeepsTheLexicalEmbedderType(t *testing.T) {
-	emb, err := chooseEmbedding("", "", "anthropic:claude-opus-5-5")
+	emb, err := chooseEmbedding("", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

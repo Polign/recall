@@ -71,7 +71,9 @@ func openEmbedding(spec string, derived bool) (embedding, error) {
 	if err != nil {
 		return embedding{}, err
 	}
-	e, err := model.NewEmbedder(cfg)
+	// A local model's first download is reported on stderr, which MCP
+	// clients log and setup shows.
+	e, err := model.OpenEmbedding(cfg, os.Stderr)
 	if err != nil {
 		return embedding{}, err
 	}
