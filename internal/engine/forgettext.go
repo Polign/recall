@@ -47,7 +47,14 @@ func (c *Client) ForgetText(ctx context.Context, request string, selector Select
 	if len(candidates) == 0 {
 		return out, nil
 	}
-	picked, err := selector.Select(ctx, request, slices.Clone(candidates))
+	// Statements about the user say "user"; a request that names the user
+	// ("forget that Maya is allergic") is shown to the selector the same
+	// way, or it cannot tell the statements are about the person named.
+	asked := request
+	if s, err := c.forContext(ctx); err == nil {
+		asked = asUser(request, s.userNames())
+	}
+	picked, err := selector.Select(ctx, asked, slices.Clone(candidates))
 	if err != nil {
 		return out, err
 	}

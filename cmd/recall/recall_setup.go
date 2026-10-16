@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/Polign/recall/internal/recallsetup"
+	"golang.org/x/term"
 )
 
 func recallHome() string {
@@ -52,12 +53,13 @@ func cmdRecall(args []string, out io.Writer) error {
 	dir := fs.String("config-dir", recallHome(), "persistent Recall configuration and local data directory (default $POLIGN_RECALL_HOME, then ~/.config/polign/recall)")
 	endpoint := fs.String("url", "", "connect to an existing server; API key comes from POLIGN_API_KEY")
 	local := fs.Bool("local", false, "use a managed local database, ignoring POLIGN_URL")
-	collection := fs.String("collection", "", "memory collection (default $POLIGN_COLLECTION, then recall_lexical_v1)")
+	collection := fs.String("collection", "", "memory collection (default $POLIGN_COLLECTION, then one named after the embedding model: recall_lexical_v1 for word search)")
 	noPlugin := fs.Bool("no-plugin", false, "configure and check Recall without installing the Claude plugin")
 	claude := fs.String("claude", "", "Claude executable (otherwise auto-detected)")
 	server := fs.String("server", "", "Polign server executable (otherwise alongside this CLI)")
 	extractModel := fs.String("extract-model", "", "model that works out what remembered text says, as provider:model (anthropic:claude-haiku-4-5-20251001, openai:<model>, ollama:<model>); with one, Recall serves the text-only tools. none clears a saved model")
 	typed := fs.Bool("typed", false, "serve the typed tools (remember with subject, predicate and value) even with a model saved; -typed=false goes back to the text-only tools")
+	embedModel := fs.String("embed-model", "", "model that embeds memory so recall searches by meaning, as provider:model[@dim] (openai:text-embedding-3-small@512, ollama:nomic-embed-text, voyage:voyage-3.5), or lexical for word search. Omitted, a new setup follows -extract-model: openai and ollama embed with their own provider (Ollama's model is pulled if missing); anthropic asks at a terminal. Changing it copies the saved memory into a new collection")
 	if err := fs.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -76,7 +78,7 @@ func cmdRecall(args []string, out io.Writer) error {
 	}
 	*dir = absolute
 	if args[0] != "setup" {
-		if *endpoint != "" || *local || *collection != "" || *noPlugin || *claude != "" || *server != "" || *extractModel != "" || *typed {
+		if *endpoint != "" || *local || *collection != "" || *noPlugin || *claude != "" || *server != "" || *extractModel != "" || *typed || *embedModel != "" {
 			return fmt.Errorf("connection options belong to recall setup")
 		}
 		var cfg recallsetup.Config
@@ -87,6 +89,7 @@ func cmdRecall(args []string, out io.Writer) error {
 		case "doctor":
 			fmt.Fprintf(out, "Configured CLI: %s\nDoctor version: %s\nConfiguration: %s\nCollection: %s\n", cfg.Executable, version, *dir, cfg.Collection)
 			fmt.Fprintln(out, describeSurface(cfg))
+			fmt.Fprintln(out, describeSearch(cfg))
 			if path, err := exec.LookPath("recall"); err == nil && path != cfg.Executable {
 				fmt.Fprintf(out, "PATH selects %s; Recall uses the saved executable above.\n", path)
 			}
@@ -98,7 +101,7 @@ func cmdRecall(args []string, out io.Writer) error {
 				return err
 			}
 			fmt.Fprintf(out, "Database: %s\nAuthentication and memory read: OK\n", c.base)
-			if err := checkRecallLauncher(filepath.Join(*dir, "launch")); err != nil {
+			if err := checkRecallLauncher(filepath.Join(*dir, "launch"), cfg); err != nil {
 				return err
 			}
 			fmt.Fprintln(out, "MCP handshake and memory tools: OK\nIf Claude still shows a cached failure, restart Claude and check /mcp.")
@@ -113,7 +116,24 @@ func cmdRecall(args []string, out io.Writer) error {
 			}
 			spec := envOr("POLIGN_EXTRACT_MODEL", cfg.ExtractModel)
 			text := spec != "" && !cfg.Typed
-			mem, err := newMemoryRuntime(c, cfg.Collection, cfg.Predicates, "", cfg.Predicates == "" && (cfg.Open || text))
+			// A saved setup embeds with what setup saved, never with what
+			// the extraction model would pick: the collection was written
+			// with that embedder.
+			emb, err := openEmbedding(envOr("POLIGN_EMBED_MODEL", cfg.EmbedModel), false)
+			if err != nil {
+				return fmt.Errorf("embedding model %q: %w", cfg.EmbedModel, err)
+			}
+			backend, err := openMemoryBackend(c)
+			if err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			emb, _, err = fitEmbedding(ctx, backend, cfg.Collection, emb)
+			cancel()
+			if err != nil {
+				return fmt.Errorf("%w; run recall setup again", err)
+			}
+			mem, err := newMemoryRuntime(c, cfg.Collection, cfg.Predicates, emb.Embedder, cfg.Predicates == "" && (cfg.Open || text))
 			if err != nil {
 				return err
 			}
@@ -121,7 +141,7 @@ func cmdRecall(args []string, out io.Writer) error {
 				return fmt.Errorf("extraction model %q: %w", spec, err)
 			}
 			mem.text = text
-			s := &mcpServer{api: c, collection: cfg.Collection, memory: mem, write: true, enc: json.NewEncoder(os.Stdout)}
+			s := &mcpServer{api: c, collection: cfg.Collection, search: emb.spec, memory: mem, write: true, enc: json.NewEncoder(os.Stdout)}
 			return s.serve(context.Background(), os.Stdin)
 		default:
 			return fmt.Errorf("unknown Recall command %q (want setup, doctor, mcp)", args[0])
@@ -166,7 +186,7 @@ func cmdRecall(args []string, out io.Writer) error {
 	if readErr != nil {
 		cfg.URL = os.Getenv("POLIGN_URL")
 		cfg.Key = os.Getenv("POLIGN_API_KEY")
-		cfg.Collection = envOr("POLIGN_COLLECTION", "recall_lexical_v1")
+		cfg.Collection = os.Getenv("POLIGN_COLLECTION") // "" is named after the embedder below
 		cfg.Predicates = os.Getenv("POLIGN_PREDICATES")
 		cfg.Open = true
 	}
@@ -194,6 +214,19 @@ func cmdRecall(args []string, out io.Writer) error {
 			return err
 		}
 		cfg.ExtractModel = choice
+	}
+	spec, namedEmbed, err := setupEmbedding(cfg, *embedModel, readErr != nil || *extractModel != "", os.Stdin, isTerminal(os.Stdin), out)
+	if err != nil {
+		return err
+	}
+	if spec, err = prepareEmbedding(spec, namedEmbed, out); err != nil {
+		return err
+	}
+	previous := cfg
+	switching := readErr == nil && spec != cfg.EmbedModel
+	cfg.EmbedModel = spec
+	if cfg.Collection == "" || switching && *collection == "" {
+		cfg.Collection = defaultCollection(cfg.EmbedModel)
 	}
 	if *endpoint != "" {
 		cfg.URL = *endpoint
@@ -272,6 +305,9 @@ func cmdRecall(args []string, out io.Writer) error {
 	if err := checkRecall(c, cfg); err != nil {
 		return err
 	}
+	if err := settleCollection(c, previous, &cfg, switching, namedEmbed, out); err != nil {
+		return err
+	}
 	// Commit only a working connection. A failed reconfiguration leaves the
 	// previous endpoint and launcher intact.
 	//
@@ -290,13 +326,14 @@ func cmdRecall(args []string, out io.Writer) error {
 	if err := recallsetup.WriteFile(launchPath, []byte(launcher), 0o700); err != nil {
 		return err
 	}
-	if err := checkRecallLauncher(launchPath); err != nil {
+	if err := checkRecallLauncher(launchPath, cfg); err != nil {
 		restoreRecallFile(configPath, previousConfig, configExisted, 0o600)
 		restoreRecallFile(launchPath, previousLaunch, launchExisted, 0o700)
 		return err
 	}
 	fmt.Fprintf(out, "Recall connected: %s\nCollection: %s\nConfiguration: %s\n", c.base, cfg.Collection, *dir)
 	fmt.Fprintln(out, describeSurface(cfg))
+	fmt.Fprintln(out, describeSearch(cfg))
 	if cfg.ExtractModel == "" {
 		fmt.Fprintln(out, modelHint())
 	}
@@ -350,7 +387,7 @@ func checkRecall(c *api, cfg recallsetup.Config) error {
 			return fmt.Errorf("database is not ready at %s; check the URL and server: %w", c.base, err)
 		}
 	}
-	mem, err := newMemoryRuntime(c, cfg.Collection, cfg.Predicates, "", false)
+	mem, err := newMemoryRuntime(c, cfg.Collection, cfg.Predicates, nil, false)
 	if err != nil {
 		return err
 	}
@@ -594,9 +631,11 @@ func restoreRecallFile(path string, previous []byte, readErr error, mode os.File
 }
 
 // checkRecallLauncher runs the exact command the plugin runs, over stdio,
-// without a model call or a memory write. Database authentication is checked
+// without a model call or a memory write, and checks it lists the tools the
+// setup serves: remember, recall and forget, plus memory_history and
+// list_predicates for the typed tools. Database authentication is checked
 // separately above.
-func checkRecallLauncher(launchPath string) error {
+func checkRecallLauncher(launchPath string, cfg recallsetup.Config) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/bin/sh", launchPath)
@@ -636,13 +675,27 @@ func checkRecallLauncher(launchPath string) error {
 			for _, tool := range reply.Result.Tools {
 				names[tool.Name] = true
 			}
-			listed = names["remember"] && names["recall"] && names["forget"] && names["memory_history"] && names["list_predicates"]
+			listed = names["remember"] && names["recall"] && names["forget"]
+			if typedSetup(cfg) {
+				listed = listed && names["memory_history"] && names["list_predicates"]
+			}
 		}
 	}
 	if !initialized || !listed {
-		return fmt.Errorf("the configured launcher does not expose the Recall MCP protocol and five memory tools")
+		want := "remember, recall and forget"
+		if typedSetup(cfg) {
+			want = "remember, recall, forget, memory_history and list_predicates"
+		}
+		return fmt.Errorf("the configured launcher does not expose the Recall MCP protocol and the memory tools %s", want)
 	}
 	return nil
+}
+
+// typedSetup reports whether a saved setup serves the typed tools: it has
+// no extraction model, or keeps the typed tools with -typed. Others serve
+// the text-only tools.
+func typedSetup(cfg recallsetup.Config) bool {
+	return envOr("POLIGN_EXTRACT_MODEL", cfg.ExtractModel) == "" || cfg.Typed
 }
 
 // serveConfigured serves memory over MCP from what recall setup saved in dir.
@@ -685,9 +738,9 @@ func describeSurface(cfg recallsetup.Config) string {
 }
 
 // isTerminal reports whether f is a terminal, where a question can be asked.
+// A character device is not enough: /dev/null is one too.
 func isTerminal(f *os.File) bool {
-	info, err := f.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(f.Fd())) // #nosec G115 -- a file descriptor fits an int.
 }
 
 // modelChoice is one answer to the setup question: a model spec, or "" for
@@ -770,32 +823,9 @@ func modelHint() string {
 // ollamaModels lists the local Ollama models that generate text, if Ollama
 // answers within a moment.
 func ollamaModels() []string {
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	host := envOr("OLLAMA_HOST", "localhost:11434")
-	if !strings.Contains(host, "://") {
-		host = "http://" + host
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(host, "/")+"/api/tags", nil)
-	if err != nil || !strings.HasPrefix(req.URL.Scheme, "http") {
-		return nil
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-	var tags struct {
-		Models []struct {
-			Name         string   `json:"name"`
-			Capabilities []string `json:"capabilities"`
-		} `json:"models"`
-	}
-	if json.NewDecoder(resp.Body).Decode(&tags) != nil {
-		return nil
-	}
+	models, _ := ollamaTags()
 	var out []string
-	for _, m := range tags.Models {
+	for _, m := range models {
 		if slices.Contains(m.Capabilities, "completion") {
 			out = append(out, m.Name)
 		}

@@ -114,3 +114,32 @@ func TestAskHidesTextsItFiledStatementsFrom(t *testing.T) {
 		t.Fatalf("memories: %s", joined)
 	}
 }
+
+// The selector sees statements about "user", so a request naming the user
+// reaches it with the name read as "the user"; otherwise it cannot tell the
+// statements are about the person named and withdraws nothing.
+func TestForgetTextReadsTheUsersNameAsUser(t *testing.T) {
+	ctx := context.Background()
+	c := openClient(t, newLockedBackend())
+	remember(t, c, "name", "Maya", "")
+	remember(t, c, "allergic_to", "shellfish", "")
+	var seen string
+	got, err := c.ForgetText(ctx, "Forget that Maya is allergic to shellfish.", selectFunc(func(request string, cands []Belief) []int {
+		seen = request
+		for i, b := range cands {
+			if b.Predicate == "allergic_to" {
+				return []int{i}
+			}
+		}
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seen != "Forget that the user is allergic to shellfish." {
+		t.Errorf("selector saw %q", seen)
+	}
+	if len(got.Withdrawn) != 1 {
+		t.Errorf("withdrew %+v", got.Withdrawn)
+	}
+}

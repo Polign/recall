@@ -27,6 +27,10 @@ type Config struct {
 	// Typed keeps the typed tools even when a model is saved: the agent
 	// names predicates and the model extracts nothing.
 	Typed bool `json:"typed,omitempty"`
+	// EmbedModel is the provider:model[@dim] that embeds memory, so recall
+	// searches by meaning. Empty is Recall's built-in word search, which is
+	// what every setup made before it existed keeps.
+	EmbedModel string `json:"embed_model,omitempty"`
 }
 
 type Runtime struct {

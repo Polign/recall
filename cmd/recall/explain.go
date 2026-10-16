@@ -39,6 +39,10 @@ func cmdExplain(c *api, urlGiven bool, args []string, out io.Writer) error {
 		return errors.New("explain: a question is required")
 	}
 	predicates := os.Getenv("POLIGN_PREDICATES")
+	emb, err := envEmbedding()
+	if err != nil {
+		return fmt.Errorf("explain: %w", err)
+	}
 	if !urlGiven && c.backend == setupBackend || !urlGiven && c.backend == "" {
 		var cfg recallsetup.Config
 		if err := recallsetup.Read(filepath.Join(*dir, "config.json"), &cfg); err == nil {
@@ -52,12 +56,17 @@ func cmdExplain(c *api, urlGiven bool, args []string, out io.Writer) error {
 				*collection = cfg.Collection
 			}
 			predicates = cfg.Predicates
+			if os.Getenv("POLIGN_EMBED_URL") == "" && os.Getenv("POLIGN_EMBED_MODEL") == "" {
+				if emb, err = openEmbedding(cfg.EmbedModel, false); err != nil {
+					return fmt.Errorf("explain: saved embedder: %w", err)
+				}
+			}
 		}
 	}
 	if *collection == "" {
-		*collection = "recall_lexical_v1"
+		*collection = defaultCollection(emb.spec)
 	}
-	mem, err := newMemoryRuntime(c, *collection, predicates, os.Getenv("POLIGN_EMBED_URL"), false)
+	mem, err := newMemoryRuntime(c, *collection, predicates, emb.Embedder, false)
 	if err != nil {
 		return err
 	}

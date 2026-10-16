@@ -21,7 +21,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/Polign/recall"
 )
@@ -78,8 +80,11 @@ var readOnlyTool = map[string]any{"readOnlyHint": true, "openWorldHint": false}
 type mcpServer struct {
 	api        *api
 	collection string // the memory collection
-	write      bool   // expose the writing tools
-	memory     *memoryRuntime
+	// search names the embedder when memory is searched by meaning; empty
+	// is word search.
+	search string
+	write  bool // expose the writing tools
+	memory *memoryRuntime
 	// agents holds the agents this session resumed; nil unless -agent.
 	agents *agentRuntime
 
@@ -95,7 +100,8 @@ func cmdMCP(c *api, urlGiven bool, args []string) error {
 	collection := fs.String("collection", os.Getenv("POLIGN_COLLECTION"), "memory collection (default $POLIGN_COLLECTION, then recall_lexical_v1)")
 	write := fs.Bool("write", false, "also expose the writing tools; read-only by default")
 	predicates := fs.String("predicates", os.Getenv("POLIGN_PREDICATES"), "predicate registry JSON file; omitted uses the 15-predicate starter registry")
-	embedURL := fs.String("embed-url", os.Getenv("POLIGN_EMBED_URL"), "optional embedding service; omitted uses built-in lexical feature hashing (dedicated collection required)")
+	embedURL := fs.String("embed-url", os.Getenv("POLIGN_EMBED_URL"), "embedding service that answers POST /embed {text} with {values}; needs an explicit -collection")
+	embedModel := fs.String("embed-model", os.Getenv("POLIGN_EMBED_MODEL"), "model that embeds memory so recall searches by meaning, as provider:model[@dim]: openai:text-embedding-3-small@512, ollama:nomic-embed-text, voyage:voyage-3.5, or lexical for word search. Omitted follows -extract-model: openai:* uses openai:text-embedding-3-small@512, ollama:* uses ollama:nomic-embed-text, anthropic:* and no model use word search (default $POLIGN_EMBED_MODEL)")
 	extractModel := fs.String("extract-model", os.Getenv("POLIGN_EXTRACT_MODEL"), "model that works out the statements in text remembered without any, as provider:model: anthropic:claude-opus-5-5, openai:<model>, or ollama:<model> (default $POLIGN_EXTRACT_MODEL; keys from ANTHROPIC_API_KEY or OPENAI_API_KEY)")
 	text := fs.Bool("text", true, "serve the text-only tools: remember(text), recall(question), forget(text), with no predicates in them. The server works out what text says with -extract-model; without one, text is kept as written and nothing replaces anything. This is the default; -typed serves the typed tools instead")
 	typed := fs.Bool("typed", os.Getenv("RECALL_TYPED") == "1", "serve the typed tools instead: remember(subject, predicate, value), list_predicates, memory_history, explain, over the starter registry or -predicates (default on when $RECALL_TYPED is 1)")
@@ -135,17 +141,26 @@ func cmdMCP(c *api, urlGiven bool, args []string) error {
 	// With nothing named or saved, the memory runtime opens the backend's
 	// default address.
 
-	if *collection == "" {
-		if *embedURL != "" {
-			return errors.New("mcp: -embed-url requires an explicit -collection")
-		}
-		*collection = "recall_lexical_v1"
-	}
 	serveText, openAll, err := surface(fs, *text, *typed, *open, *predicates)
 	if err != nil {
 		return fmt.Errorf("mcp: %w", err)
 	}
-	mem, err := newMemoryRuntime(c, *collection, *predicates, *embedURL, openAll)
+	extract := *extractModel
+	if !serveText {
+		extract = "" // the typed tools extract nothing, so nothing to follow
+	}
+	emb, err := chooseEmbedding(*embedURL, *embedModel, extract)
+	if err != nil {
+		return fmt.Errorf("mcp: %w", err)
+	}
+	backend, err := openMemoryBackend(c)
+	if err != nil {
+		return fmt.Errorf("mcp: %w", err)
+	}
+	if emb, err = fitMCPCollection(backend, collection, emb); err != nil {
+		return fmt.Errorf("mcp: %w", err)
+	}
+	mem, err := newMemoryRuntime(c, *collection, *predicates, emb.Embedder, openAll)
 	if err != nil {
 		return fmt.Errorf("mcp: memory: %w", err)
 	}
@@ -153,7 +168,7 @@ func cmdMCP(c *api, urlGiven bool, args []string) error {
 		return fmt.Errorf("mcp: -extract-model: %w", err)
 	}
 	mem.text = serveText
-	s := &mcpServer{api: c, collection: *collection, write: *write, memory: mem, enc: json.NewEncoder(os.Stdout)}
+	s := &mcpServer{api: c, collection: *collection, search: emb.spec, write: *write, memory: mem, enc: json.NewEncoder(os.Stdout)}
 	if *agent {
 		if !*write {
 			return errors.New("mcp: -agent requires -write")
@@ -171,6 +186,40 @@ func cmdMCP(c *api, urlGiven bool, args []string) error {
 		return fmt.Errorf("mcp: %w", err)
 	}
 	return nil
+}
+
+// fitMCPCollection settles the collection and the embedder together. With
+// no collection named, each embedder writes its own (defaultCollection); a
+// model embedder that only followed the extraction model stays out of the
+// way of memory already kept in the default lexical collection, so an
+// upgrade never hides what was remembered. A named collection must hold
+// vectors the embedder makes (fitEmbedding). Notes go to stderr, which MCP
+// clients log.
+func fitMCPCollection(backend recall.Backend, collection *string, emb embedding) (embedding, error) {
+	if *collection == "" && strings.HasPrefix(emb.spec, "url:") {
+		return emb, errors.New("-embed-url requires an explicit -collection")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if *collection == "" {
+		*collection = defaultCollection(emb.spec)
+		if emb.derived {
+			old, _ := storedDim(ctx, backend, defaultLexicalCollection)
+			now, _ := storedDim(ctx, backend, *collection)
+			if old > 0 && now == 0 {
+				fmt.Fprintf(os.Stderr, "recall: memory is in %s, which keeps word search. To search it by meaning with %s, copy it: "+
+					"recall reembed -from %s -to %s -embed-model %s\n", defaultLexicalCollection, emb.spec,
+					defaultLexicalCollection, *collection, emb.spec)
+				*collection = defaultLexicalCollection
+				return lexical, nil
+			}
+		}
+	}
+	fitted, note, err := fitEmbedding(ctx, backend, *collection, emb)
+	if note != "" {
+		fmt.Fprintln(os.Stderr, "recall: "+note)
+	}
+	return fitted, err
 }
 
 // surface works out which tools to serve and whether writes may define
@@ -263,7 +312,14 @@ func (s *mcpServer) initialize(params json.RawMessage) any {
 // instructions tell the model what this server remembers and whether it
 // may write.
 func (s *mcpServer) instructions() string {
-	instructions := "Recall agent memory. Search uses lexical word overlap unless a model embedder was explicitly configured."
+	instructions := "Recall agent memory. Search uses lexical word overlap, so ask with the words the memory would use."
+	if s.search != "" {
+		by := s.search
+		if strings.HasPrefix(by, "url:") {
+			by = "an embedding service" // the operator's address is not the model's business
+		}
+		instructions = "Recall agent memory. Search matches meaning (" + by + ") as well as words."
+	}
 	if !s.write {
 		instructions += " This server is read-only."
 	}

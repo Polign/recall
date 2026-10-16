@@ -4,10 +4,87 @@
 
 ### Added
 
+- Memory is searched by meaning whenever the extraction model can embed.
+  `recall mcp` with `-extract-model openai:*` embeds with
+  `text-embedding-3-small` at 512 dimensions, and with `ollama:*` with
+  `nomic-embed-text`. On LongMemEval user-facts (Sonnet 5.5 throughout),
+  Recall scored 88.8 with word search and 92.9 with that OpenAI embedder;
+  the Ollama, Voyage and built-in embedders have not been measured on it.
+- A built-in embedding model, `local:all-minilm-l6-v2`, runs inside the
+  recall binary in pure Go (no cgo, no service, no key), so `anthropic:*`
+  setups, which have no embedding API, search by meaning too. Its 86 MB of
+  weights download once on first use, pinned to one Hugging Face revision
+  and checked against SHA-256, into `~/.config/polign/recall/models` (or
+  `$RECALL_MODEL_DIR`; copy the files there for machines without internet).
+  One embedding takes about 8 ms on an Apple M4 Pro. The binary grows from
+  about 11 MB to about 25 MB.
+- Model search reads the user's name in a question as "the user", which is
+  how statements about the user are stored, so "What can Maya eat?" finds
+  her diet rather than every fact that mentions her name.
+- `-embed-model provider:model[@dim]` (and `POLIGN_EMBED_MODEL`) names the
+  embedder on `recall mcp`, `recall serve` and `recall setup`: `local`,
+  `openai`, `ollama`, `voyage` (reads `VOYAGE_API_KEY`), or `lexical` for word search.
+  `recall serve` uses only what it is given, because every tenant's
+  collection was written with the embedder it started with.
+- Each embedder writes its own default collection, such as
+  `recall_openai_text_embedding_3_small_512_v1`, and Recall checks a
+  collection's stored vectors before using it. An embedder that only
+  followed the extraction model gives way to memory already kept with word
+  search, so an upgrade never hides what was remembered; a named embedder
+  that does not fit the collection is an error that says what to do.
+- `recall reembed -embed-model <spec>` copies a collection into a new one
+  with a new embedder, keeping every event and its ID, so beliefs, histories
+  and `as_of` reads are unchanged. Run against a saved setup, it switches the
+  setup to the copy and leaves the old collection in place.
+- `recall setup` saves the embedder. A new setup follows the extraction
+  model and pulls `nomic-embed-text` into Ollama when it is missing. With an
+  `anthropic:*` model it asks at a terminal: word search, a local Ollama
+  embedder, or Voyage (offered only when `VOYAGE_API_KEY` is set). Without a
+  terminal it uses an Ollama embedder already pulled, else word search.
+  Setups saved before this release keep word search until setup runs again
+  with a new model or `-embed-model`, which offers to copy the memory.
+  `recall setup` and `recall doctor` print one line saying how memory is
+  searched and whether text leaves the machine.
+
 - `Client.ImportEvents` writes events exported from another collection or
   backend, embedding each with this client's embedder and keeping its ID, so
   importing twice stores each event once. Moving a log to a model embedder
   this way re-embeds it without running the extractor again.
+
+- The `personal` starter registry, which seeds the text tools, has
+  single-valued `email`, `work_email`, `phone` and `diet`, and multi-valued
+  `allergic_to`. Before, the extraction
+  model coined `email` itself as multi-valued, so a new work address stood
+  beside the old ones instead of replacing them.
+- Word search drops question words and the user's own name, and matches
+  common word endings, in both the hashed vectors and the keyword index.
+  "Where does Maya live now?" used to rank Maya's name and every email
+  address containing "maya" above where she lives.
+
+- `recall(question)` in text mode tells statements about the user under
+  the user's name when one is known ("Maya lives in: Portland"), so a
+  reader asked about Maya knows each memory is hers, and leaves the name
+  itself out when the question already calls her by it.
+
+### Fixed
+
+- The extraction model sometimes recorded one fact from a sentence that
+  states two ("I'm pescatarian now, but no shellfish, I'm allergic" became
+  only the diet). The prompt now says each fact in a sentence is its own
+  statement, with that sentence as the example.
+
+- Forgetting by description ("forget that Maya is allergic to shellfish")
+  withdrew nothing when the user's name statement was not among the
+  candidates, because the selector could not tell that statements about
+  "user" were about Maya. The request now reaches it with the user's name
+  read as "the user".
+
+- `recall setup` with an extraction model failed its own launcher check,
+  which required two tools only the typed surface serves. The check now asks
+  for the tools the saved setup serves.
+- Setup asked its questions whenever stdin was a character device, including
+  `/dev/null`. It now asks only at a real terminal, and end of input answers
+  no to copying memory.
 
 ## [0.19.0] - 2026-10-14
 
