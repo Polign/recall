@@ -67,6 +67,12 @@
 
 ### Fixed
 
+- Forgetting by description ("forget that Maya is allergic to shellfish")
+  withdrew nothing when the user's name statement was not among the
+  candidates, because the selector could not tell that statements about
+  "user" were about Maya. The request now reaches it with the user's name
+  read as "the user".
+
 - `recall setup` with an extraction model failed its own launcher check,
   which required two tools only the typed surface serves. The check now asks
   for the tools the saved setup serves.
