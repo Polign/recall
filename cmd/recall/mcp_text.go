@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -19,26 +20,43 @@ func (s *mcpServer) textTools() []mcpTool {
 		{
 			Name:        "remember",
 			Title:       "Remember",
-			Description: "Keep something worth remembering about the user or their work: a preference, a fact, a decision, or a correction. Pass the passage as text, in the user's words where you can. The server works out what it says. A newer statement replaces an older one about the same thing, and the older one stays in the history. Restating something already known changes nothing.",
+			Description: "Keep something worth remembering about the user or their work: a preference, a fact, a decision, or a correction. Pass the passage as text, in the user's words where you can, or pass the conversation as messages with their roles, so that only what the user said or agreed to is kept and nothing the assistant suggested. The server works out what it says. A newer statement replaces an older one about the same thing, and the older one stays in the history. Restating something already known changes nothing.",
 			InputSchema: schema(map[string]any{
-				"text": map[string]any{"type": "string", "maxLength": 32768, "description": "what to remember"},
+				"text": map[string]any{"type": "string", "maxLength": 32768, "description": "what to remember; or pass messages"},
+				"messages": map[string]any{
+					"type":        "array",
+					"description": "a conversation to remember instead of text, in order: only what the user said or agreed to is kept",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"role":    map[string]any{"type": "string", "enum": []string{"user", "assistant"}},
+							"content": map[string]any{"type": "string"},
+						},
+						"required":             []string{"role", "content"},
+						"additionalProperties": false,
+					},
+				},
 				"observed_at": map[string]any{
 					"type":        "string",
 					"description": "when it was said, as an RFC3339 instant like 2023-05-20T02:21:00Z; omit for now. Use it only for something said earlier, such as an imported conversation.",
 				},
-			}, "text"),
+			}),
 		},
 		{
 			Name:        "recall",
 			Title:       "Recall",
-			Description: "Ask what is remembered, in words, before assuming anything about the user. Answers are what is believed now, as sentences. Each lists under before what it replaced and when, so a correction comes with the answer, and under elsewhere anything else believed about the same thing in other words, such as a later dislike beside a like; the newer statement usually holds. days_ago says how long ago it was stated. A time named in the question, such as \"last week\", is searched first. Pass as_of to ask what was believed at an earlier instant.",
+			Description: "Ask what is remembered, in words, before assuming anything about the user. Answers are what is believed now, as sentences. Each lists under before what it replaced and when, so a correction comes with the answer, and under elsewhere anything else believed about the same thing in other words, such as a later dislike beside a like; the newer statement usually holds. days_ago says how long ago it was stated. A time named in the question, such as \"last week\", is searched first. Each also gives under said the sentence it was drawn from, as the user said it. Pass as_of to ask what was believed at an earlier instant. Leave out question to get everything believed about the user, a profile to start a conversation with. Pass since to get only what changed after then, newest first: at the start of a session, since the last one, it says what is new.",
 			InputSchema: schema(map[string]any{
-				"question": map[string]any{"type": "string", "description": "what you want to know"},
+				"question": map[string]any{"type": "string", "description": "what you want to know; omit for the user's profile, or with since for everything that changed"},
 				"as_of": map[string]any{
 					"type":        "string",
 					"description": "RFC3339 instant, e.g. 2026-09-01T00:00:00Z. Answers as of then rather than now.",
 				},
-			}, "question"),
+				"since": map[string]any{
+					"type":        "string",
+					"description": "RFC3339 instant. Only what was stated after then, each with what it replaced.",
+				},
+			}),
 			Annotations: readOnlyTool,
 		},
 		{
@@ -97,11 +115,24 @@ type remembered struct {
 
 func (m *memoryRuntime) textRemember(args json.RawMessage) (string, error) {
 	var a struct {
-		Text       string `json:"text"`
-		ObservedAt string `json:"observed_at"`
+		Text       string           `json:"text"`
+		Messages   []recall.Message `json:"messages"`
+		ObservedAt string           `json:"observed_at"`
 	}
 	if err := strictArgs(args, &a); err != nil {
 		return "", err
+	}
+	switch {
+	case a.Text != "" && len(a.Messages) > 0:
+		return "", errors.New("pass text or messages, not both")
+	case len(a.Messages) > 0:
+		t, err := recall.Transcript(a.Messages)
+		if err != nil {
+			return "", err
+		}
+		a.Text = t
+	case strings.TrimSpace(a.Text) == "":
+		return "", errors.New("text or messages is required")
 	}
 	var observedAt time.Time
 	if a.ObservedAt != "" {
@@ -150,6 +181,8 @@ type recalled struct {
 	// Elsewhere is what else is believed about the same thing in other words,
 	// such as a later dislike beside a like.
 	Elsewhere []earlier `json:"elsewhere,omitempty"`
+	// Said is the sentence the memory was drawn from, as it was said.
+	Said string `json:"said,omitempty"`
 }
 
 type earlier struct {
@@ -161,19 +194,30 @@ func (m *memoryRuntime) textRecall(args json.RawMessage) (string, error) {
 	var a struct {
 		Question string `json:"question"`
 		AsOf     string `json:"as_of"`
+		Since    string `json:"since"`
 	}
 	if err := strictArgs(args, &a); err != nil {
 		return "", err
 	}
-	var asOf time.Time
-	if a.AsOf != "" {
-		t, err := time.Parse(time.RFC3339, a.AsOf)
-		if err != nil {
-			return "", fmt.Errorf("as_of must be an RFC3339 instant like 2026-09-01T00:00:00Z: %w", err)
+	instant := func(name, v string) (time.Time, error) {
+		if v == "" {
+			return time.Time{}, nil
 		}
-		asOf = t
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("%s must be an RFC3339 instant like 2026-09-01T00:00:00Z: %w", name, err)
+		}
+		return t, nil
 	}
-	memories, err := m.client.AskAt(m.ctx, a.Question, asOf)
+	asOf, err := instant("as_of", a.AsOf)
+	if err != nil {
+		return "", err
+	}
+	since, err := instant("since", a.Since)
+	if err != nil {
+		return "", err
+	}
+	memories, err := m.client.AskWith(m.ctx, recall.AskRequest{Question: a.Question, AsOf: asOf, Since: since})
 	if err != nil {
 		return "", err
 	}
@@ -183,7 +227,7 @@ func (m *memoryRuntime) textRecall(args json.RawMessage) (string, error) {
 	}
 	out := make([]recalled, 0, len(memories))
 	for _, mem := range memories {
-		r := recalled{Text: mem.Text, Since: day(mem.Since), DaysAgo: int(ref.Sub(mem.Since).Hours() / 24)}
+		r := recalled{Text: mem.Text, Since: day(mem.Since), DaysAgo: int(ref.Sub(mem.Since).Hours() / 24), Said: mem.Said}
 		for _, e := range mem.Before {
 			r.Before = append(r.Before, earlier{Text: e.Text, Since: day(e.Since)})
 		}

@@ -45,14 +45,16 @@ Served by `recall mcp` (the default; `-typed` serves the typed tools instead). S
 
 | Tool | Required arguments | Read-only |
 | --- | --- | --- |
-| remember | text | no |
-| recall | question | yes |
+| remember | none | no |
+| recall | none | yes |
 | forget | text | no |
+
+Text `remember` takes `text` or `messages`, one of them: messages are `{role, content}` turns with role `user` or `assistant`, and only what the user said or agreed to is kept. Text `recall` takes `question`, `as_of` and `since`, all optional. With a question it searches; without one it reads with no model and no search: everything believed about the user, or with `since`, everything stated after that instant about anyone, newest first, each with what it replaced. With a model embedder, an answer to a question leaves out beliefs scoring under half the best match's similarity.
 
 ### 2.3 Argument conventions
 
 - Instants are RFC 3339 strings, UTC preferred: `2026-09-01T00:00:00Z`.
-- `as_of`, `observed_after`, `observed_before` are instants. `observed_at` on a write dates the statement; a statement dated before a newer one for the same subject and predicate becomes history and replaces nothing.
+- `as_of`, `since`, `observed_after`, `observed_before` are instants. `observed_at` on a write dates the statement; a statement dated before a newer one for the same subject and predicate becomes history and replaces nothing.
 - `value` matches the predicate's declared type: string, number or boolean. Registries may further declare enum, date and reference types; the value is still carried as one of the three JSON scalars.
 - Unknown arguments are rejected. Clients must not send fields this document does not name.
 

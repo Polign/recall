@@ -2,7 +2,39 @@
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-16
+
 ### Added
+
+- Each memory from text `recall` carries `said`: the sentence of the
+  original text it was drawn from, so a reader sees how a fact was stated
+  and what it was tied to ("Bluefin got acquired by Orca Labs, so I work at
+  Orca Labs now, same role."), not only the fact. Read in one batch per
+  answer. Python: `Memory.said`; Go: `Memory.Said`.
+
+- Remember a conversation with its roles: text `remember` takes `messages`,
+  `{role, content}` turns with role `user` or `assistant`, instead of `text`.
+  The extractor reads them as `User:` and `Assistant:` lines and keeps only
+  what the user said or agreed to, so an assistant's guess or suggestion is
+  not filed as a fact about the user. Python: `remember(messages=[...])`;
+  Go: `recall.Transcript(messages)`.
+
+- A profile in one call: text `recall` with no question returns everything
+  believed about the user, current values only, each with what it replaced.
+  No model and no search. Python: `ask()`; Go: `AskWith(AskRequest{})`.
+- What changed since: text `recall` with `since` returns only what was stated
+  after that instant, about anyone, newest first, each with what it
+  replaced, so an agent starting a session learns what is new since the
+  last one. With a question, `since` narrows the search the same way.
+  Python: `ask(since=...)`; Go: `AskWith(AskRequest{Since: t})`.
+
+- With a model embedder, `recall(question)` in text mode leaves out facts
+  that score under half the best match's similarity, so the reader gets the
+  facts that answer the question instead of up to twenty. "Why did Maya
+  leave Bluefin?" now returns 3 facts (her employer, her work email, and the
+  acquisition) where it returned 12. Similarity is computed by Recall from
+  the stored vectors, the same on every backend. Beliefs carry the score as
+  `relevance`.
 
 - Memory is searched by meaning whenever the extraction model can embed.
   `recall mcp` with `-extract-model openai:*` embeds with
@@ -67,6 +99,14 @@
   itself out when the question already calls her by it.
 
 ### Fixed
+
+- A model sometimes recorded some facts of a text and passed over others
+  ("…so I work at Orca Labs now, same role. My email is
+  maya@orcalabs.com." came back as the employer alone). After extracting,
+  Recall looks for sentences of four or more words that no statement
+  quotes and asks once more about just those; what it finds is kept when it
+  quotes the text. Nothing extra is asked when every sentence is covered,
+  when nothing was found, or for an assistant's lines in a conversation.
 
 - The extraction model sometimes recorded one fact from a sentence that
   states two ("I'm pescatarian now, but no shellfish, I'm allergic" became

@@ -3,9 +3,12 @@ package engine
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Memory is one belief told as a sentence, for callers that never see
@@ -25,6 +28,10 @@ type Memory struct {
 	Elsewhere []Earlier `json:"elsewhere,omitempty"`
 	// EventID identifies the statement, for history and audits.
 	EventID string `json:"event_id"`
+	// Said is the sentence of the original text the memory was drawn from,
+	// so a reader sees how it was said ("Bluefin got acquired by Orca Labs,
+	// so I work at Orca Labs now, same role."), not only the fact.
+	Said string `json:"said,omitempty"`
 }
 
 // Earlier is a value a memory replaced.
@@ -45,7 +52,36 @@ func (c *Client) AskAt(ctx context.Context, question string, asOf time.Time) ([]
 	if strings.TrimSpace(question) == "" {
 		return nil, fmt.Errorf("recall: a question is required")
 	}
-	beliefs, err := c.Recall(ctx, Query{Text: question, AsOf: asOf})
+	return c.AskWith(ctx, AskRequest{Question: question, AsOf: asOf})
+}
+
+// AskRequest is a read in words.
+type AskRequest struct {
+	// Question searches what is remembered. Empty reads without searching:
+	// everything believed about the user (a profile), or, with Since,
+	// everything that changed.
+	Question string
+	// AsOf answers as of an earlier instant; zero means now.
+	AsOf time.Time
+	// Since keeps only what was stated after this instant, each with what
+	// it replaced: what changed since an agent last looked. Zero means any
+	// time.
+	Since time.Time
+}
+
+// AskWith answers an AskRequest. With a question it searches, as Ask does.
+// Without one it reads, with no model and no search: the user's current
+// beliefs, or with Since, every subject's beliefs stated since then,
+// newest first.
+func (c *Client) AskWith(ctx context.Context, r AskRequest) ([]Memory, error) {
+	q := Query{Text: strings.TrimSpace(r.Question), AsOf: r.AsOf, ObservedAfter: r.Since}
+	if q.Text == "" {
+		q.Limit = MaxRecall
+		if r.Since.IsZero() {
+			q.Subject = DefaultSubject
+		}
+	}
+	beliefs, err := c.Recall(ctx, q)
 	if err != nil {
 		return nil, err
 	}
@@ -53,11 +89,96 @@ func (c *Client) AskAt(ctx context.Context, question string, asOf time.Time) ([]
 	if err != nil {
 		return nil, err
 	}
+	if q.Text == "" {
+		beliefs = slices.DeleteFunc(beliefs, func(b Belief) bool { return isReservedPair(pair{normalizeSubject(b.Subject), b.Predicate}) })
+		if !r.Since.IsZero() {
+			sort.SliceStable(beliefs, func(i, j int) bool { return beliefs[i].ObservedAt.After(beliefs[j].ObservedAt) })
+		}
+	} else if !s.textFirst {
+		// A model embedder's similarities mean something, so an answer
+		// leaves out what is far less related than its best match instead
+		// of padding the reader's context with it. Hashed word vectors are
+		// not compared.
+		beliefs = keepRelevant(beliefs, askRelevanceRatio)
+	}
+	memories, err := s.tell(beliefs, q.Text)
+	if err != nil {
+		return nil, err
+	}
+	c.addSaid(ctx, beliefs, memories)
+	return memories, nil
+}
+
+// maxSaid bounds the sentence a memory carries.
+const maxSaid = 300
+
+// addSaid fills each memory's Said from the text its belief was drawn from:
+// the sentence around the quoted evidence, read in one batch. A belief with
+// no source text keeps its evidence excerpt; a read that fails leaves Said
+// empty rather than failing the answer.
+func (c *Client) addSaid(ctx context.Context, beliefs []Belief, memories []Memory) {
+	byEvent := map[string]Belief{}
+	var ids []string
+	for _, b := range beliefs {
+		byEvent[b.EventID] = b
+		if b.EvidenceID != "" {
+			ids = append(ids, b.EvidenceID)
+		}
+	}
+	sources := map[string]string{}
+	if len(ids) > 0 {
+		if events, err := c.Events(ctx, ids); err == nil {
+			for _, e := range events {
+				if text, ok := e.Value.(string); ok {
+					sources[e.ID] = text
+				}
+			}
+		}
+	}
+	for i := range memories {
+		b, ok := byEvent[memories[i].EventID]
+		if !ok || b.Evidence == "" {
+			continue
+		}
+		memories[i].Said = sentenceAround(sources[b.EvidenceID], b.Evidence)
+	}
+}
+
+// sentenceAround returns the sentence of source that holds excerpt, or the
+// excerpt itself when source does not hold it. Long sentences are cut to
+// maxSaid around the excerpt.
+func sentenceAround(source, excerpt string) string {
+	i := strings.Index(source, excerpt)
+	if i < 0 {
+		return cutSaid(excerpt)
+	}
+	from := strings.LastIndexAny(source[:i], ".!?\n") + 1
+	end := i + len(excerpt)
+	if j := strings.IndexAny(source[end:], ".!?\n"); j >= 0 {
+		end += j + 1
+	} else {
+		end = len(source)
+	}
+	return cutSaid(strings.TrimSpace(strings.TrimRight(source[from:end], "\n")))
+}
+
+func cutSaid(s string) string {
+	if len(s) <= maxSaid {
+		return s
+	}
+	n := maxSaid
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return strings.TrimSpace(s[:n]) + "…"
+}
+
+// tell turns beliefs into Memories. Statements about the user are told under
+// the user's name when one is known ("Maya lives in: Portland"), so a
+// reader asked about Maya knows each memory is hers; the name itself is
+// left out when the question already calls her by it.
+func (s *Store) tell(beliefs []Belief, question string) ([]Memory, error) {
 	out := make([]Memory, 0, len(beliefs))
-	// Statements about the user are told under the user's name when one is
-	// known ("Maya lives in: Portland"), so a reader asked about Maya knows
-	// each memory is hers. The name itself is then left out when the
-	// question already calls her by it: it would lead every answer.
 	who := func(subject string) string { return subject }
 	if names := s.userNames(); len(names) > 0 && strings.TrimSpace(names[0]) != "" {
 		who = func(subject string) string {
@@ -68,7 +189,7 @@ func (c *Client) AskAt(ctx context.Context, question string, asOf time.Time) ([]
 		}
 	}
 	for _, b := range beliefs {
-		if b.Predicate == "name" && normalizeSubject(b.Subject) == DefaultSubject && namedIn(question, b.Value) {
+		if b.Predicate == "name" && normalizeSubject(b.Subject) == DefaultSubject && question != "" && namedIn(question, b.Value) {
 			continue
 		}
 		// A text that statements were filed from is told by those
@@ -144,4 +265,32 @@ func namedIn(question string, name any) bool {
 		}
 	}
 	return true
+}
+
+// askRelevanceRatio is how close to the best match a belief must score to
+// stay in an answer. Measured on Recall's own comparison questions with
+// all-MiniLM-L6-v2: the facts that answer a question scored at least 0.6 of
+// the best one, and unrelated facts (an email for a question about food)
+// under 0.3.
+const askRelevanceRatio = 0.5
+
+// keepRelevant drops beliefs whose relevance is known and under ratio of the
+// best one's. A belief with no score (an exact read, a keyword-only hit) is
+// kept, since nothing says it is unrelated.
+func keepRelevant(beliefs []Belief, ratio float32) []Belief {
+	var top float32
+	for _, b := range beliefs {
+		top = max(top, b.Relevance)
+	}
+	if top <= 0 {
+		return beliefs
+	}
+	out := beliefs[:0:0]
+	for _, b := range beliefs {
+		if b.Relevance > 0 && b.Relevance < top*ratio {
+			continue
+		}
+		out = append(out, b)
+	}
+	return out
 }

@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/Polign/recall"
+	recallmodel "github.com/Polign/recall/model"
 )
 
 func main() {
@@ -29,6 +30,7 @@ func main() {
 	ollama := flag.String("ollama", "http://localhost:11434", "Ollama base URL")
 	model := flag.String("model", "nomic-embed-text", "Ollama embedding model")
 	lexical := flag.Bool("lexical", false, "use Recall's built-in lexical embedder instead of Ollama")
+	local := flag.Bool("local", false, "use the embedding model built into recall (local:all-minilm-l6-v2) instead of Ollama")
 	pairsPath := flag.String("pairs", "eval/predicate-matching/pairs.json", "labeled pairs")
 	flag.Parse()
 
@@ -40,7 +42,21 @@ func main() {
 	if err := json.Unmarshal(raw, &pairs); err != nil {
 		log.Fatal(err)
 	}
+	var builtIn *recallmodel.LocalEmbedder
+	if *local {
+		builtIn, err = recallmodel.NewLocalEmbedder(recallmodel.EmbedConfig{Provider: "local", Model: recallmodel.DefaultLocalEmbedModel}, os.Stderr)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
 	embed := func(text string) []float32 {
+		if builtIn != nil {
+			v, err := builtIn.Embed(context.Background(), text)
+			if err != nil {
+				log.Fatal(err)
+			}
+			return v
+		}
 		if *lexical {
 			v, _ := recall.LexicalEmbedder{}.Embed(context.Background(), text)
 			return v

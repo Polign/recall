@@ -91,6 +91,10 @@ type Belief struct {
 	// never linked shows up here, so a reader is not answered from one
 	// predicate alone. Client reads fill it unless Query.NoElsewhere is set.
 	Elsewhere []PriorValue `json:"elsewhere,omitempty"`
+	// Relevance is how close the question was to this belief's best
+	// matching statement, as the vector search scored it; zero for exact
+	// reads and for beliefs only the keyword search found.
+	Relevance float32 `json:"relevance,omitempty"`
 }
 
 // PriorValue is a value that a newer assertion displaced.

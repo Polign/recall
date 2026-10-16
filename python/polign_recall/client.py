@@ -152,6 +152,8 @@ class Memory:
     before: tuple[Earlier, ...] = ()
     # What else is believed about the same thing in other words.
     elsewhere: tuple[Earlier, ...] = ()
+    # The sentence the memory was drawn from, as it was said.
+    said: str = ""
 
 
 def _known(cls: type, data: Any) -> dict[str, Any]:
@@ -794,6 +796,7 @@ class Client:
 
     def remember(self, subject: str | None = None, predicate: str | None = None,
                  value: Any = _MISSING, *, text: str | None = None,
+                 messages: Sequence[Mapping[str, str]] | None = None,
                  statements: Sequence[Mapping[str, Any]] | None = None,
                  kind: str | None = None, confidence: float | None = None,
                  source: str | None = None,
@@ -804,7 +807,9 @@ class Client:
         In text mode, pass `statements` your agent proposes, or leave them out
         and the server's extraction model (`extract_model`) proposes them.
 
-        On a client opened with text=True, pass `text` alone; the result is a
+        On a client opened with text=True, pass `text` alone, or `messages`, a
+        conversation as {"role": "user" | "assistant", "content": ...} turns,
+        of which only what the user said or agreed to is kept; the result is a
         TextResult saying what was filed and what each statement replaced.
 
         `observed_at` dates a statement made earlier, such as a line of an
@@ -821,14 +826,18 @@ class Client:
         """
         dated = {"observed_at": _instant(observed_at, "observed_at")} if observed_at is not None else {}
         if self._text:
-            if text is None or statements is not None or value is not _MISSING or any(
+            if (text is None) == (messages is None) or statements is not None or value is not _MISSING or any(
                     x is not None for x in (subject, predicate, kind, confidence, source, replaces)):
-                raise ValueError("a text client remembers text alone: remember(text=...)")
-            data = self._tool("remember", {"text": text, **dated})
+                raise ValueError("a text client remembers text or messages alone: remember(text=...) or remember(messages=[...])")
+            said = {"text": text} if text is not None else {
+                "messages": [{"role": m["role"], "content": m["content"]} for m in messages]}
+            data = self._tool("remember", {**said, **dated})
             return TextResult(tuple(Remembered(r.get("text", ""), tuple(r.get("replaces") or ()),
                                                bool(r.get("already_known")))
                                     for r in data.get("remembered") or ()),
                               bool(data.get("kept_as_text")))
+        if messages is not None:
+            raise ValueError("messages need a text client: Client(text=True)")
         if text is not None:
             if any(x is not None for x in (subject, predicate, kind, confidence, source, replaces)) or value is not _MISSING:
                 raise ValueError("text mode cannot be combined with typed fields; put replaces on each statement")
@@ -848,18 +857,26 @@ class Client:
             args["replaces"] = [{"predicate": r["predicate"], "value": r["value"]} for r in replaces]
         return RememberResult.decode(self._tool("remember", args))
 
-    def ask(self, question: str, *, as_of: str | datetime | None = None) -> list[Memory]:
+    def ask(self, question: str | None = None, *, as_of: str | datetime | None = None,
+            since: str | datetime | None = None) -> list[Memory]:
         """What is believed about `question`, as sentences (text=True only).
         Each Memory lists under `before` what it replaced. `as_of` asks about
-        an earlier time."""
+        an earlier time. Without a question, everything believed about the
+        user (a profile); with `since`, only what was stated after then,
+        newest first."""
         self._need_text("ask")
-        args: dict[str, Any] = {"question": question}
+        args: dict[str, Any] = {}
+        if question:
+            args["question"] = question
         if as_of is not None:
             args["as_of"] = _instant(as_of, "as_of")
+        if since is not None:
+            args["since"] = _instant(since, "since")
         data = self._tool("recall", args)
         return [Memory(m.get("text", ""), m.get("since", ""), int(m.get("days_ago", 0)),
                        tuple(Earlier(e.get("text", ""), e.get("since", "")) for e in m.get("before") or ()),
-                       tuple(Earlier(e.get("text", ""), e.get("since", "")) for e in m.get("elsewhere") or ()))
+                       tuple(Earlier(e.get("text", ""), e.get("since", "")) for e in m.get("elsewhere") or ()),
+                       m.get("said", ""))
                 for m in data.get("memories") or ()]
 
     def forget_text(self, text: str) -> list[str]:

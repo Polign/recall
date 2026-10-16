@@ -6,7 +6,8 @@ before it defines a new predicate (`Config.MatchThreshold`).
 
 ```sh
 go run ./eval/predicate-matching -model nomic-embed-text   # local Ollama
-go run ./eval/predicate-matching -lexical                  # built-in embedder
+go run ./eval/predicate-matching -lexical                  # built-in word search
+go run ./eval/predicate-matching -local                    # built-in model, all-MiniLM-L6-v2
 ```
 
 `pairs.json` holds 25 same-relation pairs and 25 different-relation pairs.
@@ -24,3 +25,17 @@ let a past job replace the current one. The default stays 0.9. Name matching
 is a safety net: with a model embedder it catches about a quarter of
 synonyms, and with the lexical embedder only reordered words. Reuse mostly
 comes from the extraction model, which is shown the predicates in use.
+
+Rerun on 2026-10-16 with the model built into recall (`-local`,
+all-MiniLM-L6-v2), names only:
+
+| Threshold | same merged | wrong merges |
+| --- | --- | --- |
+| 0.80 | 12/25 (48%) | 1/25 (4%) |
+| 0.85 | 9/25 (36%) | 1/25 (4%) |
+| 0.90 | 5/25 (20%) | 0/25 |
+| 0.95 | 1/25 (4%) | 0/25 |
+
+The highest different-relation score is 0.879, under 0.9, so the default
+holds for the built-in model too.
+
