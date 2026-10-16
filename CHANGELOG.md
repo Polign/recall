@@ -52,7 +52,8 @@
   this way re-embeds it without running the extractor again.
 
 - The `personal` starter registry, which seeds the text tools, has
-  single-valued `email`, `work_email` and `phone`. Before, the extraction
+  single-valued `email`, `work_email`, `phone` and `diet`, and multi-valued
+  `allergic_to`. Before, the extraction
   model coined `email` itself as multi-valued, so a new work address stood
   beside the old ones instead of replacing them.
 - Word search drops question words and the user's own name, and matches
@@ -66,6 +67,11 @@
   itself out when the question already calls her by it.
 
 ### Fixed
+
+- The extraction model sometimes recorded one fact from a sentence that
+  states two ("I'm pescatarian now, but no shellfish, I'm allergic" became
+  only the diet). The prompt now says each fact in a sentence is its own
+  statement, with that sentence as the example.
 
 - Forgetting by description ("forget that Maya is allergic to shellfish")
   withdrew nothing when the user's name statement was not among the

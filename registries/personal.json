@@ -1,4 +1,9 @@
 {
+  "allergic_to": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "Something the subject is allergic to"
+  },
   "amount": {
     "cardinality": "single",
     "value_type": "string",
@@ -28,6 +33,11 @@
     "value_type": "string",
     "description": "Something the subject did or that happened, with its date when known",
     "historical": true
+  },
+  "diet": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "How the subject eats now, such as vegetarian or pescatarian"
   },
   "dislikes": {
     "cardinality": "multi",

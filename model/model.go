@@ -273,6 +273,7 @@ Rules:
 - A value names the thing itself, bare and in its usual form: mangoes, jazz, tea, golf, Honda Civic. Not the activity or feeling around it (jazz, not listening to jazz; tea, not drinking tea; steak, not a good steak), so that the same thing is worded the same way every time it comes up.
 - value is short and self-contained, keeps the text's capitalization, and matches the predicate's type. Write a number as plain digits and a boolean as true or false. Resolve relative dates such as "last week" against today's date and write them as YYYY-MM-DD.
 - evidence is an exact excerpt of the text that supports the statement, copied character for character, at most 200 characters.
+- One sentence can hold several facts; record each as its own statement, and never drop one because another from the same sentence was recorded: "I'm pescatarian now, but no shellfish, I'm allergic" is diet pescatarian and allergic_to shellfish.
 - Record only what the text states. Do not guess at facts it leaves out.
 - If no predicate fits anything in the text, return an empty list.`
 }
@@ -301,6 +302,7 @@ Rules:
 - A value names the thing itself, bare and in its usual form: mangoes, jazz, tea, golf, Honda Civic. Not the activity or feeling around it (jazz, not listening to jazz; tea, not drinking tea; steak, not a good steak), so that the same thing is worded the same way every time it comes up.
 - value is short and self-contained and keeps the text's capitalization. Write a number as plain digits and a boolean as true or false. Resolve relative dates such as "last week" against today's date and write them as YYYY-MM-DD.
 - evidence is an exact excerpt of the text that supports the statement, copied character for character, at most 200 characters.
+- One sentence can hold several facts; record each as its own statement, and never drop one because another from the same sentence was recorded: "I'm pescatarian now, but no shellfish, I'm allergic" is diet pescatarian and allergic_to shellfish.
 - Record only what the text states. Do not guess at facts it leaves out.
 - If the text holds nothing worth remembering, return an empty list.`
 }
