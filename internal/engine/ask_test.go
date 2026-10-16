@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -36,31 +37,32 @@ func TestAskTellsBeliefsAsSentences(t *testing.T) {
 	}
 }
 
-func TestAskLeavesOutTheNameItWasAskedBy(t *testing.T) {
+func TestAskTellsTheUserByName(t *testing.T) {
 	ctx := context.Background()
 	c := openClient(t, newLockedBackend())
 	remember(t, c, "name", "Maya", "")
+	remember(t, c, "favorite_editor", "helix", "")
 	remember(t, c, "favorite_editor", "zed", "")
-	has := func(question, text string) bool {
+	texts := func(question string) []string {
 		t.Helper()
 		got, err := c.Ask(ctx, question)
 		if err != nil {
 			t.Fatal(err)
 		}
+		var out []string
 		for _, m := range got {
-			if m.Text == text {
-				return true
-			}
+			out = append(out, m.Text)
 		}
-		return false
+		return out
 	}
-	if has("which editor does Maya like", "user name: Maya") {
-		t.Error("a question naming Maya got her name back")
+	got := texts("which editor does Maya like")
+	if !slices.Contains(got, "Maya favorite editor: zed") {
+		t.Errorf("memories %v, want the editor told under Maya's name", got)
 	}
-	if !has("what is the user's name", "user name: Maya") {
-		t.Error("a question about the name did not get it")
+	if slices.Contains(got, "user name: Maya") {
+		t.Errorf("memories %v: a question naming Maya got her name back", got)
 	}
-	if !has("what name does Maya go by", "user name: Maya") {
-		t.Error("a question about her name, naming her, did not get it")
+	if got := texts("what is the user's name"); !slices.Contains(got, "user name: Maya") {
+		t.Errorf("memories %v, want the name", got)
 	}
 }

@@ -60,9 +60,10 @@
   "Where does Maya live now?" used to rank Maya's name and every email
   address containing "maya" above where she lives.
 
-- `recall(question)` in text mode leaves out the user's name when the
-  question already calls them by it, so "Where does Maya live?" spends its
-  places on answers. A question about the name still gets it.
+- `recall(question)` in text mode tells statements about the user under
+  the user's name when one is known ("Maya lives in: Portland"), so a
+  reader asked about Maya knows each memory is hers, and leaves the name
+  itself out when the question already calls her by it.
 
 ### Fixed
 

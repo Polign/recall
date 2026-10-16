@@ -54,9 +54,20 @@ func (c *Client) AskAt(ctx context.Context, question string, asOf time.Time) ([]
 		return nil, err
 	}
 	out := make([]Memory, 0, len(beliefs))
+	// Statements about the user are told under the user's name when one is
+	// known ("Maya lives in: Portland"), so a reader asked about Maya knows
+	// each memory is hers. The name itself is then left out when the
+	// question already calls her by it: it would lead every answer.
+	who := func(subject string) string { return subject }
+	if names := s.userNames(); len(names) > 0 && strings.TrimSpace(names[0]) != "" {
+		who = func(subject string) string {
+			if normalizeSubject(subject) == DefaultSubject {
+				return names[0]
+			}
+			return subject
+		}
+	}
 	for _, b := range beliefs {
-		// The name a question calls the user by tells the asker nothing
-		// and would take a place an answer could use.
 		if b.Predicate == "name" && normalizeSubject(b.Subject) == DefaultSubject && namedIn(question, b.Value) {
 			continue
 		}
@@ -71,18 +82,22 @@ func (c *Client) AskAt(ctx context.Context, question string, asOf time.Time) ([]
 				continue
 			}
 		}
-		m := Memory{Text: Sentence(b.Subject, b.Predicate, b.Value), Since: b.ObservedAt, EventID: b.EventID}
+		subject := who(b.Subject)
+		if b.Predicate == "name" {
+			subject = b.Subject // "user name: Maya", not "Maya name: Maya"
+		}
+		m := Memory{Text: Sentence(subject, b.Predicate, b.Value), Since: b.ObservedAt, EventID: b.EventID}
 		for _, p := range b.Replaced {
 			text := valueText(p.Value)
 			// A correction across predicates names what it corrected
 			// whole: "user likes: mangoes", not just "mangoes".
 			if p.Predicate != "" && p.Predicate != b.Predicate {
-				text = Sentence(b.Subject, p.Predicate, p.Value)
+				text = Sentence(subject, p.Predicate, p.Value)
 			}
 			m.Before = append(m.Before, Earlier{Text: text, Since: p.ObservedAt})
 		}
 		for _, p := range b.Elsewhere {
-			m.Elsewhere = append(m.Elsewhere, Earlier{Text: Sentence(b.Subject, p.Predicate, p.Value), Since: p.ObservedAt})
+			m.Elsewhere = append(m.Elsewhere, Earlier{Text: Sentence(subject, p.Predicate, p.Value), Since: p.ObservedAt})
 		}
 		out = append(out, m)
 	}
