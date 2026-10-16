@@ -253,3 +253,16 @@ func TestReembed(t *testing.T) {
 		t.Errorf("empty source: %v", err)
 	}
 }
+
+// Word search ranks keyword hits first only when the engine sees
+// recall.LexicalEmbedder itself; a wrapper around it silently fused the two
+// rankings evenly and skipped the question cleanup.
+func TestWordSearchKeepsTheLexicalEmbedderType(t *testing.T) {
+	emb, err := chooseEmbedding("", "", "anthropic:claude-opus-5-5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := emb.Embedder.(recall.LexicalEmbedder); !ok {
+		t.Fatalf("word search embedder is %T, want recall.LexicalEmbedder", emb.Embedder)
+	}
+}

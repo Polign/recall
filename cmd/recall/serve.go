@@ -648,7 +648,7 @@ func cmdServe(c *api, args []string) error {
 	if err != nil {
 		return fmt.Errorf("serve: %w", err)
 	}
-	var embedder recall.Embedder = emb
+	embedder := emb.Embedder
 	extractor, err := newExtractor(*extractModel)
 	if err != nil {
 		return fmt.Errorf("serve: -extract-model: %w", err)

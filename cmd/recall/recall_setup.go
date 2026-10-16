@@ -133,7 +133,7 @@ func cmdRecall(args []string, out io.Writer) error {
 			if err != nil {
 				return fmt.Errorf("%w; run recall setup again", err)
 			}
-			mem, err := newMemoryRuntime(c, cfg.Collection, cfg.Predicates, emb, cfg.Predicates == "" && (cfg.Open || text))
+			mem, err := newMemoryRuntime(c, cfg.Collection, cfg.Predicates, emb.Embedder, cfg.Predicates == "" && (cfg.Open || text))
 			if err != nil {
 				return err
 			}

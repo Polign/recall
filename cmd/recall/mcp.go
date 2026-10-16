@@ -160,7 +160,7 @@ func cmdMCP(c *api, urlGiven bool, args []string) error {
 	if emb, err = fitMCPCollection(backend, collection, emb); err != nil {
 		return fmt.Errorf("mcp: %w", err)
 	}
-	mem, err := newMemoryRuntime(c, *collection, *predicates, emb, openAll)
+	mem, err := newMemoryRuntime(c, *collection, *predicates, emb.Embedder, openAll)
 	if err != nil {
 		return fmt.Errorf("mcp: memory: %w", err)
 	}

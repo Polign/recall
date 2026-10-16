@@ -119,7 +119,7 @@ func reembed(ctx context.Context, b recall.Backend, from string, src embedding, 
 	if _, _, err := fitEmbedding(ctx, b, to, dst); err != nil {
 		return 0, fmt.Errorf("target: %w", err)
 	}
-	reader, err := recall.NewClient(recall.Config{Backend: b, Collection: from, Embedder: src, Open: true})
+	reader, err := recall.NewClient(recall.Config{Backend: b, Collection: from, Embedder: src.Embedder, Open: true})
 	if err != nil {
 		return 0, err
 	}
@@ -139,7 +139,7 @@ func reembed(ctx context.Context, b recall.Backend, from string, src embedding, 
 			return 0, fmt.Errorf("%s returned %d dimensions, expected %d", dst.name(), len(v), dst.dim)
 		}
 	}
-	writer, err := recall.NewClient(recall.Config{Backend: b, Collection: to, Embedder: dst, Open: true})
+	writer, err := recall.NewClient(recall.Config{Backend: b, Collection: to, Embedder: dst.Embedder, Open: true})
 	if err != nil {
 		return 0, err
 	}

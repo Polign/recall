@@ -66,7 +66,7 @@ func cmdExplain(c *api, urlGiven bool, args []string, out io.Writer) error {
 	if *collection == "" {
 		*collection = defaultCollection(emb.spec)
 	}
-	mem, err := newMemoryRuntime(c, *collection, predicates, emb, false)
+	mem, err := newMemoryRuntime(c, *collection, predicates, emb.Embedder, false)
 	if err != nil {
 		return err
 	}

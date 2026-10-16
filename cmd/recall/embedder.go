@@ -19,7 +19,10 @@ const lexicalDim = 256
 // collection is named, as it has since the first release.
 const defaultLexicalCollection = "recall_lexical_v1"
 
-// embedding is how a memory runtime turns text into vectors.
+// embedding is how a memory runtime turns text into vectors. Pass its
+// Embedder field, never the embedding itself, wherever a recall.Embedder is
+// wanted: the engine recognizes recall.LexicalEmbedder by type to rank word
+// search keyword-first, and a wrapper hides it.
 type embedding struct {
 	recall.Embedder
 	// spec names the vector space, as model.ParseEmbed reads it; "" is
