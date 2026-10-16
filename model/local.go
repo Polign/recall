@@ -23,9 +23,15 @@ import (
 // dimensions, about 90 MB, downloaded once on first use.
 const DefaultLocalEmbedModel = "all-minilm-l6-v2"
 
-// maxLocalChars keeps a text well under the model's 512-token limit; a
-// longer text is embedded by its start and still stored and searched whole.
-const maxLocalChars = 1500
+// maxLocalChars is where a text is first cut for the model, which takes at
+// most 512 tokens; a longer text is embedded by its start and still stored
+// and searched whole. Characters only estimate tokens: pasted terminal
+// output can run near one token per character, so a text the model still
+// refuses is cut further (see Embed).
+const maxLocalChars = 1000
+
+// minLocalChars is the shortest a refused text is cut to before giving up.
+const minLocalChars = 64
 
 type localFile struct {
 	path, sha256 string
@@ -237,6 +243,13 @@ func (e *LocalEmbedder) Embed(ctx context.Context, text string) ([]float32, erro
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	out, err := e.pipe.RunPipeline(ctx, []string{text})
+	// The model refuses a text of more than 512 tokens. Each retry keeps
+	// the first 60% of what was refused, so the vector still comes from as
+	// much of the text's start as fits.
+	for err != nil && len(text) > minLocalChars && ctx.Err() == nil {
+		text = cutText(text, len(text)*6/10)
+		out, err = e.pipe.RunPipeline(ctx, []string{text})
+	}
 	if err != nil {
 		return nil, fmt.Errorf("embedder: %s: %w", e.Spec(), err)
 	}

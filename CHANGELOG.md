@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-10-16
+
+### Fixed
+
+- The built-in embedder failed on a text of more than 512 tokens within its
+  first 1000 characters, such as pasted terminal output, which stopped
+  `recall setup -embed-model local` and `recall reembed` partway. A text the
+  model refuses is now cut to 60% and tried again, keeping as much of its
+  start as fits; the first cut is 1000 characters instead of 1500.
+
 ## [0.20.0] - 2026-10-16
 
 ### Added
