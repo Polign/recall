@@ -143,6 +143,16 @@ func (c *Client) RememberTextAt(ctx context.Context, text string, extractor Extr
 		if proposals, err = extractor.Extract(extractCtx, text, vocab); err != nil {
 			return out, err
 		}
+		// A model sometimes records some facts of a text and passes over
+		// others. A sentence no statement quotes gets one more look, on its
+		// own; what that finds is kept when it quotes the text.
+		if missed := uncovered(text, proposals); missed != "" {
+			more, err := extractor.Extract(extractCtx, missed, vocab)
+			if err != nil {
+				return out, err
+			}
+			proposals = append(proposals, newProposals(text, proposals, more)...)
+		}
 	}
 	if len(proposals) > maxProposals {
 		return out, fmt.Errorf("recall: extractor exceeded %d proposals", maxProposals)

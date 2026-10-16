@@ -92,6 +92,14 @@
 
 ### Fixed
 
+- A model sometimes recorded some facts of a text and passed over others
+  ("…so I work at Orca Labs now, same role. My email is
+  maya@orcalabs.com." came back as the employer alone). After extracting,
+  Recall looks for sentences of four or more words that no statement
+  quotes and asks once more about just those; what it finds is kept when it
+  quotes the text. Nothing extra is asked when every sentence is covered,
+  when nothing was found, or for an assistant's lines in a conversation.
+
 - The extraction model sometimes recorded one fact from a sentence that
   states two ("I'm pescatarian now, but no shellfish, I'm allergic" became
   only the diet). The prompt now says each fact in a sentence is its own
