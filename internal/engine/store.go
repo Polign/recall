@@ -1094,7 +1094,11 @@ func (s *Store) append(e Event) error {
 // fused with a lexical search when the database has one. The vector search
 // stays in because it also reaches events too new for the text index.
 func (s *Store) searchEvents(query string, filter map[string]any, limit int) ([]Event, error) {
-	values, err := s.embed(query)
+	vectorQuery := query
+	if s.textFirst {
+		vectorQuery = lexicalQuery(query, s.userNames())
+	}
+	values, err := s.embed(vectorQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -1121,6 +1125,22 @@ func (s *Store) searchEvents(query string, filter map[string]any, limit int) ([]
 		out = append(out, e)
 	}
 	return out, nil
+}
+
+// userNames are the names the user goes by, from the user's current name
+// beliefs; a lookup failure means none.
+func (s *Store) userNames() []string {
+	beliefs, err := s.pairBeliefs(pair{normalizeSubject(DefaultSubject), "name"}, time.Time{})
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, b := range beliefs {
+		if v, ok := b.Value.(string); ok {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // rrfK is the reciprocal rank fusion constant, the usual 60.
