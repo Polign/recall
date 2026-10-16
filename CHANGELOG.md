@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-16
+
 ### Added
 
 - Each memory from text `recall` carries `said`: the sentence of the
