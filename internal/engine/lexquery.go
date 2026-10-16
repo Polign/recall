@@ -5,10 +5,10 @@ import (
 	"unicode"
 )
 
-// lexicalQuery prepares a question for the hashed-word vector search, the
-// one that ranks recent writes before a database's keyword index has them.
-// Stored vectors are the words of each statement ("user lives in
-// Portland"), so a question matches by the words it shares with them:
+// lexicalQuery prepares a question for word search: the hashed-word vectors
+// and, where the database has one, its keyword index. Both index the words
+// of each statement ("user lives in Portland"), so a question matches by
+// the words it shares with them:
 //
 //   - question and filler words ("where", "does", "now") are dropped, since
 //     they match nothing useful and dilute the words that do;
@@ -18,9 +18,10 @@ import (
 //     and the name would otherwise rank every statement that happens to
 //     contain it, such as an email address, above the one asked about.
 //
-// Only the query changes; stored vectors and the keyword search are as
-// before, so no collection needs rebuilding. A question that would be left
-// with no words is searched as asked.
+// It is used for both the vector and the keyword search. Only the query
+// changes; stored vectors and the keyword index are as before, so no
+// collection needs rebuilding. A question that would be left with no words
+// is searched as asked.
 func lexicalQuery(question string, names []string) string {
 	drop := map[string]bool{}
 	for _, n := range names {

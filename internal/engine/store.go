@@ -1094,11 +1094,13 @@ func (s *Store) append(e Event) error {
 // fused with a lexical search when the database has one. The vector search
 // stays in because it also reaches events too new for the text index.
 func (s *Store) searchEvents(query string, filter map[string]any, limit int) ([]Event, error) {
-	vectorQuery := query
+	// With word search, both rankings search the cleaned question: the
+	// keyword index ranks first, and the user's name would otherwise match
+	// every address and handle that contains it.
 	if s.textFirst {
-		vectorQuery = lexicalQuery(query, s.userNames())
+		query = lexicalQuery(query, s.userNames())
 	}
-	values, err := s.embed(vectorQuery)
+	values, err := s.embed(query)
 	if err != nil {
 		return nil, err
 	}
