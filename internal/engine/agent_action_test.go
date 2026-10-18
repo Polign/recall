@@ -71,7 +71,7 @@ func TestCrashBetweenBeginAndEndLeavesTheActionOpen(t *testing.T) {
 	if rc.Fresh || len(rc.PendingActions) != 1 || rc.PendingActions[0].Seq != 2 || rc.PendingActions[0].Key != send.Key {
 		t.Fatalf("pending = %+v", rc.PendingActions)
 	}
-	for _, want := range []string{"## Unfinished actions", "send_email(", "Your car is ready", "[external, key " + send.Key, "never repeat it blindly"} {
+	for _, want := range []string{"## Unfinished actions", "send_email(", "Your car is ready", "[external, key " + send.Key, "never repeat it blindly", "the task is not finished"} {
 		if !strings.Contains(rc.Briefing, want) {
 			t.Errorf("briefing lacks %q:\n%s", want, rc.Briefing)
 		}
@@ -200,7 +200,7 @@ func TestReconcileWithoutAResolver(t *testing.T) {
 	if rep.Open[0].Seq != put.Seq || rep.Open[0].Status != ActionStarted || rep.Open[1].Seq != mail.Seq || rep.Open[1].Status != ActionUnknown {
 		t.Fatalf("open = %+v", rep.Open)
 	}
-	if !strings.Contains(next.Resumed().Briefing, "Run it again with the same key") {
+	if b := next.Resumed().Briefing; !strings.Contains(b, "Run it again with the same key") || !strings.Contains(b, "the task is not finished") {
 		t.Errorf("briefing:\n%s", next.Resumed().Briefing)
 	}
 }

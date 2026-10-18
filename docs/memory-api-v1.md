@@ -104,6 +104,8 @@ A remember answer carries `replaced` for what the write superseded, `related` fo
 
 Separate from the memory verbs, and gated: it needs a backend with leases (section 7). A client checks `agent_enabled` before relying on it.
 
+Beta. The tools and arguments here may change in a minor release, listed in the changelog as a breaking change with a migration note; the agent records they write are stable. See [STABILITY.md](../STABILITY.md).
+
 | Tool | Required arguments | Read-only |
 | --- | --- | --- |
 | agent_resume | agent_id | no |

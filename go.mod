@@ -2,11 +2,13 @@ module github.com/Polign/recall
 
 go 1.27.0
 
+toolchain go1.27.2
+
 require (
 	github.com/anthropics/anthropic-sdk-go v1.78.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/knights-analytics/hugot v0.8.3
-	go.mongodb.org/mongo-driver/v2 v2.2.2
+	go.mongodb.org/mongo-driver/v2 v2.4.2
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
 )
@@ -30,7 +32,7 @@ require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
-	github.com/klauspost/compress v1.18.5 // indirect
+	github.com/klauspost/compress v1.20.3 // indirect
 	github.com/knights-analytics/ortgenai v0.3.4 // indirect
 	github.com/microsoft/onnxruntime/go v0.0.0-20261014085412-9c87bdf2e667 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
@@ -45,7 +47,7 @@ require (
 	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
-	golang.org/x/crypto v0.40.0 // indirect
+	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/exp v0.0.0-20261013213113-2ab7f3cbc5fb // indirect
 	golang.org/x/image v0.47.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect

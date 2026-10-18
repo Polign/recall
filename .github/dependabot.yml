@@ -1,0 +1,19 @@
+# Keeps the Go module, the Python package and the Actions pins current, so a
+# vulnerable dependency shows up as a pull request instead of in a release.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-dependencies:
+        patterns: ["*"]
+  - package-ecosystem: pip
+    directory: /python
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

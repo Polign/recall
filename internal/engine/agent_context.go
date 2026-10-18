@@ -214,6 +214,7 @@ func writePendingActions(b *strings.Builder, acts []Action) {
 		return
 	}
 	b.WriteString("\n## Unfinished actions (settle these before anything else)\n")
+	unconfirmed := false
 	for i, act := range acts {
 		fmt.Fprintf(b, "%d. %s(%s) [%s, key %s] started %s\n", i+1, act.Tool, oneLine(opening(act.Args, 300)), act.Class, act.Key, act.StartedAt.UTC().Format(time.RFC3339))
 		switch {
@@ -222,10 +223,18 @@ func writePendingActions(b *strings.Builder, acts []Action) {
 		case act.Class == ActionIdempotent:
 			b.WriteString("   Interrupted. Run it again with the same key, then end the action with the result.\n")
 		case act.Status == ActionUnknown:
+			unconfirmed = true
 			b.WriteString("   Not known whether this happened. Check before repeating it; never repeat it blindly.\n")
 		default:
+			unconfirmed = true
 			b.WriteString("   Interrupted. It may or may not have happened. Check before repeating it; never repeat it blindly.\n")
 		}
+	}
+	// A model told only "do not repeat it" treats the task as done once
+	// everything else is; an unconfirmed action has to stay in its answer.
+	if unconfirmed {
+		b.WriteString("While any of these is unconfirmed, the task is not finished: do not report it as done, and say in\n" +
+			"your final answer which actions need checking, with their keys.\n")
 	}
 }
 

@@ -221,6 +221,10 @@ defer agent.Release(context.Background())
 briefing := agent.Resumed().Briefing // hand this to the model
 ```
 
+Resume and actions are a beta surface: the calls around the records may still
+change in a minor release, with the change and what to do about it in the
+changelog. The records themselves are stable. See [STABILITY.md](STABILITY.md).
+
 The [resume example](examples/resume) crashes an agent partway through a task
 and continues it in a new process. See [Resuming an agent](docs/reference.md#resuming-an-agent)
 for the full API, and the [Python client guide](python/README.md) for `resume`
@@ -379,6 +383,7 @@ test commands.
 
 ## Documentation
 
+[What is stable and what is beta](STABILITY.md) ·
 [Developer reference](docs/reference.md) ·
 [Resuming an agent](docs/reference.md#resuming-an-agent) ·
 [Connecting through MCP](docs/mcp.md) ·
