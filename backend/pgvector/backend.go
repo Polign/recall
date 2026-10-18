@@ -369,6 +369,22 @@ func (b *Backend) ensureCollection(ctx context.Context, collection string, dim i
 // Put upserts one immutable event ID, creating the collection on first use,
 // and moves the collection's revision in the same transaction.
 func (b *Backend) Put(ctx context.Context, collection, id string, values []float32, metadata map[string]any) error {
+	return b.put(ctx, collection, id, values, metadata, nil)
+}
+
+// PutFenced is Put applied only while the agent's lease is still the
+// writer's: the lease row is read under FOR SHARE in the write's own
+// transaction, so a takeover waits for the write to commit or the write sees
+// the takeover, never both. A fence that no longer holds is reported as
+// recall.ErrLeaseLost with nothing written.
+func (b *Backend) PutFenced(ctx context.Context, collection, id string, values []float32, metadata map[string]any, fence recall.Fence) error {
+	if strings.TrimSpace(fence.Lease) == "" || strings.TrimSpace(fence.Holder) == "" || fence.Epoch == 0 {
+		return fmt.Errorf("pgvector: a lease fence needs a lease name, a holder and an epoch")
+	}
+	return b.put(ctx, collection, id, values, metadata, &fence)
+}
+
+func (b *Backend) put(ctx context.Context, collection, id string, values []float32, metadata map[string]any, fence *recall.Fence) error {
 	if ctx == nil {
 		return fmt.Errorf("pgvector: context must not be nil")
 	}
@@ -397,6 +413,20 @@ func (b *Backend) Put(ctx context.Context, collection, id string, values []float
 		return fmt.Errorf("pgvector: connect: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if fence != nil {
+		// Renewal moves the epoch on, so a newer epoch from the same holder
+		// is its own renewal racing this write. Release leaves the holder but
+		// sets expires_at to the epoch's start, which also fails the check.
+		var held bool
+		err := tx.QueryRow(ctx, "SELECT holder = $3 AND epoch >= $4 AND expires_at > to_timestamp(0) FROM "+b.qualified("recall_leases")+
+			" WHERE collection = $1 AND name = $2 FOR SHARE", collection, fence.Lease, fence.Holder, int64(fence.Epoch)).Scan(&held)
+		if errors.Is(err, pgx.ErrNoRows) || (err == nil && !held) {
+			return fmt.Errorf("%w: write fenced", recall.ErrLeaseLost)
+		}
+		if err != nil {
+			return fmt.Errorf("pgvector: check lease: %w", err)
+		}
+	}
 	// The revision row lock orders writers; the insert then commits with it.
 	if _, err := tx.Exec(ctx, "UPDATE "+b.qualified("recall_collections")+" SET revision = revision + 1 WHERE name = $1", collection); err != nil {
 		return fmt.Errorf("pgvector: put: %w", err)

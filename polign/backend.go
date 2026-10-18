@@ -108,6 +108,31 @@ func (b *Backend) Put(ctx context.Context, collection, id string, values []float
 	return b.do(ctx, http.MethodPut, path+"/vectors/"+url.PathEscape(id), map[string]any{"values": values, "metadata": metadata}, nil)
 }
 
+// PutFenced is Put applied only while the agent's lease is still the
+// writer's: polign_db checks the fence headers against the lease chain and
+// answers 412 when another holder has taken over, which is reported as
+// recall.ErrLeaseLost with nothing written. A server older than the fence
+// ignores the headers, and the write is then guarded only by the client.
+func (b *Backend) PutFenced(ctx context.Context, collection, id string, values []float32, metadata map[string]any, fence recall.Fence) error {
+	path, err := collectionPath(collection)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(id) == "" || id == "." || id == ".." {
+		return fmt.Errorf("polign: event ID is required and cannot be a dot path")
+	}
+	h := http.Header{}
+	h.Set("Polign-Lease-Name", fence.Lease)
+	h.Set("Polign-Lease-Holder", fence.Holder)
+	h.Set("Polign-Lease-Epoch", strconv.FormatUint(fence.Epoch, 10))
+	_, err = b.doRawWith(ctx, http.MethodPut, path+"/vectors/"+url.PathEscape(id), map[string]any{"values": values, "metadata": metadata}, nil, h)
+	var se *StatusError
+	if errors.As(err, &se) && se.StatusCode == http.StatusPreconditionFailed {
+		return fmt.Errorf("%w: %s", recall.ErrLeaseLost, se.Message)
+	}
+	return err
+}
+
 // List returns up to limit exact matches and the exact total, paging internally.
 // Limits up to MaxHistoryEvents+1 support every bounded Recall read, including
 // its overflow probe. Changing totals, duplicate/reordered IDs, or incomplete
@@ -329,6 +354,11 @@ func (b *Backend) do(ctx context.Context, method, path string, body, out any) er
 // doRaw is do that also returns the response body, so a caller can read the
 // details an error response carries.
 func (b *Backend) doRaw(ctx context.Context, method, path string, body, out any) ([]byte, error) {
+	return b.doRawWith(ctx, method, path, body, out, nil)
+}
+
+// doRawWith is doRaw with extra request headers.
+func (b *Backend) doRawWith(ctx context.Context, method, path string, body, out any, headers http.Header) ([]byte, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("polign: context must not be nil")
 	}
@@ -350,6 +380,11 @@ func (b *Backend) doRaw(ctx context.Context, method, path string, body, out any)
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	for k, vs := range headers {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
 	}
 	if b.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+b.apiKey)

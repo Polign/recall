@@ -119,8 +119,13 @@ Separate from the memory verbs, and gated: it needs a backend with leases (secti
 | remove_pointer | agent_id, name | no |
 | list_pointers | agent_id | yes |
 | working_state_history | agent_id | yes |
+| begin_action | agent_id, tool, class | no |
+| end_action | agent_id, seq, status | no |
+| pending_actions | agent_id | yes |
 
-Semantics: `agent_resume` takes the agent's lease and rebuilds its context (working state, pointers, relevant memories, recent turns) within a token budget. Writes fail while the lease is not held. The lease epoch is a fencing token: a process that lost its lease cannot overwrite the holder's writes. `agent_id` is 1 to 128 characters from letters, digits, `.`, `_`, `-`. In Kubernetes mode the server fixes `agent_id` to the pod's sandbox name, so a sandbox can only resume itself.
+Semantics: `agent_resume` takes the agent's lease and rebuilds its context (working state, pointers, relevant memories, recent turns, unfinished actions) within a token budget. Writes fail while the lease is not held. The lease epoch is a fencing token: a process that lost its lease cannot overwrite the holder's writes. On a backend with the Fence capability (section 7) the server checks it on every agent write, so a process that stalled past its lease is refused even when its own clock says the lease is fresh; elsewhere the client checks it before each write.
+
+Actions: a harness calls `begin_action` before each tool call that touches the world and `end_action` after it. `class` is `pure` (reads only), `idempotent` (repeating with the returned `key` does nothing more) or `external` (could happen twice). A crash between the two leaves the action open. On resume, open pure actions are closed as `abandoned`, open external actions are marked `unknown`, and open idempotent actions wait to be run again with the same key; every action still open is listed in `pending_actions` and at the top of the briefing until `end_action` closes it. Recall never runs a tool itself. `agent_id` is 1 to 128 characters from letters, digits, `.`, `_`, `-`. In Kubernetes mode the server fixes `agent_id` to the pod's sandbox name, so a sandbox can only resume itself.
 
 ## 7. Backend capability matrix
 
@@ -133,6 +138,7 @@ Recall runs on a vector store that implements a small interface. The core needs 
 | Lexical search | hybrid ranking (vector + BM25), lexical-only servers | yes | no | yes |
 | Watermark | materialized (cached) reads; without it every read refolds the log | yes | no | yes |
 | Leases | the Resume API | yes | no | yes |
+| Fence | server-side check of the lease epoch on agent writes | yes (polign_db with lease fence headers) | no | yes (checked in the write's transaction) |
 | Front door (`recall serve` key store) | namespace-scoped keys, Kubernetes token exchange. Needs Get only; keys are write-once with permanent tombstones, so no compare-and-swap is required. | yes (0.16) | yes (0.16) | yes |
 | Cost | bytes per idle namespace, cost per thousand cold tenants, scale to zero, warm RSS | measured on polign.com | from vendor sizing guidance | measured when the backend ships |
 

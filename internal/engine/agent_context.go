@@ -22,7 +22,11 @@ type ResumeContext struct {
 	// LeaseHeld is false after a deferred resume: the context is ready, but
 	// writes wait for AcquireLease.
 	LeaseHeld    bool          `json:"lease_held"`
-	WorkingState *WorkingState `json:"working_state,omitempty"`
+	// PendingActions are tool calls a crash left open: begun, never ended,
+	// or ended unknown. Reconcile settles what it can; the rest stay here
+	// and at the top of the briefing.
+	PendingActions []Action      `json:"pending_actions,omitempty"`
+	WorkingState   *WorkingState `json:"working_state,omitempty"`
 	Pointers     []Pointer     `json:"pointers,omitempty"`
 	Outputs      []OutputRef   `json:"outputs,omitempty"`
 	Memories     []Belief      `json:"memories,omitempty"`
@@ -64,6 +68,14 @@ func (a *Agent) load(ctx context.Context, budget int) (ResumeContext, error) {
 	if err != nil {
 		return rc, err
 	}
+	latestAct, err := a.latestAction(ctx, ws.ActionSeq)
+	if err != nil {
+		return rc, err
+	}
+	pending, err := a.PendingActions(ctx)
+	if err != nil {
+		return rc, err
+	}
 	pointers, err := a.Pointers(ctx)
 	if err != nil {
 		return rc, err
@@ -84,9 +96,11 @@ func (a *Agent) load(ctx context.Context, budget int) (ResumeContext, error) {
 	a.mu.Lock()
 	a.state = ws
 	a.turnSeq = latest
+	a.actSeq = latestAct
 	a.mu.Unlock()
 
-	rc.Fresh = len(heads) == 0 && latest == 0 && len(pointers) == 0 && len(outputs) == 0
+	rc.Fresh = len(heads) == 0 && latest == 0 && latestAct == 0 && len(pointers) == 0 && len(outputs) == 0
+	rc.PendingActions = pending
 	rc.TurnSeq = latest
 	if len(heads) > 0 {
 		w := cloneWorkingState(ws)
@@ -125,6 +139,7 @@ func (a *Agent) relevantMemories(ctx context.Context, ws WorkingState) ([]Belief
 func assemble(rc *ResumeContext, turns []Turn, memories []Belief, outputs []OutputRef) {
 	var b strings.Builder
 	writeHeader(&b, rc)
+	writePendingActions(&b, rc.PendingActions)
 	if rc.WorkingState != nil {
 		writeWorkingState(&b, *rc.WorkingState)
 	}
@@ -189,6 +204,29 @@ func writeHeader(b *strings.Builder, rc *ResumeContext) {
 	// to take notes belongs in the tool descriptions and the harness's prompt.
 	fmt.Fprintf(b, "You are agent %s, resuming after your previous process stopped. Continue from your notes and "+
 		"last turns below; check only what you have reason to doubt.\n", rc.AgentID)
+}
+
+// writePendingActions comes straight after the header: an action that may or
+// may not have happened is the one thing the agent must settle before it
+// does anything else.
+func writePendingActions(b *strings.Builder, acts []Action) {
+	if len(acts) == 0 {
+		return
+	}
+	b.WriteString("\n## Unfinished actions (settle these before anything else)\n")
+	for i, act := range acts {
+		fmt.Fprintf(b, "%d. %s(%s) [%s, key %s] started %s\n", i+1, act.Tool, oneLine(opening(act.Args, 300)), act.Class, act.Key, act.StartedAt.UTC().Format(time.RFC3339))
+		switch {
+		case act.Class == ActionPure:
+			b.WriteString("   Interrupted. It changed nothing; run it again if you still need the answer.\n")
+		case act.Class == ActionIdempotent:
+			b.WriteString("   Interrupted. Run it again with the same key, then end the action with the result.\n")
+		case act.Status == ActionUnknown:
+			b.WriteString("   Not known whether this happened. Check before repeating it; never repeat it blindly.\n")
+		default:
+			b.WriteString("   Interrupted. It may or may not have happened. Check before repeating it; never repeat it blindly.\n")
+		}
+	}
 }
 
 func writeWorkingState(b *strings.Builder, ws WorkingState) {

@@ -142,3 +142,63 @@ func TestAgentToolsDeferredResume(t *testing.T) {
 	}
 	mustTool(t, next, "record_turn", map[string]any{"agent_id": "call-1", "role": "assistant", "content": "sorry, we got cut off"})
 }
+
+func TestAgentToolsActionsSurviveACrash(t *testing.T) {
+	polignURL := polignServer(t)
+
+	first := newAgentMCP(t, polignURL)
+	mustTool(t, first, "agent_resume", map[string]any{"agent_id": "shop-1"})
+	read := mustTool(t, first, "begin_action", map[string]any{"agent_id": "shop-1", "tool": "lookup_order", "class": "pure", "args": `{"order":"A-17"}`})
+	mustTool(t, first, "end_action", map[string]any{"agent_id": "shop-1", "seq": read["seq"], "status": "done", "result": "brake pads, ready"})
+	mustTool(t, first, "begin_action", map[string]any{"agent_id": "shop-1", "tool": "search_parts", "class": "pure", "args": `{"q":"rotor"}`})
+	save := mustTool(t, first, "begin_action", map[string]any{"agent_id": "shop-1", "tool": "save_invoice", "class": "idempotent", "args": `{"id":"inv-17"}`})
+	mail := mustTool(t, first, "begin_action", map[string]any{"agent_id": "shop-1", "tool": "send_email", "class": "external", "args": `{"subject":"Your car is ready"}`})
+	if _, err := callTool(t, first, "begin_action", map[string]any{"agent_id": "shop-1", "tool": "charge_card", "args": "{}"}); err == nil {
+		t.Fatal("an action with no class was accepted")
+	}
+	// The process goes away with three actions open. Whether the lease
+	// lapses or is handed over, the records are what the next one reads.
+	first.agents.releaseAll()
+
+	next := newAgentMCP(t, polignURL)
+	rc := mustTool(t, next, "agent_resume", map[string]any{"agent_id": "shop-1"})
+	pending, _ := rc["pending_actions"].([]any)
+	if len(pending) != 2 {
+		t.Fatalf("pending after resume = %v; the pure action should be closed", pending)
+	}
+	byTool := map[string]map[string]any{}
+	for _, p := range pending {
+		m := p.(map[string]any)
+		byTool[m["tool"].(string)] = m
+	}
+	if byTool["save_invoice"]["status"] != "started" || byTool["save_invoice"]["key"] != save["key"] {
+		t.Fatalf("idempotent action = %v, want started with its original key", byTool["save_invoice"])
+	}
+	if byTool["send_email"]["status"] != "unknown" {
+		t.Fatalf("external action = %v, want unknown", byTool["send_email"])
+	}
+	briefing := rc["briefing"].(string)
+	for _, want := range []string{"## Unfinished actions", "Run it again with the same key", "Not known whether this happened"} {
+		if !strings.Contains(briefing, want) {
+			t.Errorf("briefing lacks %q:\n%s", want, briefing)
+		}
+	}
+	if strings.Contains(briefing, "search_parts") {
+		t.Errorf("closed pure action still in the briefing:\n%s", briefing)
+	}
+
+	// The model settles both and the agent is clean.
+	mustTool(t, next, "end_action", map[string]any{"agent_id": "shop-1", "seq": save["seq"], "status": "done", "result": "saved", "resolution": "re-run with the same key"})
+	mustTool(t, next, "end_action", map[string]any{"agent_id": "shop-1", "seq": mail["seq"], "status": "done", "resolution": "found in the sent folder"})
+	if _, err := callTool(t, next, "end_action", map[string]any{"agent_id": "shop-1", "seq": mail["seq"], "status": "done"}); err == nil {
+		t.Fatal("ending an action twice succeeded")
+	}
+	out, err := callTool(t, next, "pending_actions", map[string]any{"agent_id": "shop-1"})
+	if err != nil || out != "[]" {
+		t.Fatalf("pending after settling = %s, %v", out, err)
+	}
+	more := mustTool(t, next, "begin_action", map[string]any{"agent_id": "shop-1", "tool": "lookup_order", "class": "pure"})
+	if more["seq"].(float64) != 5 {
+		t.Fatalf("next action seq = %v, want 5", more["seq"])
+	}
+}

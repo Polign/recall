@@ -17,13 +17,16 @@ import (
 )
 
 // An agent resumes from what it wrote down, not from a snapshot of its
-// process. It keeps four kinds of record in a collection of its own:
+// process. It keeps five kinds of record in a collection of its own:
 //
 //   - one working state: a handoff note to its next instance, superseded on
 //     every update, with each earlier version kept;
 //   - pointers to where its work lives (a branch, an object, an image);
 //   - its turns, verbatim, so the last few can be replayed;
-//   - large tool outputs, kept whole and fetched by reference.
+//   - large tool outputs, kept whole and fetched by reference;
+//   - its actions: each tool call that touches the world, recorded before
+//     it runs and closed when it returns, so a resume knows which ones a
+//     crash left unfinished (agent_action.go).
 //
 // Resume takes the agent's lease, reads those records back, and assembles a
 // context within a token budget. Only the lease holder may write, so two pods
@@ -82,6 +85,21 @@ type LeaseBackend interface {
 	ReleaseLease(ctx context.Context, collection, name, holder string, epoch uint64) error
 }
 
+// Fence names the lease epoch an agent write is made under.
+type Fence struct {
+	Lease  string
+	Holder string
+	Epoch  uint64
+}
+
+// FencedBackend optionally refuses an agent write the lease no longer backs,
+// on the server, so a process that stalled past its lease cannot land a late
+// write over its successor's. PutFenced must fail with an error wrapping
+// ErrLeaseLost when the fence does not hold, and write nothing.
+type FencedBackend interface {
+	PutFenced(ctx context.Context, collection, id string, values []float32, metadata map[string]any, fence Fence) error
+}
+
 // WorkingState is the agent's note to its next instance. Resume always
 // includes it, whole, ahead of everything else, so it should say what a
 // colleague would need to pick the work up: the goal, the plan, what is done,
@@ -102,6 +120,7 @@ type WorkingState struct {
 	// Written by the library; ignored on input.
 	Version   int64     `json:"version,omitempty"`
 	TurnSeq   int64     `json:"turn_seq,omitempty"`
+	ActionSeq int64     `json:"action_seq,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitzero"`
 }
 
@@ -231,6 +250,7 @@ const (
 	recTurn        = "turn"
 	recOutput      = "output"
 	recPointer     = "pointer"
+	recAction      = "action"
 )
 
 // Agent is a resumed agent. Its methods are safe for concurrent use; writes
@@ -246,6 +266,7 @@ type Agent struct {
 	mu      sync.Mutex
 	state   WorkingState
 	turnSeq int64
+	actSeq  int64
 	outSeq  int64
 	closed  bool
 
@@ -259,7 +280,11 @@ func (a *Agent) ID() string { return a.id }
 func (a *Agent) Collection() string { return a.collection }
 
 // Resumed returns the context assembled when the agent was resumed.
-func (a *Agent) Resumed() ResumeContext { return a.resumed }
+func (a *Agent) Resumed() ResumeContext {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.resumed
+}
 
 // Epoch returns the current lease epoch, or zero for an agent that holds
 // no lease.
@@ -370,9 +395,12 @@ func (a *Agent) AcquireLease(ctx context.Context) error {
 			a.state = ws
 		}
 	}
-	var latest int64
+	var latest, latestAct int64
 	if err == nil {
 		latest, err = a.latestTurn(ctx, a.turnSeq)
+	}
+	if err == nil {
+		latestAct, err = a.latestAction(ctx, max(a.actSeq, a.state.ActionSeq))
 	}
 	if err != nil {
 		// Holding a lease this process cannot safely write under helps
@@ -383,6 +411,7 @@ func (a *Agent) AcquireLease(ctx context.Context) error {
 		return err
 	}
 	a.turnSeq = max(a.turnSeq, latest)
+	a.actSeq = max(a.actSeq, latestAct)
 	a.lease = l
 	if !a.req.NoKeepAlive {
 		l.keepAlive()
@@ -438,6 +467,7 @@ func (a *Agent) UpdateWorkingState(ctx context.Context, ws WorkingState) (Workin
 	next := cloneWorkingState(ws)
 	next.Version = a.state.Version + 1
 	next.TurnSeq = a.turnSeq
+	next.ActionSeq = a.actSeq
 	next.UpdatedAt = time.Now().UTC()
 	body, err := json.Marshal(next)
 	if err != nil {
@@ -797,7 +827,15 @@ func (a *Agent) put(ctx context.Context, id, kind, text string, body []byte, ext
 	for k, v := range extra {
 		md[k] = v
 	}
-	return a.c.backend.Put(ctx, a.collection, id, values, md)
+	fb, fenced := a.c.backend.(FencedBackend)
+	if a.lease == nil || !fenced {
+		return a.c.backend.Put(ctx, a.collection, id, values, md)
+	}
+	err = fb.PutFenced(ctx, a.collection, id, values, md, a.lease.fence())
+	if errors.Is(err, ErrLeaseLost) {
+		a.lease.markLost()
+	}
+	return err
 }
 
 func (a *Agent) embed(ctx context.Context, text string) ([]float32, error) {
@@ -913,6 +951,20 @@ func acquireAgentLease(ctx context.Context, lb LeaseBackend, collection string, 
 		ttl = g.TTL
 	}
 	return &agentLease{lb: lb, collection: collection, name: req.AgentID, holder: holder, ttl: ttl, ep: g.Epoch, granted: start}, nil
+}
+
+func (l *agentLease) fence() Fence {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return Fence{Lease: l.name, Holder: l.holder, Epoch: l.ep}
+}
+
+// markLost records a takeover the server reported, so every later write
+// fails at once instead of asking the server again.
+func (l *agentLease) markLost() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lost = true
 }
 
 func (l *agentLease) epoch() uint64 {
