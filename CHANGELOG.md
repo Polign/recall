@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-18
+
 ### Added
 
 - `STABILITY.md` says which surfaces are stable within 0.x and carried into

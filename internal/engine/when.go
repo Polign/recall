@@ -170,7 +170,7 @@ func withObserved(filter map[string]any, from, to time.Time) map[string]any {
 	if from.IsZero() && to.IsZero() {
 		return filter
 	}
-	out := make(map[string]any, len(filter)+1)
+	out := map[string]any{}
 	for k, v := range filter {
 		out[k] = v
 	}
