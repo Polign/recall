@@ -175,3 +175,30 @@ than the output threshold is stored whole and the turn keeps a reference),
 `store_output` and `fetch_output` for large tool results, `set_pointer`,
 `remove_pointer` and `pointers`, and `recent_turns` and
 `working_state_history` to read back.
+
+### Tool calls that touch the world
+
+The records above say what the agent was doing, not whether its last tool
+call happened. Record each call that changes something before it runs, and
+close it when it returns:
+
+```python
+action = agent.begin_action("send_email", "external", {"to": to, "subject": subject})
+result = mailer.send(to, subject)
+agent.end_action(action.seq, "done", result=result)
+```
+
+The class says what running the call again would do: `"pure"` (reads only),
+`"idempotent"` (repeating it with `action.key` does nothing more, so pass
+the key on) or `"external"` (it could happen twice). If the process dies
+between `begin_action` and `end_action`, the call is still open on the next
+resume. Interrupted pure calls are closed for you and external ones are
+marked unknown. Every call still open is in `context.pending_actions` and at
+the top of the briefing, as one to check before repeating.
+
+`agent.reconcile(resolver)` settles them. The resolver gets each open
+action: for an idempotent one it runs the call again with `action.key`; for
+an external one it asks the outside system whether it happened. It returns
+`ActionEnd("done")` or `ActionEnd("failed")`, or None when it cannot tell.
+Each settled outcome is written to the agent's history, so the model sees
+it, and `context` is rebuilt. Recall never runs a tool itself.
