@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-18
+
 ### Added
 
 - Actions: a resumed agent knows which tool calls a crash left unfinished.
