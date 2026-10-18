@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Security
+
+- Release binaries are built with Go 1.27.2. `go.mod` named Go 1.27.0, which
+  the release workflow took as an exact version, so every release so far was
+  built with 1.27.0 and its standard library vulnerabilities in `net/http`,
+  HTTP/2, `crypto/tls` and `net/textproto`. `go.mod` now carries
+  `toolchain go1.27.2`.
+- The MongoDB driver is 2.4.2 (GSSAPI error handling read out of bounds in
+  2.2.2), with `golang.org/x/crypto` 0.52.0 and `klauspost/compress` 1.20.3.
+  `govulncheck` on the release binary now finds no vulnerabilities.
+
 ## [0.21.0] - 2026-10-18
 
 ### Added
