@@ -122,10 +122,11 @@ Separate from the memory verbs, and gated: it needs a backend with leases (secti
 | begin_action | agent_id, tool, class | no |
 | end_action | agent_id, seq, status | no |
 | pending_actions | agent_id | yes |
+| agent_context | agent_id | yes |
 
 Semantics: `agent_resume` takes the agent's lease and rebuilds its context (working state, pointers, relevant memories, recent turns, unfinished actions) within a token budget. Writes fail while the lease is not held. The lease epoch is a fencing token: a process that lost its lease cannot overwrite the holder's writes. On a backend with the Fence capability (section 7) the server checks it on every agent write, so a process that stalled past its lease is refused even when its own clock says the lease is fresh; elsewhere the client checks it before each write.
 
-Actions: a harness calls `begin_action` before each tool call that touches the world and `end_action` after it. `class` is `pure` (reads only), `idempotent` (repeating with the returned `key` does nothing more) or `external` (could happen twice). A crash between the two leaves the action open. On resume, open pure actions are closed as `abandoned`, open external actions are marked `unknown`, and open idempotent actions wait to be run again with the same key; every action still open is listed in `pending_actions` and at the top of the briefing until `end_action` closes it. Recall never runs a tool itself. `agent_id` is 1 to 128 characters from letters, digits, `.`, `_`, `-`. In Kubernetes mode the server fixes `agent_id` to the pod's sandbox name, so a sandbox can only resume itself.
+Actions: a harness calls `begin_action` before each tool call that touches the world and `end_action` after it. `class` is `pure` (reads only), `idempotent` (repeating with the returned `key` does nothing more) or `external` (could happen twice). A crash between the two leaves the action open. On resume, open pure actions are closed as `abandoned`, open external actions are marked `unknown`, and open idempotent actions wait to be run again with the same key; every action still open is listed in `pending_actions` and at the top of the briefing until `end_action` closes it. `agent_context` rebuilds the briefing after a harness has settled them. Recall never runs a tool itself. `agent_id` is 1 to 128 characters from letters, digits, `.`, `_`, `-`. In Kubernetes mode the server fixes `agent_id` to the pod's sandbox name, so a sandbox can only resume itself.
 
 ## 7. Backend capability matrix
 

@@ -26,7 +26,7 @@ var agentTools = map[string]bool{
 	"agent_resume": true, "agent_acquire": true, "agent_release": true, "update_working_state": true, "agent_milestone": true,
 	"record_turn": true, "recent_turns": true, "store_output": true, "fetch_output": true,
 	"set_pointer": true, "remove_pointer": true, "list_pointers": true, "working_state_history": true,
-	"begin_action": true, "end_action": true, "pending_actions": true,
+	"begin_action": true, "end_action": true, "pending_actions": true, "agent_context": true,
 }
 
 type agentRuntime struct {
@@ -214,6 +214,12 @@ func (s *mcpServer) agentTools() []mcpTool {
 			InputSchema: schema(map[string]any{"agent_id": id}, "agent_id"),
 		},
 		{
+			Name:        "agent_context",
+			Title:       "Rebuild the resume context",
+			Description: "The context agent_resume returned, rebuilt from the records as they stand now: call it after settling unfinished actions to get a briefing without them.",
+			InputSchema: schema(map[string]any{"agent_id": id}, "agent_id"),
+		},
+		{
 			Name:        "working_state_history",
 			Title:       "Read working state history",
 			Description: "Earlier versions of the working state, newest first.",
@@ -222,7 +228,7 @@ func (s *mcpServer) agentTools() []mcpTool {
 	}
 	for i := range tools {
 		switch tools[i].Name {
-		case "recent_turns", "fetch_output", "list_pointers", "working_state_history", "pending_actions":
+		case "recent_turns", "fetch_output", "list_pointers", "working_state_history", "pending_actions", "agent_context":
 			tools[i].Annotations = readOnlyTool
 		}
 	}
@@ -346,6 +352,8 @@ func (s *mcpServer) runAgentTool(ctx context.Context, name string, args json.Raw
 			return "", err
 		}
 		return marshalResult(a.EndAction(ctx, in.Seq, recall.ActionEnd{Status: recall.ActionStatus(in.Status), Result: in.Result, Error: in.Error, Resolution: in.Resolution}))
+	case "agent_context":
+		return marshalResult(a.Refresh(ctx))
 	case "pending_actions":
 		acts, err := a.PendingActions(ctx)
 		return marshalResult(nonNil(acts), err)

@@ -262,15 +262,25 @@ func (a *Agent) Reconcile(ctx context.Context, resolve Resolver) (ReconcileRepor
 	if len(rep.Closed) > 0 {
 		// The briefing was assembled before these closed; rebuild it so the
 		// model is not told to settle what is already settled.
-		rc, err := a.load(ctx, a.req.TokenBudget)
-		if err != nil {
+		if _, err := a.Refresh(ctx); err != nil {
 			return rep, err
 		}
-		a.mu.Lock()
-		a.resumed = rc
-		a.mu.Unlock()
 	}
 	return rep, nil
+}
+
+// Refresh rebuilds the resume context from the records as they stand now,
+// for a harness that settled actions itself after the resume. Resumed
+// returns the new context afterwards.
+func (a *Agent) Refresh(ctx context.Context) (ResumeContext, error) {
+	rc, err := a.load(ctx, a.req.TokenBudget)
+	if err != nil {
+		return ResumeContext{}, err
+	}
+	a.mu.Lock()
+	a.resumed = rc
+	a.mu.Unlock()
+	return rc, nil
 }
 
 // actionKey is stable for an action across every process that resumes it.
