@@ -1,6 +1,13 @@
 # Durable actions: intents, reconcile, fencing
 
-Status: proposed 2026-10-17. Nothing built.
+Status: built 2026-10-17 on branch `at/durable-actions` (polign_db, recall,
+polign). Not released. Differences from the design below: the fence is three
+headers (`Polign-Lease-Name`, `-Holder`, `-Epoch`), because holder strings
+contain colons, and it passes a newer epoch from the same holder, because
+renewal moves the epoch on. Reconcile records each settled outcome as a tool
+turn, which the kill test showed is needed. The kill test ran 540 trials;
+see `polign/python/recall-langgraph/bench/README.md`. The real-model gate
+pass has not run.
 
 ## Goal
 
