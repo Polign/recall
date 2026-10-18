@@ -9,7 +9,10 @@
 #
 #   docker build -f deploy/container/Dockerfile -t ghcr.io/polign/recall:dev .
 
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
+# The image pins GOTOOLCHAIN=local; auto lets a newer go.mod requirement
+# fetch its toolchain instead of failing the build.
+ENV GOTOOLCHAIN=auto
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
