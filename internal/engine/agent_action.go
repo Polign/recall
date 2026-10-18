@@ -253,6 +253,9 @@ func (a *Agent) Reconcile(ctx context.Context, resolve Resolver) (ReconcileRepor
 		if err != nil {
 			return rep, err
 		}
+		if err := a.recordSettled(ctx, closed); err != nil {
+			return rep, err
+		}
 		if closed.Status.open() {
 			rep.Open = append(rep.Open, closed)
 		} else {
@@ -267,6 +270,34 @@ func (a *Agent) Reconcile(ctx context.Context, resolve Resolver) (ReconcileRepor
 		}
 	}
 	return rep, nil
+}
+
+// recordSettled writes a done or failed outcome reached after a crash as a
+// tool turn, so the model reads what happened in its history. Without it the
+// action is closed but its result is nowhere the model looks, and an agent
+// that sees its own call with no result makes the call again.
+func (a *Agent) recordSettled(ctx context.Context, act Action) error {
+	if act.Status != ActionDone && act.Status != ActionFailed {
+		return nil
+	}
+	_, err := a.RecordTurn(ctx, Turn{Role: "tool", Name: act.Tool, Content: settledText(act), Brief: settledBrief(act)})
+	return err
+}
+
+func settledText(act Action) string {
+	text := act.Result
+	if act.Status == ActionFailed {
+		text = strings.TrimSpace("failed: " + act.Error)
+	}
+	if text == "" {
+		text = string(act.Status)
+	}
+	return text
+}
+
+func settledBrief(act Action) string {
+	b := fmt.Sprintf("(settled after a crash: %s; %s) %s", act.Status, orDash(act.Resolution), opening(settledText(act), 300))
+	return opening(b, maxBriefBytes-8)
 }
 
 // Refresh rebuilds the resume context from the records as they stand now,

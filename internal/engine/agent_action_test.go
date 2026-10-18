@@ -141,8 +141,15 @@ func TestReconcileSettlesEachClassItsOwnWay(t *testing.T) {
 	_ = pure
 	_ = mail
 
-	// The briefing is rebuilt: only the unconfirmed SMS is left to settle.
+	// What was settled is in the history, so the model sees the email went
+	// out instead of seeing its own call with no result.
 	rc := next.Resumed()
+	for _, want := range []string{"[tool send_email", "settled after a crash: done; found in the sent log", "[tool save_quote", "saved"} {
+		if !strings.Contains(rc.Briefing, want) {
+			t.Errorf("briefing lacks %q:\n%s", want, rc.Briefing)
+		}
+	}
+	// The briefing is rebuilt: only the unconfirmed SMS is left to settle.
 	if len(rc.PendingActions) != 1 || !strings.Contains(rc.Briefing, "send_sms(") || strings.Contains(rc.Briefing, "send_email(") {
 		t.Fatalf("after reconcile: pending %+v\n%s", rc.PendingActions, rc.Briefing)
 	}

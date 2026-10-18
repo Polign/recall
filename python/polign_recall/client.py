@@ -1151,7 +1151,9 @@ class ResumedAgent:
         return [Action.decode(a) for a in self._call("pending_actions") or []]
 
     def reconcile(self, resolver: Callable[[Action], ActionEnd | None] | None = None) -> ReconcileReport:
-        """Settle the actions a crash left open, then rebuild `context`.
+        """Settle the actions a crash left open, then rebuild `context`. Each
+        action settled done or failed is also recorded as a tool turn, so the
+        model sees the outcome in its history.
 
         The resume already closed interrupted pure actions and marked
         external ones "unknown". `resolver` is called for each action still
@@ -1178,8 +1180,16 @@ class ResumedAgent:
                                              resolution=(end.resolution if end else "") or "could not tell whether it happened")
                 still.append(action)
                 continue
-            closed.append(self.end_action(action.seq, end.status, result=end.result or None,
-                                          error=end.error or None, resolution=end.resolution or None))
+            ended = self.end_action(action.seq, end.status, result=end.result or None,
+                                    error=end.error or None, resolution=end.resolution or None)
+            if ended.status in ("done", "failed"):
+                # Put the outcome in the history the model reads; a closed
+                # action with no visible result invites the same call again.
+                text = ended.result if ended.status == "done" else f"failed: {ended.error}".strip()
+                text = text or ended.status
+                brief = f"(settled after a crash: {ended.status}; {ended.resolution or '-'}) {text[:300]}"
+                self.record_turn("tool", text, ended.tool, brief=brief[:4000])
+            closed.append(ended)
         if closed:
             self.refresh()
         return ReconcileReport(closed=tuple(closed), open=tuple(still))
