@@ -82,6 +82,20 @@ docker run -d -e POSTGRES_PASSWORD=recall -p 5433:5432 pgvector/pgvector:pg17
 RECALL_PGVECTOR_URL=postgres://postgres:recall@localhost:5433/postgres go test ./backend/pgvector
 ```
 
+The MongoDB backend reads `RECALL_MONGODB_URL`, and each test uses a database
+of its own that it drops afterwards. Run it against a single-node replica set,
+where fenced writes are transactions, and against a standalone server, where
+they are not:
+
+```sh
+docker run -d -p 27017:27017 mongo:8.0 --replSet rs0 --bind_ip_all
+docker exec <container> mongosh --eval 'rs.initiate({_id:"rs0",members:[{_id:0,host:"localhost:27017"}]})'
+RECALL_MONGODB_URL='mongodb://localhost:27017/?directConnection=true' go test ./backend/mongodb
+
+docker run -d -p 27018:27017 mongo:8.0
+RECALL_MONGODB_URL=mongodb://localhost:27018/ go test ./backend/mongodb
+```
+
 To run only the memory implementation or verify an audit fixture:
 
 ```sh

@@ -163,7 +163,7 @@ func (b *Backend) Put(ctx context.Context, collection, id string, values []float
 	if len(values) == 0 {
 		return fmt.Errorf("qdrant: refusing to store an event with no vector")
 	}
-	payload := make(map[string]any, len(metadata)+1)
+	payload := map[string]any{}
 	for k, v := range metadata {
 		payload[k] = v
 	}

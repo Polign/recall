@@ -13,7 +13,9 @@ import (
 
 // The agent tools let a harness resume an agent from its own records instead
 // of a snapshot: agent_resume takes the agent's lease and returns the context
-// to start from, and the rest write what the next resume will read. The
+// to start from, and the rest write what the next resume will read.
+// begin_action and end_action bracket each tool call that touches the world,
+// so a resume knows which calls a crash left unfinished. The
 // session holds each resumed agent, and its lease, until agent_release or
 // until the client closes the session.
 //
@@ -24,6 +26,7 @@ var agentTools = map[string]bool{
 	"agent_resume": true, "agent_acquire": true, "agent_release": true, "update_working_state": true, "agent_milestone": true,
 	"record_turn": true, "recent_turns": true, "store_output": true, "fetch_output": true,
 	"set_pointer": true, "remove_pointer": true, "list_pointers": true, "working_state_history": true,
+	"begin_action": true, "end_action": true, "pending_actions": true, "agent_context": true,
 }
 
 type agentRuntime struct {
@@ -176,6 +179,47 @@ func (s *mcpServer) agentTools() []mcpTool {
 			InputSchema: schema(map[string]any{"agent_id": id}, "agent_id"),
 		},
 		{
+			Name:  "begin_action",
+			Title: "Record an action before it runs",
+			Description: "Call before any tool call that touches the world, and run the tool only if this succeeds. If this process dies before " +
+				"end_action, the next resume lists the action as unfinished, so it is checked instead of repeated. class says what " +
+				"running it again would do: pure (reads only; safe to repeat), idempotent (repeating with the same key does nothing more; " +
+				"pass the returned key to the tool), external (could happen twice: send, post, charge, delete; never repeated blindly). " +
+				"Returns seq and key.",
+			InputSchema: schema(map[string]any{
+				"agent_id": id,
+				"tool":     str("the tool about to run"),
+				"class":    map[string]any{"type": "string", "enum": []string{"pure", "idempotent", "external"}},
+				"args":     str("the call's arguments, usually JSON"),
+			}, "agent_id", "tool", "class"),
+		},
+		{
+			Name:  "end_action",
+			Title: "Record how an action ended",
+			Description: "Close an action begun with begin_action: done or failed with its result, or, settling an unfinished action after a " +
+				"resume, abandoned (it changed nothing) or unknown (still cannot tell). An action already closed cannot be ended again.",
+			InputSchema: schema(map[string]any{
+				"agent_id":   id,
+				"seq":        map[string]any{"type": "integer", "description": "the action's seq from begin_action"},
+				"status":     map[string]any{"type": "string", "enum": []string{"done", "failed", "abandoned", "unknown"}},
+				"result":     str("what the tool returned"),
+				"error":      str("why it failed"),
+				"resolution": str("for an unfinished action: how you settled it, such as found in the sent folder"),
+			}, "agent_id", "seq", "status"),
+		},
+		{
+			Name:        "pending_actions",
+			Title:       "List unfinished actions",
+			Description: "Actions begun and never ended, or ended unknown, oldest first. Settle each before doing anything else.",
+			InputSchema: schema(map[string]any{"agent_id": id}, "agent_id"),
+		},
+		{
+			Name:        "agent_context",
+			Title:       "Rebuild the resume context",
+			Description: "The context agent_resume returned, rebuilt from the records as they stand now: call it after settling unfinished actions to get a briefing without them.",
+			InputSchema: schema(map[string]any{"agent_id": id}, "agent_id"),
+		},
+		{
 			Name:        "working_state_history",
 			Title:       "Read working state history",
 			Description: "Earlier versions of the working state, newest first.",
@@ -184,7 +228,7 @@ func (s *mcpServer) agentTools() []mcpTool {
 	}
 	for i := range tools {
 		switch tools[i].Name {
-		case "recent_turns", "fetch_output", "list_pointers", "working_state_history":
+		case "recent_turns", "fetch_output", "list_pointers", "working_state_history", "pending_actions", "agent_context":
 			tools[i].Annotations = readOnlyTool
 		}
 	}
@@ -209,7 +253,11 @@ func (s *mcpServer) runAgentTool(ctx context.Context, name string, args json.Raw
 		if err := a.AcquireLease(ctx); err != nil {
 			return "", err
 		}
-		return marshal(map[string]any{"acquired": true, "epoch": a.Epoch()})
+		rep, err := a.Reconcile(ctx, nil)
+		if err != nil {
+			return "", err
+		}
+		return marshal(map[string]any{"acquired": true, "epoch": a.Epoch(), "pending_actions": nonNil(rep.Open), "briefing": a.Resumed().Briefing})
 	}
 	if name == "agent_release" {
 		s.agents.mu.Lock()
@@ -289,6 +337,26 @@ func (s *mcpServer) runAgentTool(ctx context.Context, name string, args json.Raw
 			ps = []recall.Pointer{}
 		}
 		return marshalResult(ps, err)
+	case "begin_action":
+		var in struct{ Tool, Class, Args string }
+		if err := json.Unmarshal(args, &in); err != nil {
+			return "", err
+		}
+		return marshalResult(a.BeginAction(ctx, in.Tool, recall.ActionClass(in.Class), in.Args))
+	case "end_action":
+		var in struct {
+			Seq                               int64
+			Status, Result, Error, Resolution string
+		}
+		if err := json.Unmarshal(args, &in); err != nil {
+			return "", err
+		}
+		return marshalResult(a.EndAction(ctx, in.Seq, recall.ActionEnd{Status: recall.ActionStatus(in.Status), Result: in.Result, Error: in.Error, Resolution: in.Resolution}))
+	case "agent_context":
+		return marshalResult(a.Refresh(ctx))
+	case "pending_actions":
+		acts, err := a.PendingActions(ctx)
+		return marshalResult(nonNil(acts), err)
 	case "working_state_history":
 		var in struct{ Limit int }
 		if err := json.Unmarshal(args, &in); err != nil {
@@ -338,6 +406,16 @@ func (s *mcpServer) toolAgentResume(ctx context.Context, args json.RawMessage) (
 	}
 	s.agents.agents[in.AgentID] = a
 	s.agents.mu.Unlock()
+	// Settle what can be settled without the outside world before the model
+	// reads the briefing: interrupted pure actions are closed, and external
+	// ones are marked unknown. Idempotent ones wait for the harness or the
+	// model to run them again with their key. A deferred resume holds no
+	// lease yet, so it reconciles in agent_acquire.
+	if a.LeaseHeld() {
+		if _, err := a.Reconcile(ctx, nil); err != nil {
+			return "", err
+		}
+	}
 	return marshal(a.Resumed())
 }
 
@@ -381,6 +459,14 @@ func toolUpdateWorkingState(ctx context.Context, a *recall.Agent, args json.RawM
 		return "", err
 	}
 	return marshalResult(a.UpdateWorkingState(ctx, next))
+}
+
+// nonNil keeps an empty list a JSON [] rather than null.
+func nonNil[T any](v []T) []T {
+	if v == nil {
+		return []T{}
+	}
+	return v
 }
 
 func marshalResult[T any](v T, err error) (string, error) {

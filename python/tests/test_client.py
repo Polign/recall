@@ -7,7 +7,7 @@ import time
 import unittest
 import unittest.mock
 
-from polign_recall import Client, Earlier, Memory, PriorValue, RecallError, Remembered, ResumeContext, TextResult, WorkingState
+from polign_recall import ActionEnd, Client, Earlier, Memory, PriorValue, RecallError, Remembered, ResumeContext, TextResult, WorkingState
 
 
 FAKE = r'''
@@ -253,6 +253,59 @@ class AgentIntegrationTests(unittest.TestCase):
                 time.sleep(0.5)
             self.assertTrue(agent.lease_held)
             self.assertEqual(agent.record_turn("assistant", "sorry, we got cut off").seq, 1)
+            agent.release()
+
+    def test_actions_a_crash_left_open_are_reconciled(self):
+        agent_id = "py-agent-" + os.urandom(4).hex()
+        crashed = self.connect()
+        agent = crashed.resume(agent_id, lease_ttl=5)
+        done = agent.begin_action("lookup_order", "pure", {"order": "A-17"})
+        agent.end_action(done.seq, "done", result={"status": "ready"})
+        agent.begin_action("search_parts", "pure", {"q": "rotor"})
+        save = agent.begin_action("save_invoice", "idempotent", {"id": "inv-17"})
+        mail = agent.begin_action("send_email", "external", {"subject": "Your car is ready"})
+        sms = agent.begin_action("send_sms", "external", {"body": "ready"})
+        with self.assertRaises(ValueError):
+            agent.begin_action("charge_card", "maybe")
+        # The process dies with four actions open and its lease still live.
+        crashed._process.kill()
+        crashed.close()
+
+        with self.connect() as client:
+            agent = client.resume(agent_id, defer_lease=True)
+            self.assertEqual([a.tool for a in agent.context.pending_actions],
+                             ["search_parts", "save_invoice", "send_email", "send_sms"])
+            deadline = time.monotonic() + 15
+            while not agent.acquire():
+                self.assertLess(time.monotonic(), deadline, "lease never became free")
+                time.sleep(0.5)
+            # Acquiring closed the pure action and marked the external ones unknown.
+            pending = {a.tool: a for a in agent.context.pending_actions}
+            self.assertEqual(set(pending), {"save_invoice", "send_email", "send_sms"})
+            self.assertEqual(pending["save_invoice"].status, "started")
+            self.assertEqual(pending["send_email"].status, "unknown")
+            self.assertIn("Unfinished actions", agent.context.briefing)
+
+            reran = []
+
+            def resolve(action):
+                if action.class_ == "idempotent":
+                    reran.append(action.key)
+                    return ActionEnd("done", result="saved", resolution="re-run with the same key")
+                if action.tool == "send_email":
+                    return ActionEnd("done", resolution="found in the sent folder")
+                return None  # the SMS gateway keeps no log
+
+            report = agent.reconcile(resolve)
+            self.assertEqual(reran, [save.key])
+            self.assertEqual(sorted(a.tool for a in report.closed), ["save_invoice", "send_email"])
+            self.assertEqual([a.seq for a in report.open], [sms.seq])
+            self.assertEqual([a.tool for a in agent.context.pending_actions], ["send_sms"])
+            self.assertNotIn("send_email(", agent.context.briefing)
+            self.assertIn("send_sms(", agent.context.briefing)
+            agent.end_action(sms.seq, "failed", resolution="carrier shows nothing; will resend")
+            self.assertEqual(agent.pending_actions(), [])
+            self.assertEqual(agent.begin_action("lookup_order", "pure").seq, mail.seq + 2)
             agent.release()
 
     def test_closing_the_client_hands_the_lease_over(self):

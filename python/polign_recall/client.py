@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field, fields
 from datetime import datetime
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 Value = str | float | bool
 _MISSING = object()
@@ -190,6 +190,7 @@ class WorkingState:
     # Written by the server.
     version: int = 0
     turn_seq: int = 0
+    action_seq: int = 0
     updated_at: str = ""
 
     @classmethod
@@ -264,6 +265,64 @@ class Pointer:
         return cls(**known)
 
 
+ACTION_CLASSES = ("pure", "idempotent", "external")
+
+
+@dataclass(frozen=True)
+class Action:
+    """One tool call recorded around its run. `begin_action` writes it before
+    the tool runs and `end_action` closes it; one a crash left open is listed
+    in `ResumeContext.pending_actions` and at the top of the briefing.
+
+    `class_` is what running the tool again would do: "pure" (reads only),
+    "idempotent" (repeating with `key` does nothing more; pass `key` to the
+    tool) or "external" (could happen twice). `status` is "started",
+    "done", "failed", "abandoned" or "unknown"; started and unknown are open.
+    """
+    seq: int
+    tool: str
+    class_: str
+    key: str
+    status: str
+    args: str = ""
+    result: str = ""
+    error: str = ""
+    args_ref: str = ""
+    result_ref: str = ""
+    resolution: str = ""
+    epoch: int = 0
+    started_at: str = ""
+    ended_at: str = ""
+
+    @property
+    def open(self) -> bool:
+        return self.status in ("started", "unknown")
+
+    @classmethod
+    def decode(cls, data: Any) -> Action:
+        data = dict(data or {})
+        if "class" in data:
+            data["class_"] = data.pop("class")
+        return cls(**{"seq": 0, "tool": "", "class_": "", "key": "", "status": "", **_known(cls, data)})
+
+
+@dataclass(frozen=True)
+class ActionEnd:
+    """How a resolver settled an action. `status` is "done", "failed",
+    "abandoned" or "unknown"."""
+    status: str
+    result: str = ""
+    error: str = ""
+    resolution: str = ""
+
+
+@dataclass(frozen=True)
+class ReconcileReport:
+    """What `ResumedAgent.reconcile` closed, and what is still open."""
+    closed: tuple[Action, ...] = ()
+    open: tuple[Action, ...] = ()
+
+
 @dataclass(frozen=True)
 class ResumeContext:
     """What `Client.resume` returns: the agent's records, trimmed to the token
@@ -274,6 +333,8 @@ class ResumeContext:
     epoch: int = 0
     # False after resume(defer_lease=True) until the agent's acquire() succeeds.
     lease_held: bool = True
+    # Tool calls a crash left open. Settle them before anything else.
+    pending_actions: tuple[Action, ...] = ()
     working_state: WorkingState | None = None
     pointers: tuple[Pointer, ...] = ()
     outputs: tuple[OutputRef, ...] = ()
@@ -290,6 +351,7 @@ class ResumeContext:
         known = {"agent_id": "", "fresh": False, "briefing": "", **_known(cls, data)}
         ws = known.get("working_state")
         known["working_state"] = WorkingState.decode(ws) if ws else None
+        known["pending_actions"] = tuple(Action.decode(a) for a in known.get("pending_actions") or ())
         known["pointers"] = tuple(Pointer.decode(p) for p in known.get("pointers") or ())
         known["outputs"] = tuple(OutputRef.decode(o) for o in known.get("outputs") or ())
         known["memories"] = tuple(_belief(b) for b in known.get("memories") or ())
@@ -1053,7 +1115,84 @@ class ResumedAgent:
                 return False
             raise
         self._lease_held = True
+        # Acquiring settled what it could; the context it read before did not
+        # see that, nor what the previous holder wrote after it.
+        self.refresh()
         return True
+
+    def refresh(self) -> ResumeContext:
+        """Rebuild `context` from the records as they stand now, for example
+        after settling unfinished actions, and return it."""
+        self.context = ResumeContext.decode(self._call("agent_context"))
+        return self.context
+
+    def begin_action(self, tool: str, class_: str, args: Any = None) -> Action:
+        """Record a tool call before it runs; run the tool only if this
+        returns. `args` may be a string or anything JSON can encode. Pass the
+        returned `key` to an idempotent tool, so that running it again after
+        a crash does nothing more."""
+        if class_ not in ACTION_CLASSES:
+            raise ValueError(f"class_ must be one of {', '.join(ACTION_CLASSES)}, got {class_!r}")
+        if args is not None and not isinstance(args, str):
+            args = json.dumps(args, sort_keys=True, default=str)
+        return Action.decode(self._call("begin_action", tool=tool, **{"class": class_}, args=args))
+
+    def end_action(self, seq: int, status: str, result: Any = None, error: str | None = None,
+                   resolution: str | None = None) -> Action:
+        """Close an open action: "done" or "failed" after it ran, or, settling
+        one a crash left open, "abandoned" or "unknown"."""
+        if result is not None and not isinstance(result, str):
+            result = json.dumps(result, sort_keys=True, default=str)
+        return Action.decode(self._call("end_action", seq=seq, status=status, result=result,
+                                        error=error, resolution=resolution))
+
+    def pending_actions(self) -> list[Action]:
+        """Actions begun and never ended, or ended unknown, oldest first."""
+        return [Action.decode(a) for a in self._call("pending_actions") or []]
+
+    def reconcile(self, resolver: Callable[[Action], ActionEnd | None] | None = None) -> ReconcileReport:
+        """Settle the actions a crash left open, then rebuild `context`. Each
+        action settled done or failed is also recorded as a tool turn, so the
+        model sees the outcome in its history.
+
+        The resume already closed interrupted pure actions and marked
+        external ones "unknown". `resolver` is called for each action still
+        open: for an idempotent one it should run the tool again with
+        `action.key` and return ActionEnd("done", result); for an external
+        one it should check the outside system and return "done" or
+        "failed" if it can tell, or None (or "unknown") if it cannot. Without
+        a resolver, nothing changes and every open action stays in the
+        briefing. Recall never runs a tool itself.
+        """
+        closed: list[Action] = []
+        still: list[Action] = []
+        for action in self.pending_actions():
+            if action.class_ == "pure":
+                end: ActionEnd | None = ActionEnd("abandoned", resolution="interrupted; pure, not run again")
+            elif resolver is None:
+                still.append(action)
+                continue
+            else:
+                end = resolver(action)
+            if end is None or end.status == "unknown":
+                if action.status != "unknown":
+                    action = self.end_action(action.seq, "unknown",
+                                             resolution=(end.resolution if end else "") or "could not tell whether it happened")
+                still.append(action)
+                continue
+            ended = self.end_action(action.seq, end.status, result=end.result or None,
+                                    error=end.error or None, resolution=end.resolution or None)
+            if ended.status in ("done", "failed"):
+                # Put the outcome in the history the model reads; a closed
+                # action with no visible result invites the same call again.
+                text = ended.result if ended.status == "done" else f"failed: {ended.error}".strip()
+                text = text or ended.status
+                brief = f"(settled after a crash: {ended.status}; {ended.resolution or '-'}) {text[:300]}"
+                self.record_turn("tool", text, ended.tool, brief=brief[:4000])
+            closed.append(ended)
+        if closed:
+            self.refresh()
+        return ReconcileReport(closed=tuple(closed), open=tuple(still))
 
     def _call(self, tool: str, /, **args: Any) -> Any:
         try:

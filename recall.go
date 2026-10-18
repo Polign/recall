@@ -479,7 +479,7 @@ const MaxRecall = engine.MaxRecall
 // --- resuming agents ----------------------------------------------------------
 
 // Agent is a resumed agent: it holds the agent's lease and writes its working
-// state, pointers, turns and outputs. Obtain one from Client.Resume.
+// state, pointers, turns, outputs and actions. Obtain one from Client.Resume.
 type Agent = engine.Agent
 
 // ResumeRequest names the agent to resume and how to build its context.
@@ -516,6 +516,46 @@ const (
 // LeaseBackend optionally grants per-agent leases. Resume requires it unless
 // ResumeRequest.Unleased is set.
 type LeaseBackend = engine.LeaseBackend
+
+// FencedBackend optionally refuses, on the server, an agent write its lease
+// no longer backs. polign_db and pgvector implement it.
+type FencedBackend = engine.FencedBackend
+
+// Fence names the lease epoch an agent write is made under.
+type Fence = engine.Fence
+
+// Action is one tool call recorded around its run, so a resume knows which
+// calls a crash left unfinished. See Agent.BeginAction and Agent.Reconcile.
+type Action = engine.Action
+
+// ActionClass says what running a tool again would do.
+type ActionClass = engine.ActionClass
+
+// ActionStatus is where an action stands.
+type ActionStatus = engine.ActionStatus
+
+// ActionEnd is how an action finished.
+type ActionEnd = engine.ActionEnd
+
+// Resolver settles an action a crash left open: it runs an idempotent one
+// again with its Key, or checks whether an external one happened.
+type Resolver = engine.Resolver
+
+// ReconcileReport lists the actions Reconcile closed and those still open.
+type ReconcileReport = engine.ReconcileReport
+
+// Action classes and statuses.
+const (
+	ActionPure       = engine.ActionPure
+	ActionIdempotent = engine.ActionIdempotent
+	ActionExternal   = engine.ActionExternal
+
+	ActionStarted   = engine.ActionStarted
+	ActionDone      = engine.ActionDone
+	ActionFailed    = engine.ActionFailed
+	ActionAbandoned = engine.ActionAbandoned
+	ActionUnknown   = engine.ActionUnknown
+)
 
 // LeaseGrant is one held lease epoch; the epoch is the fencing token.
 type LeaseGrant = engine.LeaseGrant

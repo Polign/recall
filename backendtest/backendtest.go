@@ -38,6 +38,7 @@ func Run(t *testing.T, newBackend func(t *testing.T) recall.Backend) {
 	t.Run("TextSearch", func(t *testing.T) { textSearch(t, newBackend(t), collection(t)) })
 	t.Run("Watermark", func(t *testing.T) { watermark(t, newBackend(t), collection(t)) })
 	t.Run("Leases", func(t *testing.T) { leases(t, newBackend(t), collection(t)) })
+	t.Run("Fence", func(t *testing.T) { fence(t, newBackend(t), collection(t)) })
 	t.Run("Agent", func(t *testing.T) { agent(t, newBackend(t), collection(t)) })
 }
 
@@ -501,5 +502,53 @@ func agent(t *testing.T, b recall.Backend, c string) {
 		if err := again.Release(ctx); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// fence checks a FencedBackend refuses a superseded holder's write, and only
+// that: the holder's own write racing its renewal still lands.
+func fence(t *testing.T, b recall.Backend, c string) {
+	t.Helper()
+	ctx := t.Context()
+	fb, ok := b.(recall.FencedBackend)
+	lb, leased := b.(recall.LeaseBackend)
+	if !ok || !leased {
+		t.Skip("backend does not implement recall.FencedBackend and recall.LeaseBackend")
+	}
+	v := []float32{1, 0, 0, 0}
+	md := func(id string) map[string]any {
+		return map[string]any{"recall_agent": "agent-f", "record": "turn", "n": id}
+	}
+	g1, err := lb.AcquireLease(ctx, c, "agent-f", "pod-a", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fb.PutFenced(ctx, c, "f1", v, md("f1"), recall.Fence{Lease: "agent-f", Holder: "pod-a", Epoch: g1.Epoch}); err != nil {
+		t.Fatalf("holder write: %v", err)
+	}
+	g2, err := lb.RenewLease(ctx, c, "agent-f", "pod-a", g1.Epoch, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fb.PutFenced(ctx, c, "f2", v, md("f2"), recall.Fence{Lease: "agent-f", Holder: "pod-a", Epoch: g1.Epoch}); err != nil {
+		t.Fatalf("write racing its own renewal: %v", err)
+	}
+	if err := lb.ReleaseLease(ctx, c, "agent-f", "pod-a", g2.Epoch); err != nil {
+		t.Fatal(err)
+	}
+	g3, err := lb.AcquireLease(ctx, c, "agent-f", "pod-b", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = fb.PutFenced(ctx, c, "zombie", v, md("zombie"), recall.Fence{Lease: "agent-f", Holder: "pod-a", Epoch: g2.Epoch})
+	if !errors.Is(err, recall.ErrLeaseLost) {
+		t.Fatalf("superseded write err = %v, want ErrLeaseLost", err)
+	}
+	rows, _, err := b.List(ctx, c, map[string]any{"n": "zombie"}, 10)
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("superseded write landed: %+v, %v", rows, err)
+	}
+	if err := fb.PutFenced(ctx, c, "f3", v, md("f3"), recall.Fence{Lease: "agent-f", Holder: "pod-b", Epoch: g3.Epoch}); err != nil {
+		t.Fatalf("new holder write: %v", err)
 	}
 }
