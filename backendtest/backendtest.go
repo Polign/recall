@@ -516,7 +516,9 @@ func fence(t *testing.T, b recall.Backend, c string) {
 		t.Skip("backend does not implement recall.FencedBackend and recall.LeaseBackend")
 	}
 	v := []float32{1, 0, 0, 0}
-	md := func(id string) map[string]any { return map[string]any{"recall_agent": "agent-f", "record": "turn", "n": id} }
+	md := func(id string) map[string]any {
+		return map[string]any{"recall_agent": "agent-f", "record": "turn", "n": id}
+	}
 	g1, err := lb.AcquireLease(ctx, c, "agent-f", "pod-a", time.Minute)
 	if err != nil {
 		t.Fatal(err)

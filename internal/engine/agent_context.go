@@ -21,16 +21,16 @@ type ResumeContext struct {
 	Epoch uint64 `json:"epoch,omitempty"`
 	// LeaseHeld is false after a deferred resume: the context is ready, but
 	// writes wait for AcquireLease.
-	LeaseHeld    bool          `json:"lease_held"`
+	LeaseHeld bool `json:"lease_held"`
 	// PendingActions are tool calls a crash left open: begun, never ended,
 	// or ended unknown. Reconcile settles what it can; the rest stay here
 	// and at the top of the briefing.
 	PendingActions []Action      `json:"pending_actions,omitempty"`
 	WorkingState   *WorkingState `json:"working_state,omitempty"`
-	Pointers     []Pointer     `json:"pointers,omitempty"`
-	Outputs      []OutputRef   `json:"outputs,omitempty"`
-	Memories     []Belief      `json:"memories,omitempty"`
-	RecentTurns  []Turn        `json:"recent_turns,omitempty"`
+	Pointers       []Pointer     `json:"pointers,omitempty"`
+	Outputs        []OutputRef   `json:"outputs,omitempty"`
+	Memories       []Belief      `json:"memories,omitempty"`
+	RecentTurns    []Turn        `json:"recent_turns,omitempty"`
 	// Omitted counts what did not fit the budget.
 	Omitted struct {
 		Turns    int `json:"turns,omitempty"`
