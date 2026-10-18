@@ -379,6 +379,10 @@ predates that support.
 
 ## Resuming an agent
 
+Beta surface: the calls in this section may change in a minor release, with a
+migration note in the changelog. The records they write are stable. See
+[STABILITY.md](../STABILITY.md).
+
 An agent can resume from what it wrote down instead of from a container
 snapshot. `Client.Resume` takes the agent's lease, reads its records back,
 and assembles the context it should start from, within a token budget. The

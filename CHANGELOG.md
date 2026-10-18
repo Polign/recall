@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+### Added
+
+- `STABILITY.md` says which surfaces are stable within 0.x and carried into
+  1.0 unchanged (stored records, audit bundles, the MCP tool contract,
+  `recall serve` HTTP, the Python memory calls, the Go memory API,
+  configuration), which are beta (agent resume and actions, the backend
+  interfaces for implementors, the MongoDB backend's layout, text
+  extraction), how changes are made, and what 1.0 needs.
+- CI now blocks on `govulncheck` over the source and the built binary, builds
+  and smoke-tests the container image on every change, and runs the MongoDB
+  backend's conformance suite on a replica set. Dependabot watches the Go
+  module, the Python package and the Actions pins.
+
+### Changed
+
+- The briefing's unfinished-actions section now says the task is not
+  finished while an action is unconfirmed, and that the final answer must
+  name those actions with their keys. Told only to check before repeating,
+  Claude Opus 5.5 reported a task done in 9 of 10 kill trials that had left
+  an email unconfirmed; 4 of 10 with this wording. Check `pending_actions`
+  (Python: `ResumedAgent.pending_actions`, recall-langgraph:
+  `RecallResume.open_actions`) rather than the model's reply.
+
 ### Security
 
 - Release binaries are built with Go 1.27.2. `go.mod` named Go 1.27.0, which

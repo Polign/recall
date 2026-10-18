@@ -1,8 +1,11 @@
 # Test and lint gate for every push and PR. The library itself needs no
 # services; cmd/recall's integration tests run a real polign-server from the
 # latest polign_db wheel, so the HTTP contract Recall depends on is checked
-# against what users install. A PostgreSQL service runs the pgvector
-# backend's conformance suite.
+# against what users install. A PostgreSQL service and a MongoDB replica set
+# run those backends' conformance suites. Separate jobs run govulncheck on the
+# source and the built binary, and build and smoke-test the container image,
+# so a release cannot ship a known vulnerability or an image that does not
+# build (0.18.0 through 0.20.2 shipped without one).
 name: ci
 
 on:
@@ -59,10 +62,24 @@ jobs:
           python -m pip install --upgrade polign_db
           echo "POLIGN_SERVER_BIN=$(python -c 'import polign_db; print(polign_db.find_bin("polign-server"))')" >> "$GITHUB_ENV"
 
+      # A single-node replica set, so fenced agent writes run as transactions
+      # the way they do on Atlas. Service containers cannot run rs.initiate,
+      # so this is a plain docker run.
+      - name: Start MongoDB
+        run: |
+          docker run -d --name mongo -p 27017:27017 mongo:8.0 --replSet rs0 --bind_ip_all
+          for i in $(seq 1 30); do
+            docker exec mongo mongosh --quiet --eval 'db.runCommand({ping:1}).ok' >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker exec mongo mongosh --quiet --eval 'rs.initiate({_id:"rs0",members:[{_id:0,host:"localhost:27017"}]})'
+          sleep 3
+
       - name: Test (race)
         env:
           RECALL_REQUIRE_POLIGN: "1"
           RECALL_PGVECTOR_URL: postgres://postgres:recall@localhost:5432/postgres
+          RECALL_MONGODB_URL: mongodb://localhost:27017/?directConnection=true
         run: go test -race -timeout 10m ./...
 
       - name: Wheel builder tests
@@ -101,3 +118,41 @@ jobs:
           # wheels it depends on (which a release publishes) are not needed.
           python -m pip install --no-deps ./python
           python -m unittest discover -s python/tests -v
+
+  # Blocks on any vulnerability govulncheck can show the binary reaches, in a
+  # dependency or in the standard library. go.mod's toolchain line is what
+  # keeps the standard library current; bump it when this job goes red.
+  vulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: govulncheck (source)
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - name: govulncheck (release binary)
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/recall" ./cmd/recall
+          go version "$RUNNER_TEMP/recall"
+          go run golang.org/x/vuln/cmd/govulncheck@latest -mode binary "$RUNNER_TEMP/recall"
+
+  # The container image, built the way container-release.yml builds it and
+  # smoke-tested against a real polign-server, without pushing anything.
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install polign-server for the smoke test
+        run: |
+          python -m pip install --upgrade polign_db
+          echo "POLIGN_SERVER_BIN=$(python -c 'import polign_db; print(polign_db.find_bin("polign-server"))')" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build the image
+        run: docker buildx build --load --platform linux/amd64 -f deploy/container/Dockerfile -t recall:ci .
+      - name: Smoke test
+        run: bash deploy/container/smoke.sh recall:ci "$POLIGN_SERVER_BIN"
