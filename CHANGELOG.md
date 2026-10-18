@@ -19,6 +19,17 @@
   `agent_context`; Go: `Agent.BeginAction`, `EndAction`, `PendingActions`,
   `Reconcile`, `Refresh`; Python: the same on `ResumedAgent`.
 
+- MongoDB backend: `recall -backend mongodb`, with `MONGODB_URI` (and
+  `MONGODB_PASSWORD`), on MongoDB 6.0 or later, Atlas or self-hosted. It
+  supports everything the pgvector backend does: exact listings, evidence
+  links, keyword search through a MongoDB text index, cached reads, agent
+  leases and fenced agent writes. Vector search is exact and needs no Atlas
+  Search index, which suits agent memory, not collections of millions. On a
+  replica set (Atlas always is) a fenced write commits in one transaction
+  with a write to the lease, so a takeover cannot slip between the check and
+  the write; a standalone server checks the lease just before the write.
+  Go: `github.com/Polign/recall/backend/mongodb`.
+
 - Agent writes are fenced on the server where the backend can do it. On
   polign_db (with the lease fence headers) and on Postgres + pgvector (the
   lease row is read in the write's own transaction), a process that stalled

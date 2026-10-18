@@ -266,18 +266,19 @@ does not add transaction isolation or replication.
 
 ### Backends
 
-| | polign_db (default) | PostgreSQL + pgvector | Qdrant |
-| --- | --- | --- | --- |
-| Package | [`polign/`](polign) | [`backend/pgvector/`](backend/pgvector) | [`backend/qdrant/`](backend/qdrant) |
-| `recall mcp` | default | `-backend pgvector` | `-backend qdrant` |
-| URL and key variables | `POLIGN_URL`, `POLIGN_API_KEY` | `DATABASE_URL`, `PGPASSWORD` | `QDRANT_URL`, `QDRANT_API_KEY` |
-| Server version | 0.8.0 or later | PostgreSQL 13 or later with pgvector 0.6.0 or later; 0.8.0 or later recommended | 1.10 or later |
-| Remember, recall, forget, history, as-of | yes | yes | yes |
-| Evidence links, audit export | yes | yes | yes |
-| Keyword search | yes, BM25 | yes, PostgreSQL full-text search | no, vector search only |
-| Cached reads | yes | yes | no, every read refolds the history |
-| Agent leases (`recall mcp -agent`) | yes | yes | no; Go `Resume` with `Unleased: true` only |
-| `recall setup` and the Claude plugin | yes | no, add `recall mcp` by hand | no, add `recall mcp` by hand |
+| | polign_db (default) | PostgreSQL + pgvector | MongoDB | Qdrant |
+| --- | --- | --- | --- | --- |
+| Package | [`polign/`](polign) | [`backend/pgvector/`](backend/pgvector) | [`backend/mongodb/`](backend/mongodb) | [`backend/qdrant/`](backend/qdrant) |
+| `recall mcp` | default | `-backend pgvector` | `-backend mongodb` | `-backend qdrant` |
+| URL and key variables | `POLIGN_URL`, `POLIGN_API_KEY` | `DATABASE_URL`, `PGPASSWORD` | `MONGODB_URI`, `MONGODB_PASSWORD` | `QDRANT_URL`, `QDRANT_API_KEY` |
+| Server version | 0.8.0 or later | PostgreSQL 13 or later with pgvector 0.6.0 or later; 0.8.0 or later recommended | 6.0 or later, Atlas or self-hosted | 1.10 or later |
+| Remember, recall, forget, history, as-of | yes | yes | yes | yes |
+| Evidence links, audit export | yes | yes | yes | yes |
+| Keyword search | yes, BM25 | yes, PostgreSQL full-text search | yes, MongoDB text search | no, vector search only |
+| Cached reads | yes | yes | yes | no, every read refolds the history |
+| Agent leases (`recall mcp -agent`) | yes | yes | yes | no; Go `Resume` with `Unleased: true` only |
+| Agent writes fenced on the server | yes | yes, in the write's transaction | yes on a replica set or Atlas, in the write's transaction; checked just before the write on a standalone server | no |
+| `recall setup` and the Claude plugin | yes | no, add `recall mcp` by hand | no, add `recall mcp` by hand | no, add `recall mcp` by hand |
 
 To run Recall on a PostgreSQL database:
 
@@ -304,6 +305,34 @@ Pitfalls on PostgreSQL:
   hits than asked for, because the index stops scanning at `ef_search`
   candidates before the filter applies.
 
+To run Recall on MongoDB:
+
+```sh
+export MONGODB_URI=mongodb://user:password@localhost:27017/recall
+recall -backend mongodb mcp -write
+```
+
+The database is the connection string's path, `recall` when it has none. The
+first write to a collection creates a MongoDB collection named `rc_` and the
+collection's name, and two bookkeeping collections, `recall_collections` and
+`recall_leases`. The user needs `readWrite` on the database.
+
+Pitfalls on MongoDB:
+
+- Vector search is exact: the similarity is computed in the server over the
+  events a filter keeps. No Atlas Search index is needed and the answer is
+  the true nearest events, but each search reads the whole filtered
+  collection. Agent memory collections hold thousands of events, which is
+  fast; a collection of millions is not what this backend is for.
+- Run a replica set (Atlas always is) for agents. On a standalone server
+  there are no transactions, so a fenced agent write is checked just before
+  it lands rather than with it, and listings are not read from one snapshot.
+  A single-node replica set is enough.
+- A collection takes its vector size from the first write. Changing embedders
+  needs a new collection.
+- Keyword search uses MongoDB's `english` text index, fixed when a collection
+  is created.
+
 Pitfalls on Qdrant:
 
 - Use a collection only Recall writes to. A point without the `_recall_id`
@@ -322,8 +351,9 @@ To add a backend, implement `Put`, `List` and `Search`
 it in [`cmd/recall/backends.go`](cmd/recall/backends.go).
 
 The Go library has no external module dependencies. The pgvector backend uses
-[pgx](https://github.com/jackc/pgx), which a program pulls in only by
-importing that package. Its built-in lexical
+[pgx](https://github.com/jackc/pgx) and the MongoDB backend the
+[official MongoDB driver](https://github.com/mongodb/mongo-go-driver), which a
+program pulls in only by importing that package. Its built-in lexical
 embedder supports word-overlap search; applications can supply a model-based
 embedder for semantic search. See the [embedding guide](docs/reference.md#embeddings).
 
@@ -335,6 +365,7 @@ embedder for semantic search. See the [embedding guide](docs/reference.md#embedd
 | [`internal/engine/`](internal/engine) | Memory implementation and unit tests |
 | [`polign/`](polign) | polign_db backend |
 | [`backend/pgvector/`](backend/pgvector) | PostgreSQL + pgvector backend |
+| [`backend/mongodb/`](backend/mongodb) | MongoDB backend |
 | [`backend/qdrant/`](backend/qdrant) | Qdrant backend |
 | [`backendtest/`](backendtest) | Conformance suite for backends |
 | [`python/`](python) | Python package and tests |

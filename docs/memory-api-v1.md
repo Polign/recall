@@ -132,16 +132,16 @@ Actions: a harness calls `begin_action` before each tool call that touches the w
 
 Recall runs on a vector store that implements a small interface. The core needs Put, List and Search. Each further capability lights up one part of the API. Pages describing a backend state its column of this table.
 
-| Capability | What it enables | polign_db | Qdrant | Postgres + pgvector (planned) |
-| --- | --- | --- | --- | --- |
-| Core (Put, List, Search) | remember, recall, forget, memory_history, as_of, replaced, elsewhere, registry, audit export | yes | yes | yes |
-| Get by id | evidence links, explain | yes | yes | yes |
-| Lexical search | hybrid ranking (vector + BM25), lexical-only servers | yes | no | yes |
-| Watermark | materialized (cached) reads; without it every read refolds the log | yes | no | yes |
-| Leases | the Resume API | yes | no | yes |
-| Fence | server-side check of the lease epoch on agent writes | yes (polign_db with lease fence headers) | no | yes (checked in the write's transaction) |
-| Front door (`recall serve` key store) | namespace-scoped keys, Kubernetes token exchange. Needs Get only; keys are write-once with permanent tombstones, so no compare-and-swap is required. | yes (0.16) | yes (0.16) | yes |
-| Cost | bytes per idle namespace, cost per thousand cold tenants, scale to zero, warm RSS | measured on polign.com | from vendor sizing guidance | measured when the backend ships |
+| Capability | What it enables | polign_db | Qdrant | Postgres + pgvector | MongoDB |
+| --- | --- | --- | --- | --- | --- |
+| Core (Put, List, Search) | remember, recall, forget, memory_history, as_of, replaced, elsewhere, registry, audit export | yes | yes | yes | yes (exact vector search) |
+| Get by id | evidence links, explain | yes | yes | yes | yes |
+| Lexical search | hybrid ranking (vector + BM25), lexical-only servers | yes | no | yes | yes (MongoDB text search) |
+| Watermark | materialized (cached) reads; without it every read refolds the log | yes | no | yes | yes |
+| Leases | the Resume API | yes | no | yes | yes |
+| Fence | server-side check of the lease epoch on agent writes | yes (polign_db with lease fence headers) | no | yes (checked in the write's transaction) | yes (in the write's transaction on a replica set; checked just before the write on a standalone server) |
+| Front door (`recall serve` key store) | namespace-scoped keys, Kubernetes token exchange. Needs Get only; keys are write-once with permanent tombstones, so no compare-and-swap is required. | yes (0.16) | yes (0.16) | yes | yes |
+| Cost | bytes per idle namespace, cost per thousand cold tenants, scale to zero, warm RSS | measured on polign.com | from vendor sizing guidance | measured when the backend ships | not measured |
 
 ## 8. Migration between backends
 
