@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -32,18 +33,75 @@ var agentTools = map[string]bool{
 type agentRuntime struct {
 	mu     sync.Mutex
 	agents map[string]*recall.Agent
+	// sessions names the session that resumed each agent, when the caller's
+	// credential carries one. recall serve keeps one runtime per namespace
+	// for the life of the process, so the agent stays held after the pod
+	// that resumed it is gone; the session is how a later pod tells it is
+	// not the holder.
+	sessions map[string]string
 }
 
-func newAgentRuntime() *agentRuntime { return &agentRuntime{agents: map[string]*recall.Agent{}} }
+func newAgentRuntime() *agentRuntime {
+	return &agentRuntime{agents: map[string]*recall.Agent{}, sessions: map[string]string{}}
+}
 
-func (r *agentRuntime) held(id string) (*recall.Agent, error) {
+// sessionKey carries the caller's session from the HTTP front door to the
+// agent tools. Over stdio there is none, and nothing changes.
+type sessionKey struct{}
+
+func withSession(ctx context.Context, session string) context.Context {
+	if session == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, sessionKey{}, session)
+}
+
+func sessionFrom(ctx context.Context) string {
+	s, _ := ctx.Value(sessionKey{}).(string)
+	return s
+}
+
+func (r *agentRuntime) held(ctx context.Context, id string) (*recall.Agent, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	a := r.agents[id]
 	if a == nil {
 		return nil, fmt.Errorf("agent %q is not resumed in this session; call agent_resume first", id)
 	}
+	if owner, caller := r.sessions[id], sessionFrom(ctx); owner != "" && caller != "" && owner != caller {
+		return nil, &heldElsewhereError{agent: id, owner: owner, caller: caller}
+	}
 	return a, nil
+}
+
+// heldElsewhereError refuses a call on an agent another session resumed.
+type heldElsewhereError struct{ agent, owner, caller string }
+
+func (e *heldElsewhereError) Error() string {
+	return fmt.Sprintf("agent %q was resumed by session %q; this session (%q) holds nothing: call agent_resume", e.agent, e.owner, e.caller)
+}
+
+// takeOver releases an agent held for another session, so that session's
+// replacement can resume it. A credential fixed to one agent and one session
+// is minted per pod, so a new session for the same agent means the pod that
+// held it was replaced; its lease would otherwise be kept alive by this
+// process forever. Releasing ends the old epoch, so a write still in flight
+// from the old holder is fenced by the store. It returns the old session.
+func (r *agentRuntime) takeOver(ctx context.Context, id string) (string, bool) {
+	caller := sessionFrom(ctx)
+	r.mu.Lock()
+	a, owner := r.agents[id], r.sessions[id]
+	if a == nil || caller == "" || owner == "" || owner == caller {
+		r.mu.Unlock()
+		return "", false
+	}
+	delete(r.agents, id)
+	delete(r.sessions, id)
+	r.mu.Unlock()
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	_ = a.Release(releaseCtx)
+	return owner, true
 }
 
 // releaseAll hands every lease over when the session ends, so the next
@@ -246,7 +304,7 @@ func (s *mcpServer) runAgentTool(ctx context.Context, name string, args json.Raw
 		return s.toolAgentResume(ctx, args)
 	}
 	if name == "agent_acquire" {
-		a, err := s.agents.held(base.AgentID)
+		a, err := s.agents.held(ctx, base.AgentID)
 		if err != nil {
 			return "", err
 		}
@@ -260,9 +318,15 @@ func (s *mcpServer) runAgentTool(ctx context.Context, name string, args json.Raw
 		return marshal(map[string]any{"acquired": true, "epoch": a.Epoch(), "pending_actions": nonNil(rep.Open), "briefing": a.Resumed().Briefing})
 	}
 	if name == "agent_release" {
+		// Releasing another session's agent would hand its lease away.
+		var elsewhere *heldElsewhereError
+		if _, err := s.agents.held(ctx, base.AgentID); errors.As(err, &elsewhere) {
+			return "", err
+		}
 		s.agents.mu.Lock()
 		a := s.agents.agents[base.AgentID]
 		delete(s.agents.agents, base.AgentID)
+		delete(s.agents.sessions, base.AgentID)
 		s.agents.mu.Unlock()
 		if a == nil {
 			return marshal(map[string]any{"released": false})
@@ -272,7 +336,7 @@ func (s *mcpServer) runAgentTool(ctx context.Context, name string, args json.Raw
 		}
 		return marshal(map[string]any{"released": true})
 	}
-	a, err := s.agents.held(base.AgentID)
+	a, err := s.agents.held(ctx, base.AgentID)
 	if err != nil {
 		return "", err
 	}
@@ -379,6 +443,7 @@ func (s *mcpServer) toolAgentResume(ctx context.Context, args json.RawMessage) (
 	if err := json.Unmarshal(args, &in); err != nil {
 		return "", err
 	}
+	s.agents.takeOver(ctx, in.AgentID)
 	s.agents.mu.Lock()
 	_, already := s.agents.agents[in.AgentID]
 	s.agents.mu.Unlock()
@@ -405,6 +470,9 @@ func (s *mcpServer) toolAgentResume(ctx context.Context, args json.RawMessage) (
 		return "", fmt.Errorf("agent %q was resumed concurrently in this session", in.AgentID)
 	}
 	s.agents.agents[in.AgentID] = a
+	if session := sessionFrom(ctx); session != "" {
+		s.agents.sessions[in.AgentID] = session
+	}
 	s.agents.mu.Unlock()
 	// Settle what can be settled without the outside world before the model
 	// reads the briefing: interrupted pure actions are closed, and external

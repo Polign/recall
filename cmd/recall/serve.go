@@ -398,7 +398,7 @@ func (f *frontDoor) handleMCP(w http.ResponseWriter, r *http.Request, p principa
 		params, _ := json.Marshal(map[string]any{"name": call.Name, "arguments": args})
 		req.Params = params
 	}
-	result, rerr := s.dispatch(r.Context(), req.Method, req.Params)
+	result, rerr := s.dispatch(withSession(r.Context(), p.Session), req.Method, req.Params)
 	writeJSON(w, http.StatusOK, rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: result, Error: rerr})
 }
 

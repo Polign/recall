@@ -25,6 +25,16 @@
   (Python: `ResumedAgent.pending_actions`, recall-langgraph:
   `RecallResume.open_actions`) rather than the model's reply.
 
+### Fixed
+
+- `recall serve`: a sandbox that resumed an agent and died without releasing
+  it no longer locks the agent out. The server keeps each resumed agent for
+  the life of the process and renewed its lease, so the claim's next pod got
+  "already resumed". The server now records which session (with Kubernetes
+  keys, the pod) resumed each agent. A resume from a new session of the same
+  agent releases the old hold and takes the agent over, and later calls from
+  the old session are refused. Over stdio nothing changes.
+
 ### Security
 
 - Release binaries are built with Go 1.27.2. `go.mod` named Go 1.27.0, which
