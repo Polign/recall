@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+### Added
+
+- Actions: a resumed agent knows which tool calls a crash left unfinished.
+  A harness records each call that touches the world before it runs
+  (`begin_action`) and closes it with its result (`end_action`). Each call
+  has a class: `pure` (reads only), `idempotent` (safe to repeat with the
+  action's key) or `external` (could happen twice). On resume, interrupted
+  pure calls are closed, external ones are marked unknown, and every call
+  still open is listed first in the briefing as one to check before
+  repeating. `Reconcile` (Python: `reconcile`) settles the rest with a
+  resolver you supply: run an idempotent call again with its key, or ask
+  the outside system whether an external one happened. A settled outcome is
+  written to the history so the model sees it. Recall never runs a tool
+  itself. MCP: `begin_action`, `end_action`, `pending_actions`,
+  `agent_context`; Go: `Agent.BeginAction`, `EndAction`, `PendingActions`,
+  `Reconcile`, `Refresh`; Python: the same on `ResumedAgent`.
+
+- Agent writes are fenced on the server where the backend can do it. On
+  polign_db (with the lease fence headers) and on Postgres + pgvector (the
+  lease row is read in the write's own transaction), a process that stalled
+  past its lease is refused even when its own clock says the lease is still
+  fresh, and it stops writing. Other backends keep the client-side check.
+  New optional capability: `FencedBackend`.
+
 ## [0.20.2] - 2026-10-16
 
 ### Fixed
