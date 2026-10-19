@@ -86,8 +86,16 @@ with Client(local_dir="./recall-data", typed=True) as memory:
     current = memory.recall("user", "prefers_editor")[0]
     print(current.value, current.replaced[0].value)  # neovim vim
     print(memory.history("user", "prefers_editor"))  # both statements
+    for step in memory.timeline("user", "prefers_editor").changes:
+        print(step.when, step.change, step.ended, step.began)  # ... replaced vim -> neovim
     memory.forget("user", "prefers_editor", "neovim")
 ```
+
+`history` returns the raw events; `timeline` tells the same record as
+changes, in the same `Timeline` and `Step` types `history_text` returns, with
+`subject` and `predicate` set. `diff(since, until=None, subject=None)` works
+here too, and each `Change` also carries its `subject`, `predicate`, and the
+beliefs `before` and `after`.
 
 Read `predicates()` for the vocabulary: the starter registry, or the file
 named by `POLIGN_PREDICATES`. `remember(text=..., statements=[...])` accepts

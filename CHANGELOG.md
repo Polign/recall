@@ -20,6 +20,12 @@
   `Change` per thing believed differently between two instants. Both use the
   text tools; on a server without them they raise `RecallError` with code
   `unsupported`.
+- The typed MCP tools gain `timeline` (a subject and predicate's history as
+  changes) and `diff` (with an optional `subject`, naming each subject and
+  predicate with its beliefs before and after), served over HTTP as
+  `POST /v1/timeline` and `POST /v1/diff`. `memory_history` is unchanged.
+  Python: `Client.timeline(subject, predicate)`, and `Client.diff` now works
+  on either surface.
 
 - `STABILITY.md` says which surfaces are stable within 0.x and carried into
   1.0 unchanged (stored records, audit bundles, the MCP tool contract,
