@@ -7,7 +7,10 @@ import time
 import unittest
 import unittest.mock
 
-from polign_recall import ActionEnd, Client, Earlier, Memory, PriorValue, RecallError, Remembered, ResumeContext, TextResult, WorkingState
+from datetime import datetime, timezone
+
+from polign_recall import (ActionEnd, Change, Client, Earlier, Memory, PriorValue, RecallError, Remembered, ResumeContext,
+                           Step, TextResult, Timeline, WorkingState)
 
 
 FAKE = r'''
@@ -428,8 +431,17 @@ for line in sys.stdin:
                                   "before": [{"text": "helix", "since": "2026-09-01"}], "newer_field": 1}], "echo": args}
         elif name == "forget":
             body = {"forgotten": ["user prefers editor: zed"]}
+        elif name == "history" and "old" not in args.get("question", ""):
+            body = {"history": [{"about": "user prefers editor", "now": ["user prefers editor: zed"], "changes": [
+                {"when": "2026-09-01T00:00:00Z", "change": "stated", "began": ["user prefers editor: helix"]},
+                {"when": "2026-10-03T00:00:00Z", "change": "replaced", "ended": ["user prefers editor: helix"],
+                 "began": ["user prefers editor: zed"], "said": "I switched to zed.", "newer_field": 1}]}], "echo": args}
+        elif name == "diff":
+            body = {"changes": [{"ended": ["user prefers editor: helix"], "began": ["user prefers editor: zed"]}], "echo": args}
         else:
-            body = {}
+            result = {"content": [{"type": "text", "text": 'unknown memory tool "%s"' % name}], "isError": True}
+            print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+            continue
         result = {"content": [{"type": "text", "text": json.dumps(body)}]}
     print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
 '''
@@ -469,6 +481,29 @@ class TextModeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 memory.remember()
 
+    def test_history_and_diff_in_words(self):
+        with Client(command=self.command) as memory:
+            sent = []
+            tool = memory._tool
+            memory._tool = lambda name, args: sent.append((name, args)) or tool(name, args)
+            self.assertEqual(memory.history_text("my editor"), [Timeline(
+                "user prefers editor", ("user prefers editor: zed",),
+                (Step("2026-09-01T00:00:00Z", "stated", (), ("user prefers editor: helix",)),
+                 Step("2026-10-03T00:00:00Z", "replaced", ("user prefers editor: helix",), ("user prefers editor: zed",),
+                      said="I switched to zed.")))])
+            self.assertEqual(memory.diff("2026-09-15T00:00:00Z"),
+                             [Change(("user prefers editor: helix",), ("user prefers editor: zed",))])
+            memory.diff(datetime(2026, 9, 15, tzinfo=timezone.utc), until="2026-10-15T00:00:00Z")
+            self.assertEqual(sent[1:], [("diff", {"from": "2026-09-15T00:00:00Z"}),
+                                        ("diff", {"from": "2026-09-15T00:00:00+00:00", "to": "2026-10-15T00:00:00Z"})])
+
+    def test_history_on_an_older_server_says_so(self):
+        with Client(command=self.command) as memory:
+            with self.assertRaises(RecallError) as failure:
+                memory.history_text("old")
+            self.assertEqual(failure.exception.code, "unsupported")
+            self.assertIn("newer than 0.21", str(failure.exception))
+
     def test_ask_without_a_question_and_since(self):
         # A profile is an ask with no question; since narrows to what changed.
         with Client(command=self.command) as memory:
@@ -494,6 +529,9 @@ class TextModeTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     call()
         with Client(command=self.typed_command) as typed:
+            for call in (lambda: typed.history_text("my editor"), lambda: typed.diff("2026-09-15T00:00:00Z")):
+                with self.assertRaises(ValueError):
+                    call()
             with self.assertRaises(ValueError):
                 typed.ask("which editor?")
             with self.assertRaises(ValueError):

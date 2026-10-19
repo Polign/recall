@@ -15,6 +15,11 @@
 - The text MCP tools gain `history` and `diff`, served over HTTP as
   `POST /v1/history` and `POST /v1/diff`. Go: `Client.Timeline`,
   `Client.TimelinesFor`, `Client.Diff`.
+- Python: `Client.history_text(question)` returns a `Timeline` of `Step`s
+  per thing the question reaches, and `Client.diff(since, until=None)` a
+  `Change` per thing believed differently between two instants. Both use the
+  text tools; on a server without them they raise `RecallError` with code
+  `unsupported`.
 
 - `STABILITY.md` says which surfaces are stable within 0.x and carried into
   1.0 unchanged (stored records, audit bundles, the MCP tool contract,
