@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Polign/recall"
 )
@@ -65,7 +66,7 @@ func TestTextSurfaceNamesNoPredicates(t *testing.T) {
 	resps := runMCP(t, s,
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
-	if names := toolNames(t, resps[2]); strings.Join(names, ",") != "remember,recall,forget" {
+	if names := toolNames(t, resps[2]); strings.Join(names, ",") != "remember,recall,forget,history,diff" {
 		t.Fatalf("tools %v", names)
 	}
 	for id, resp := range resps {
@@ -75,7 +76,7 @@ func TestTextSurfaceNamesNoPredicates(t *testing.T) {
 		}
 	}
 	s.write = false
-	if names := toolNames(t, runMCP(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/list"}`)[3]); strings.Join(names, ",") != "recall" {
+	if names := toolNames(t, runMCP(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/list"}`)[3]); strings.Join(names, ",") != "recall,history,diff" {
 		t.Fatalf("read-only tools %v", names)
 	}
 }
@@ -104,6 +105,35 @@ func TestTextRememberRecallForget(t *testing.T) {
 	}
 	if _, bad := step(t, s, "list_predicates", `{}`); !bad {
 		t.Fatal("list_predicates is reachable on the text surface")
+	}
+}
+
+func TestTextHistoryAndDiffTellTheCorrection(t *testing.T) {
+	s := newTextMCP(t, wordModel{})
+	if _, bad := step(t, s, "remember", `{"text":"I use helix."}`); bad {
+		t.Fatal("remember helix")
+	}
+	between := time.Now().UTC()
+	if _, bad := step(t, s, "remember", `{"text":"I switched to zed."}`); bad {
+		t.Fatal("remember zed")
+	}
+	if _, bad := step(t, s, "forget", `{"text":"my editor"}`); bad {
+		t.Fatal("forget")
+	}
+	// Forgotten, and still traceable whole.
+	text, bad := step(t, s, "history", `{"question":"which editor do I use"}`)
+	if bad || !strings.Contains(text, `"about":"user favorite editor"`) || !strings.Contains(text, `"now":[]`) ||
+		!strings.Contains(text, `"change":"stated","began":["user favorite editor: helix"]`) ||
+		!strings.Contains(text, `"change":"replaced","ended":["user favorite editor: helix"],"began":["user favorite editor: zed"]`) ||
+		!strings.Contains(text, `"change":"withdrawn","ended":["user favorite editor: zed"]`) {
+		t.Fatalf("history: %s", text)
+	}
+	text, bad = step(t, s, "diff", `{"from":"`+between.Format(time.RFC3339Nano)+`"}`)
+	if bad || !strings.Contains(text, `"ended":["user favorite editor: helix"]`) || strings.Contains(text, "zed") {
+		t.Fatalf("diff: %s", text)
+	}
+	if _, bad := step(t, s, "diff", `{}`); !bad {
+		t.Fatal("diff without from accepted")
 	}
 }
 

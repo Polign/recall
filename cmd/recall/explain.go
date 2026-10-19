@@ -38,35 +38,7 @@ func cmdExplain(c *api, urlGiven bool, args []string, out io.Writer) error {
 		fs.Usage()
 		return errors.New("explain: a question is required")
 	}
-	predicates := os.Getenv("POLIGN_PREDICATES")
-	emb, err := envEmbedding()
-	if err != nil {
-		return fmt.Errorf("explain: %w", err)
-	}
-	if !urlGiven && c.backend == setupBackend || !urlGiven && c.backend == "" {
-		var cfg recallsetup.Config
-		if err := recallsetup.Read(filepath.Join(*dir, "config.json"), &cfg); err == nil {
-			saved, err := recallAPI(*dir, cfg)
-			if err != nil {
-				return err
-			}
-			saved.backend = c.backend
-			c = saved
-			if *collection == "" {
-				*collection = cfg.Collection
-			}
-			predicates = cfg.Predicates
-			if os.Getenv("POLIGN_EMBED_URL") == "" && os.Getenv("POLIGN_EMBED_MODEL") == "" {
-				if emb, err = openEmbedding(cfg.EmbedModel, false); err != nil {
-					return fmt.Errorf("explain: saved embedder: %w", err)
-				}
-			}
-		}
-	}
-	if *collection == "" {
-		*collection = defaultCollection(emb.spec)
-	}
-	mem, err := newMemoryRuntime(c, *collection, predicates, emb.Embedder, false)
+	mem, err := openCLIMemory(c, urlGiven, *collection, *dir, "explain")
 	if err != nil {
 		return err
 	}
@@ -130,4 +102,39 @@ func writeExplanation(out io.Writer, e recall.Explanation) {
 		}
 		fmt.Fprintf(out, "    %s %s\n", day(h.ObservedAt), value)
 	}
+}
+
+// openCLIMemory opens memory for a one-shot read command: the server or
+// backend the global flags name, or else the configuration recall setup
+// saved in dir, with its collection and embedder.
+func openCLIMemory(c *api, urlGiven bool, collection, dir, cmd string) (*memoryRuntime, error) {
+	predicates := os.Getenv("POLIGN_PREDICATES")
+	emb, err := envEmbedding()
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", cmd, err)
+	}
+	if !urlGiven && c.backend == setupBackend || !urlGiven && c.backend == "" {
+		var cfg recallsetup.Config
+		if err := recallsetup.Read(filepath.Join(dir, "config.json"), &cfg); err == nil {
+			saved, err := recallAPI(dir, cfg)
+			if err != nil {
+				return nil, err
+			}
+			saved.backend = c.backend
+			c = saved
+			if collection == "" {
+				collection = cfg.Collection
+			}
+			predicates = cfg.Predicates
+			if os.Getenv("POLIGN_EMBED_URL") == "" && os.Getenv("POLIGN_EMBED_MODEL") == "" {
+				if emb, err = openEmbedding(cfg.EmbedModel, false); err != nil {
+					return nil, fmt.Errorf("%s: saved embedder: %w", cmd, err)
+				}
+			}
+		}
+	}
+	if collection == "" {
+		collection = defaultCollection(emb.spec)
+	}
+	return newMemoryRuntime(c, collection, predicates, emb.Embedder, false)
 }

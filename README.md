@@ -39,7 +39,38 @@ remember(user, did, "run a marathon",
 ```
 
 Nothing is deleted. Every replaced value stays in history, and `as_of` answers
-what was believed at any earlier moment.
+what was believed at any earlier moment. Three commands read that record:
+
+```text
+$ recall history "which editor do I use"
+user preferred editor
+  believed now: user preferred editor: zed
+  2026-09-01 10:00  stated, user_stated
+      + user preferred editor: vim
+  2026-09-20 10:00  replaced, user_stated
+      - user preferred editor: vim
+      + user preferred editor: emacs
+  2026-10-05 10:00  replaced, user_stated
+      - user preferred editor: emacs
+      + user preferred editor: zed
+
+$ recall ask -as-of 2026-09-25 "which editor do I use"
+Believed as of 2026-09-25 00:00:
+user preferred editor: emacs  (since 2026-09-20)
+  replaced: vim  (since 2026-09-01)
+
+$ recall diff -from 2026-09-15 -to 2026-10-31
+Changed between 2026-09-15 00:00 and 2026-10-31 00:00:
+- user home city: Lisbon
++ user home city: Porto
+- user preferred editor: vim
++ user preferred editor: zed
+```
+
+Each step of a history is the log folded just before and just after that
+statement, so it agrees with a read at that instant. Agents get the same
+record through the `history` and `diff` MCP tools, and `recall serve` answers
+`POST /v1/history` and `POST /v1/diff`.
 
 No model reconciles memory on its own. Recall applies the rules the registry
 declares, shows the candidates that may conflict, and lets your agent confirm
