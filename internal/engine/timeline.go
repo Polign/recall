@@ -61,40 +61,38 @@ func (s *Store) Timeline(subject, predicate string) (Timeline, error) {
 		isOwn[e.ID] = true
 	}
 	out := Timeline{Subject: normalizeSubject(subject), Predicate: name, Now: []string{}, Steps: []Step{}}
-	held := map[string]string{}
-	for i, e := range all {
-		// Events sharing an instant fold together; tell them as one step
-		// each, the change landing on the last.
-		if i+1 < len(all) && all[i+1].ObservedAt.Equal(e.ObservedAt) {
-			if isOwn[e.ID] {
-				out.Steps = append(out.Steps, s.step(e, nil, nil))
-			}
-			continue
-		}
-		now := sentences(sc.fold(name, all, e.ObservedAt))
+	// One pass of the fold, noting what each event touched: the steps cost
+	// what they changed, not a fold each.
+	f := sc.newFold(name)
+	tell := func(b Belief) string { return Sentence(b.Subject, name, b.Value) }
+	for _, e := range foldOrder(all, endOfTime) {
+		f.was = map[string]*Belief{}
+		f.apply(e)
 		var added, removed []string
-		for k, text := range now {
-			if _, ok := held[k]; !ok {
-				added = append(added, text)
+		for k, was := range f.was {
+			now, held := f.held[k]
+			switch {
+			case was != nil && !held:
+				removed = append(removed, tell(*was))
+			case was == nil && held:
+				added = append(added, tell(now))
 			}
 		}
-		for k, text := range held {
-			if _, ok := now[k]; !ok {
-				removed = append(removed, text)
-			}
-		}
-		held = now
 		if !isOwn[e.ID] && len(added)+len(removed) == 0 {
 			continue
 		}
 		out.Steps = append(out.Steps, s.step(e, added, removed))
 	}
-	for _, text := range held {
-		out.Now = append(out.Now, text)
+	for _, b := range f.beliefs() {
+		out.Now = append(out.Now, tell(b))
 	}
 	sort.Strings(out.Now)
 	return out, nil
 }
+
+// endOfTime folds every event, however far ahead it was dated: a history
+// tells the whole log.
+var endOfTime = time.Unix(1<<62, 0)
 
 func (s *Store) step(e Event, added, removed []string) Step {
 	sort.Strings(added)
@@ -121,21 +119,13 @@ func (s *Store) step(e Event, added, removed []string) Step {
 	return st
 }
 
-// sentences keys beliefs by value identity, ignoring the capitalization the
-// fold ignores, and tells each.
+// sentences keys beliefs by the fold's value key and tells each.
 func sentences(beliefs []Belief) map[string]string {
 	out := make(map[string]string, len(beliefs))
 	for _, b := range beliefs {
-		out[valueIdentity(b.Value)] = Sentence(b.Subject, b.Predicate, b.Value)
+		out[ValueKey(b.Value)] = Sentence(b.Subject, b.Predicate, b.Value)
 	}
 	return out
-}
-
-func valueIdentity(v any) string {
-	if s, ok := v.(string); ok {
-		return "s:" + strings.ToLower(strings.TrimSpace(s))
-	}
-	return fmt.Sprintf("%T:%v", v, v)
 }
 
 // PairChange is how one subject and predicate's beliefs differ between two

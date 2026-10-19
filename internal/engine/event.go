@@ -167,6 +167,15 @@ type opposed struct {
 // the excluding side never revives one here: what was displaced stays
 // displaced until it is stated again.
 func foldOpposed(events []Event, cardAt func(time.Time) Cardinality, opp *opposed, asOf time.Time) []Belief {
+	f := newFoldState(cardAt, opp)
+	for _, e := range foldOrder(events, asOf) {
+		f.apply(e)
+	}
+	return f.beliefs()
+}
+
+// foldOrder is the log a fold at asOf reads, in the order it reads it.
+func foldOrder(events []Event, asOf time.Time) []Event {
 	if asOf.IsZero() {
 		asOf = time.Now()
 	}
@@ -201,104 +210,150 @@ func foldOpposed(events []Event, cardAt func(time.Time) Cardinality, opp *oppose
 		}
 		return ordered[i].ID < ordered[j].ID
 	})
+	return ordered
+}
 
-	held := map[string]Belief{}
-	var order []string
+// foldState is a fold part way through its log. apply takes the next event
+// in foldOrder; beliefs says what is held after it.
+type foldState struct {
+	cardAt func(time.Time) Cardinality
+	opp    *opposed
+	held   map[string]Belief
+	order  []string
 	// against is what each excluding predicate holds, by name and value key.
-	against := map[string]map[string]Belief{}
-	for _, e := range ordered {
-		if name := opposedName(opp, e); name != "" {
-			theirs := against[name]
-			if theirs == nil {
-				theirs = map[string]Belief{}
-				against[name] = theirs
-			}
-			switch {
-			case e.Retraction && e.Value == nil:
-				clear(theirs)
-			case e.Retraction:
-				delete(theirs, ValueKey(e.Value))
-			default:
-				k := ValueKey(e.Value)
-				if _, ok := held[k]; ok {
-					delete(held, k)
-					order = slices.DeleteFunc(order, func(v string) bool { return v == k })
-				}
-				if opp.cardAt(name, e.ObservedAt) != Multi {
-					clear(theirs)
-				}
-				b := beliefOf(e)
-				b.Predicate = name
-				theirs[k] = b
-			}
-			continue
-		}
-		// A retraction removes one value or, with no value, all of them. A
-		// targeted retraction of a value that is not held changes nothing, so
-		// withdrawing a superseded value leaves the newer assertion intact,
-		// and clearing the current value never revives a superseded one.
-		if e.Retraction && e.Value == nil {
-			held = map[string]Belief{}
-			order = order[:0]
-			continue
-		}
-		k := ValueKey(e.Value)
-		if e.Retraction {
-			delete(held, k)
-			order = slices.DeleteFunc(order, func(v string) bool { return v == k })
-			continue
-		}
-		b := beliefOf(e)
-		// Restating a held value keeps what that value had replaced: hearing
-		// it again does not undo the correction it was.
-		prev, seen := held[k]
-		if seen {
-			b.Replaced = prev.Replaced
-		}
-		if cardAt(e.ObservedAt) != Multi {
-			var replaced []PriorValue
-			for _, hk := range order {
-				if hk != k {
-					replaced = append(replaced, priorOf(held[hk]))
-				}
-			}
-			if len(replaced) > 0 {
-				b.Replaced = replaced
-			}
-			held = map[string]Belief{}
-			order = order[:0]
-			seen = false
-		}
-		for _, name := range sortedKeys(against) {
-			if was, ok := against[name][k]; ok && opp.mutual(name) {
-				prior := priorOf(was)
-				prior.Predicate = name
-				b.Replaced = append(append([]PriorValue(nil), b.Replaced...), prior)
-				delete(against[name], k)
-			}
-		}
-		// A correction across predicates says what it corrected, beside what
-		// it displaced under its own.
-		if len(e.Replaces) > 0 {
-			b.Replaced = append(append([]PriorValue(nil), b.Replaced...), e.Replaces...)
-		}
-		if !seen {
-			order = append(order, k)
-		}
-		// A repeated assertion refreshes confidence, source, and instant:
-		// hearing the same fact again is new evidence for it.
-		//
-		// Remember will not produce one: it folds first and returns early when
-		// the value is already held, so restating a belief writes nothing and
-		// cannot raise its confidence. This branch therefore serves imported
-		// logs, a re-assertion after a retraction, and any writer appending
-		// events directly. Raising confidence through Remember would be a
-		// change to that idempotence rule, not to this fold.
-		held[k] = b
+	against map[string]map[string]Belief
+	// was records, when non-nil, each value key the current apply touched
+	// and the belief it held before (nil when none), so a caller can tell
+	// what one event changed without folding again.
+	was map[string]*Belief
+}
+
+func newFoldState(cardAt func(time.Time) Cardinality, opp *opposed) *foldState {
+	return &foldState{cardAt: cardAt, opp: opp, held: map[string]Belief{}, against: map[string]map[string]Belief{}}
+}
+
+// touch notes k before an apply changes it, once per apply.
+func (f *foldState) touch(k string) {
+	if f.was == nil {
+		return
 	}
-	out := make([]Belief, 0, len(held))
-	for _, k := range order {
-		if b, ok := held[k]; ok {
+	if _, ok := f.was[k]; !ok {
+		if b, held := f.held[k]; held {
+			f.was[k] = &b
+		} else {
+			f.was[k] = nil
+		}
+	}
+}
+
+func (f *foldState) clearHeld() {
+	for _, k := range f.order {
+		f.touch(k)
+	}
+	f.held = map[string]Belief{}
+	f.order = f.order[:0]
+}
+
+func (f *foldState) drop(k string) {
+	f.touch(k)
+	delete(f.held, k)
+	f.order = slices.DeleteFunc(f.order, func(v string) bool { return v == k })
+}
+
+func (f *foldState) apply(e Event) {
+	if name := opposedName(f.opp, e); name != "" {
+		theirs := f.against[name]
+		if theirs == nil {
+			theirs = map[string]Belief{}
+			f.against[name] = theirs
+		}
+		switch {
+		case e.Retraction && e.Value == nil:
+			clear(theirs)
+		case e.Retraction:
+			delete(theirs, ValueKey(e.Value))
+		default:
+			k := ValueKey(e.Value)
+			if _, ok := f.held[k]; ok {
+				f.drop(k)
+			}
+			if f.opp.cardAt(name, e.ObservedAt) != Multi {
+				clear(theirs)
+			}
+			b := beliefOf(e)
+			b.Predicate = name
+			theirs[k] = b
+		}
+		return
+	}
+	// A retraction removes one value or, with no value, all of them. A
+	// targeted retraction of a value that is not held changes nothing, so
+	// withdrawing a superseded value leaves the newer assertion intact,
+	// and clearing the current value never revives a superseded one.
+	if e.Retraction && e.Value == nil {
+		f.clearHeld()
+		return
+	}
+	k := ValueKey(e.Value)
+	if e.Retraction {
+		if _, ok := f.held[k]; ok {
+			f.drop(k)
+		}
+		return
+	}
+	b := beliefOf(e)
+	// Restating a held value keeps what that value had replaced: hearing
+	// it again does not undo the correction it was.
+	prev, seen := f.held[k]
+	if seen {
+		b.Replaced = prev.Replaced
+	}
+	if f.cardAt(e.ObservedAt) != Multi {
+		var replaced []PriorValue
+		for _, hk := range f.order {
+			if hk != k {
+				replaced = append(replaced, priorOf(f.held[hk]))
+			}
+		}
+		if len(replaced) > 0 {
+			b.Replaced = replaced
+		}
+		f.clearHeld()
+		seen = false
+	}
+	for _, name := range sortedKeys(f.against) {
+		if was, ok := f.against[name][k]; ok && f.opp.mutual(name) {
+			prior := priorOf(was)
+			prior.Predicate = name
+			b.Replaced = append(append([]PriorValue(nil), b.Replaced...), prior)
+			delete(f.against[name], k)
+		}
+	}
+	// A correction across predicates says what it corrected, beside what
+	// it displaced under its own.
+	if len(e.Replaces) > 0 {
+		b.Replaced = append(append([]PriorValue(nil), b.Replaced...), e.Replaces...)
+	}
+	if !seen {
+		f.order = append(f.order, k)
+	}
+	// A repeated assertion refreshes confidence, source, and instant:
+	// hearing the same fact again is new evidence for it.
+	//
+	// Remember will not produce one: it folds first and returns early when
+	// the value is already held, so restating a belief writes nothing and
+	// cannot raise its confidence. This branch therefore serves imported
+	// logs, a re-assertion after a retraction, and any writer appending
+	// events directly. Raising confidence through Remember would be a
+	// change to that idempotence rule, not to this fold.
+	f.touch(k)
+	f.held[k] = b
+}
+
+func (f *foldState) beliefs() []Belief {
+	out := make([]Belief, 0, len(f.held))
+	for _, k := range f.order {
+		if b, ok := f.held[k]; ok {
 			out = append(out, b)
 		}
 	}
