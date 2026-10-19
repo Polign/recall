@@ -327,6 +327,21 @@ func (sc *schema) cardAt(predicate string, at time.Time) Cardinality {
 // When other predicates exclude this one, their events may be mixed in (see
 // foldHistory); they withdraw the values they assert here.
 func (sc *schema) fold(predicate string, events []Event, asOf time.Time) []Belief {
+	beliefs := foldOpposed(events, func(at time.Time) Cardinality { return sc.cardAt(predicate, at) }, sc.opposed(predicate), asOf)
+	for i := range beliefs {
+		beliefs[i].Predicate = predicate
+	}
+	return beliefs
+}
+
+// newFold starts a fold of predicate under this schema, for a caller that
+// steps through foldOrder itself.
+func (sc *schema) newFold(predicate string) *foldState {
+	return newFoldState(func(at time.Time) Cardinality { return sc.cardAt(predicate, at) }, sc.opposed(predicate))
+}
+
+// opposed describes the predicates that exclude predicate, or nil.
+func (sc *schema) opposed(predicate string) *opposed {
 	var opp *opposed
 	if ex := sc.excluders(predicate); len(ex) > 0 {
 		opp = &opposed{
@@ -341,11 +356,7 @@ func (sc *schema) fold(predicate string, events []Event, asOf time.Time) []Belie
 			mutual: func(name string) bool { return !sc.reg[name].Historical },
 		}
 	}
-	beliefs := foldOpposed(events, func(at time.Time) Cardinality { return sc.cardAt(predicate, at) }, opp, asOf)
-	for i := range beliefs {
-		beliefs[i].Predicate = predicate
-	}
-	return beliefs
+	return opp
 }
 
 // excluders lists the readable predicates whose values withdraw this one's,

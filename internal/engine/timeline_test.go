@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"fmt"
+	"math/rand"
 	"slices"
 	"testing"
 	"time"
@@ -161,12 +163,99 @@ func TestDiffSkipsARestatement(t *testing.T) {
 }
 
 func TestTimelineOfALongHistory(t *testing.T) {
-	s, _ := seedLongHistory(t, 1001)
+	// The longest history a pair may have. One pass of the fold tells it;
+	// folding again at every step took about 19 s here.
+	s, _ := seedLongHistory(t, MaxHistoryEvents)
+	start := time.Now()
 	tl, err := s.Timeline("user", "prefers_editor")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tl.Steps) != 1001 || tl.Steps[1000].Change != "replaced" || !slices.Equal(tl.Now, []string{"user prefers editor: v1000"}) {
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("timeline of %d events took %s", MaxHistoryEvents, d)
+	}
+	last := MaxHistoryEvents - 1
+	if len(tl.Steps) != MaxHistoryEvents || tl.Steps[last].Change != "replaced" ||
+		!slices.Equal(tl.Now, []string{fmt.Sprintf("user prefers editor: v%d", last)}) {
 		t.Fatalf("steps = %d, last = %+v, now = %v", len(tl.Steps), tl.Steps[len(tl.Steps)-1], tl.Now)
 	}
+}
+
+// TestTimelineMatchesAFoldAtEveryStep checks the one-pass timeline against
+// the fold itself on random logs: assertions, targeted and whole
+// withdrawals, under a single-valued, a multi-valued, and an excluding
+// predicate.
+func TestTimelineMatchesAFoldAtEveryStep(t *testing.T) {
+	const registry = `{
+		"likes":    {"cardinality": "multi",  "value_type": "string", "description": "likes", "excludes": ["dislikes"]},
+		"dislikes": {"cardinality": "multi",  "value_type": "string", "description": "dislikes"},
+		"editor":   {"cardinality": "single", "value_type": "string", "description": "editor"}
+	}`
+	values := []any{"go", "rust", "zig", "vim"}
+	var steps, crossed int
+	for seed := int64(0); seed < 40; seed++ {
+		rng := rand.New(rand.NewSource(seed))
+		db := newFakeDB()
+		s, _ := newExclusionStore(t, db, registry)
+		for i := 0; i < 30; i++ {
+			at := t0.Add(time.Duration(i) * time.Minute)
+			pred := []string{"likes", "dislikes", "editor"}[rng.Intn(3)]
+			var e Event
+			switch r := rng.Intn(10); {
+			case r < 6:
+				e = assert(fmt.Sprintf("e%02d", i), values[rng.Intn(len(values))], at)
+			case r < 9:
+				e = retract(fmt.Sprintf("e%02d", i), values[rng.Intn(len(values))], at)
+			default:
+				e = retract(fmt.Sprintf("e%02d", i), nil, at)
+			}
+			e.Predicate = pred
+			if err := db.Put("memories", e.ID, []float32{1, 0, 0}, e.Metadata()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		sc, err := s.view()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, pred := range []string{"likes", "dislikes", "editor"} {
+			tl, err := s.Timeline("user", pred)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, all, err := s.foldHistory(sc, "user", pred)
+			if err != nil {
+				t.Fatal(err)
+			}
+			held := map[string]bool{}
+			for _, st := range tl.Steps {
+				steps++
+				if st.Predicate != pred {
+					crossed++
+				}
+				for _, r := range st.Removed {
+					if !held[r] {
+						t.Fatalf("seed %d %s: step at %s removes %q, not held", seed, pred, st.At, r)
+					}
+					delete(held, r)
+				}
+				for _, a := range st.Added {
+					held[a] = true
+				}
+				want := sentences(sc.fold(pred, all, st.At))
+				if len(want) != len(held) {
+					t.Fatalf("seed %d %s: at %s timeline holds %v, fold gives %v", seed, pred, st.At, held, want)
+				}
+				for _, w := range want {
+					if !held[w] {
+						t.Fatalf("seed %d %s: at %s fold gives %q, timeline holds %v", seed, pred, st.At, w, held)
+					}
+				}
+			}
+		}
+	}
+	if steps < 500 || crossed == 0 {
+		t.Fatalf("covered %d steps, %d across predicates; the logs are too thin to test anything", steps, crossed)
+	}
+	t.Logf("%d steps, %d ended by an excluding predicate", steps, crossed)
 }
