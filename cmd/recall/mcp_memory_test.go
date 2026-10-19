@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Polign/recall"
 )
@@ -128,7 +129,7 @@ func TestMCPMemoryToolsAbsentWithoutARuntime(t *testing.T) {
 func TestMCPListsOnlyMemoryTools(t *testing.T) {
 	resps := runMCP(t, newMemoryMCP(t), `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
 	names := toolNames(t, resps[1])
-	want := []string{"list_predicates", "remember", "recall", "forget", "explain", "memory_history"}
+	want := []string{"list_predicates", "remember", "recall", "forget", "explain", "memory_history", "timeline", "diff"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("tools = %v, want %v", names, want)
 	}
@@ -208,6 +209,41 @@ func TestMCPHistoryKeepsTheSupersededStatement(t *testing.T) {
 	}
 	if len(events) != 2 || events[0]["value"] != "vim" || events[1]["value"] != "neovim" {
 		t.Fatalf("history = %v, want vim then neovim", events)
+	}
+}
+
+func TestMCPTimelineAndDiffTellTheCorrection(t *testing.T) {
+	s := newMemoryMCP(t)
+	step(t, s, "remember", `{"subject":"user","predicate":"prefers_editor","value":"vim"}`)
+	between := time.Now().UTC()
+	step(t, s, "remember", `{"subject":"user","predicate":"prefers_editor","value":"neovim"}`)
+
+	out, isErr := step(t, s, "timeline", `{"subject":"user","predicate":"prefers_editor"}`)
+	if isErr {
+		t.Fatalf("timeline failed: %s", out)
+	}
+	var tl recall.Timeline
+	if err := json.Unmarshal([]byte(out), &tl); err != nil {
+		t.Fatal(err)
+	}
+	if len(tl.Steps) != 2 || tl.Steps[1].Change != "replaced" ||
+		!slices.Equal(tl.Steps[1].Removed, []string{"user prefers editor: vim"}) ||
+		!slices.Equal(tl.Now, []string{"user prefers editor: neovim"}) {
+		t.Fatalf("timeline = %+v", tl)
+	}
+
+	out, isErr = step(t, s, "diff", `{"from":"`+between.Format(time.RFC3339Nano)+`","subject":"user"}`)
+	var d struct{ Changes []recall.PairChange }
+	if isErr || json.Unmarshal([]byte(out), &d) != nil || len(d.Changes) != 1 ||
+		d.Changes[0].Predicate != "prefers_editor" || !slices.Equal(d.Changes[0].Before, []string{"user prefers editor: vim"}) ||
+		!slices.Equal(d.Changes[0].Added, []string{"user prefers editor: neovim"}) {
+		t.Fatalf("diff = %s", out)
+	}
+	if out, _ = step(t, s, "diff", `{"from":"`+time.Now().UTC().Format(time.RFC3339Nano)+`"}`); out != `{"changes":[]}` {
+		t.Fatalf("diff with nothing changed = %s", out)
+	}
+	if _, isErr = step(t, s, "diff", `{"subject":"user"}`); !isErr {
+		t.Fatal("diff without from accepted")
 	}
 }
 

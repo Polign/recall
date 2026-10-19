@@ -497,6 +497,32 @@ class TextModeTests(unittest.TestCase):
             self.assertEqual(sent[1:], [("diff", {"from": "2026-09-15T00:00:00Z"}),
                                         ("diff", {"from": "2026-09-15T00:00:00+00:00", "to": "2026-10-15T00:00:00Z"})])
 
+    def test_typed_timeline_and_diff(self):
+        with Client(command=self.typed_command) as typed:
+            replies = {
+                "timeline": {"subject": "user", "predicate": "prefers_editor", "now": ["user prefers editor: zed"], "steps": [
+                    {"at": "2026-09-01T00:00:00Z", "change": "stated", "predicate": "prefers_editor",
+                     "statement": "user prefers editor: helix", "added": ["user prefers editor: helix"]},
+                    {"at": "2026-10-03T00:00:00Z", "change": "replaced", "predicate": "prefers_editor",
+                     "statement": "user prefers editor: zed", "evidence": "I switched to zed.",
+                     "added": ["user prefers editor: zed"], "removed": ["user prefers editor: helix"]}]},
+                "diff": {"changes": [{"subject": "user", "predicate": "prefers_editor",
+                                      "before": ["user prefers editor: helix"], "after": ["user prefers editor: zed"],
+                                      "added": ["user prefers editor: zed"], "removed": ["user prefers editor: helix"]}]},
+            }
+            sent = []
+            typed._tool = lambda name, args: sent.append((name, args)) or replies[name]
+            self.assertEqual(typed.timeline("user", "prefers_editor"), Timeline(
+                "user prefers editor", ("user prefers editor: zed",),
+                (Step("2026-09-01T00:00:00Z", "stated", (), ("user prefers editor: helix",)),
+                 Step("2026-10-03T00:00:00Z", "replaced", ("user prefers editor: helix",), ("user prefers editor: zed",),
+                      said="I switched to zed.")),
+                "user", "prefers_editor"))
+            self.assertEqual(typed.diff("2026-09-15T00:00:00Z", subject="user"), [Change(
+                ("user prefers editor: helix",), ("user prefers editor: zed",), "user", "prefers_editor",
+                ("user prefers editor: helix",), ("user prefers editor: zed",))])
+            self.assertEqual(sent[1], ("diff", {"from": "2026-09-15T00:00:00Z", "subject": "user"}))
+
     def test_history_on_an_older_server_says_so(self):
         with Client(command=self.command) as memory:
             with self.assertRaises(RecallError) as failure:
@@ -524,12 +550,14 @@ class TextModeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 memory.remember(text="x", statements=[])
             for call in (lambda: memory.recall("user", "prefers_editor"), memory.predicates,
+                         lambda: memory.timeline("user", "prefers_editor"),
+                         lambda: memory.diff("2026-09-15T00:00:00Z", subject="user"),
                          lambda: memory.history("user", "prefers_editor"),
                          lambda: memory.forget("user", "prefers_editor", all=True)):
                 with self.assertRaises(ValueError):
                     call()
         with Client(command=self.typed_command) as typed:
-            for call in (lambda: typed.history_text("my editor"), lambda: typed.diff("2026-09-15T00:00:00Z")):
+            for call in (lambda: typed.history_text("my editor"),):
                 with self.assertRaises(ValueError):
                     call()
             with self.assertRaises(ValueError):

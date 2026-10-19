@@ -150,6 +150,25 @@ func (s *mcpServer) memoryTools() []mcpTool {
 				"predicate": predicate,
 			}, "subject", "predicate"),
 		},
+		{
+			Name:        "timeline",
+			Title:       "Read how a belief changed",
+			Description: "One subject and predicate's history told as changes, oldest first: each statement with what it did (stated, replaced, withdrawn, or no change) and the values it began (added) and ended (removed) believing, plus what is believed now. Each step is the log folded just before and just after that statement, so it agrees with recall as_of that instant. Use it to show a correction whole.",
+			InputSchema: schema(map[string]any{
+				"subject":   subject,
+				"predicate": predicate,
+			}, "subject", "predicate"),
+		},
+		{
+			Name:        "diff",
+			Title:       "Compare two instants",
+			Description: "What was believed differently at one instant than at another: for each subject and predicate a statement touched in between, the values before and after and which were added and removed. Use it for what changed over a period, such as since the last session or during an incident.",
+			InputSchema: schema(map[string]any{
+				"from":    map[string]any{"type": "string", "description": "the earlier RFC3339 instant, e.g. 2026-09-01T00:00:00Z"},
+				"to":      map[string]any{"type": "string", "description": "the later RFC3339 instant; omit for now"},
+				"subject": map[string]any{"type": "string", "description": "only this subject; omit for every subject"},
+			}, "from"),
+		},
 	}
 	if s.memory.open {
 		for i := range tools {
@@ -205,11 +224,12 @@ func (s *mcpServer) runMemoryTool(ctx context.Context, name string, args json.Ra
 			return "", true, fmt.Errorf("this server is read-only; it was started without -write")
 		}
 	case "recall":
-	case "list_predicates", "memory_history", "explain":
+	case "list_predicates", "memory_history", "explain", "timeline":
 		if s.memory.text {
 			return "", false, nil
 		}
-	case "history", "diff":
+	case "diff":
+	case "history":
 		if !s.memory.text {
 			return "", false, nil
 		}
@@ -236,8 +256,69 @@ func (s *mcpServer) runMemoryTool(ctx context.Context, name string, args json.Ra
 		out, err = m.toolHistory(args)
 	case "explain":
 		out, err = m.toolExplain(args)
+	case "timeline":
+		out, err = m.toolTimeline(args)
+	case "diff":
+		out, err = m.toolDiff(args)
 	}
 	return out, true, err
+}
+
+func (m *memoryRuntime) toolTimeline(args json.RawMessage) (string, error) {
+	var a struct {
+		Subject   string `json:"subject"`
+		Predicate string `json:"predicate"`
+	}
+	if err := strictArgs(args, &a); err != nil {
+		return "", err
+	}
+	var t recall.Timeline
+	var err error
+	if m.client != nil {
+		t, err = m.client.Timeline(m.ctx, a.Subject, a.Predicate)
+	} else {
+		t, err = m.store.Timeline(a.Subject, a.Predicate)
+	}
+	if err != nil {
+		return "", err
+	}
+	return marshal(t)
+}
+
+func (m *memoryRuntime) toolDiff(args json.RawMessage) (string, error) {
+	var a struct {
+		From    string `json:"from"`
+		To      string `json:"to"`
+		Subject string `json:"subject"`
+	}
+	if err := strictArgs(args, &a); err != nil {
+		return "", err
+	}
+	if a.From == "" {
+		return "", fmt.Errorf("arguments: from is required")
+	}
+	from, err := instant("from", a.From)
+	if err != nil {
+		return "", err
+	}
+	to, err := instant("to", a.To)
+	if err != nil {
+		return "", err
+	}
+	r := recall.DiffRequest{Subject: a.Subject, From: from, To: to}
+	var changes []recall.PairChange
+	if m.client != nil {
+		changes, err = m.client.Diff(m.ctx, r)
+	} else {
+		changes, err = m.store.Diff(r)
+	}
+	if err != nil {
+		return "", err
+	}
+	if changes == nil {
+		changes = []recall.PairChange{}
+	}
+	return marshal(map[string]any{"changes": changes})
 }
 
 func (m *memoryRuntime) toolListPredicates() (string, error) {
