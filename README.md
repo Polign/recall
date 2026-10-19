@@ -5,7 +5,7 @@ either a rule you declared or a statement the agent made. No model decides what
 to forget.
 
 ```sh
-pip install polign-recall          # Python client; brings the server with it
+pip install 'polign-recall[local]' # Python client; [local] brings the database with it
 go get github.com/Polign/recall    # Go
 recall mcp -write                  # MCP over stdio: remember(text), recall(question), forget(text)
 recall mcp -write -typed           # the typed tools instead: remember(subject, predicate, value), history
@@ -73,11 +73,12 @@ is a ready-made MCP integration for memory across coding sessions.
 You'll need Python 3.10+. Install the client:
 
 ```sh
-pip install polign-recall
+pip install 'polign-recall[local]'
 ```
 
-pip also brings the `polign_db` package, which holds the `polign` and
-`polign-server` binaries, so there is nothing else to download or start. This
+The `local` extra brings the `polign_db` package, which holds the
+`polign-server` binary, so there is nothing else to download or start. A
+client that only connects to a `recall serve` can leave it out. This
 example needs no model or embedding API key.
 
 One process saves an editor preference and then changes it:

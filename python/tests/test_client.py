@@ -555,6 +555,25 @@ class LocalDirTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "transport_error")
         self.assertIn("did not become ready", str(caught.exception))
 
+    def test_a_failed_start_without_polign_server_names_the_extra(self):
+        with unittest.mock.patch("polign_recall.client._polign_server_found", return_value=False):
+            with self.assertRaises(RecallError) as caught:
+                Client(local_dir=Path(self.directory.name) / "broken")
+        self.assertIn("polign-recall[local]", str(caught.exception))
+        with unittest.mock.patch("polign_recall.client._polign_server_found", return_value=True):
+            with self.assertRaises(RecallError) as caught:
+                Client(local_dir=Path(self.directory.name) / "broken")
+        self.assertNotIn("polign-recall[local]", str(caught.exception))
+
+    def test_polign_server_beside_the_setup_binary_counts(self):
+        from polign_recall.client import _polign_server_found
+        with unittest.mock.patch.dict(sys.modules, {"polign_db": None}), \
+             unittest.mock.patch("shutil.which", return_value=None):
+            self.assertFalse(_polign_server_found([str(self.recall), "setup"]))
+            server = Path(self.directory.name) / "polign-server"
+            server.write_text("")
+            self.assertTrue(_polign_server_found([str(self.recall), "setup"]))
+
     def test_local_dir_and_command_are_exclusive(self):
         with self.assertRaises(ValueError):
             Client(local_dir=self.directory.name, command=["polign", "mcp"])

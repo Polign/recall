@@ -24,6 +24,12 @@
   an email unconfirmed; 4 of 10 with this wording. Check `pending_actions`
   (Python: `ResumedAgent.pending_actions`, recall-langgraph:
   `RecallResume.open_actions`) rather than the model's reply.
+- Python: `polign_db` (the `polign-server` binary, about 26 MB per platform)
+  is now the `local` extra instead of a dependency. A client that connects
+  to a `recall serve` (`Client(url=...)`) or to `POLIGN_URL` no longer
+  installs a database it never runs. `Client(local_dir=...)` needs
+  `pip install 'polign-recall[local]'`; without it, the start fails with an
+  error that names the extra.
 
 ### Fixed
 

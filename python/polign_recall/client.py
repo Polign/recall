@@ -426,6 +426,21 @@ def _server() -> tuple[list[str], list[str]]:
 _CONNECTION = ("POLIGN_URL", "POLIGN_API_KEY", "POLIGN_COLLECTION", "POLIGN_PREDICATES")
 
 
+def _polign_server_found(setup: Sequence[str]) -> bool:
+    """Whether a polign-server exists for `recall setup -local` to run: from
+    polign_db (the `local` extra), beside the setup binary, or on PATH."""
+    try:
+        import polign_db
+        polign_db.find_bin("polign-server")
+        return True
+    except (ImportError, OSError, ValueError):
+        pass
+    exe = "polign-server" + (".exe" if sys.platform == "win32" else "")
+    if setup and os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(setup[0])), exe)):
+        return True
+    return shutil.which("polign-server") is not None
+
+
 def _local_server(setup: Sequence[str], directory: str | os.PathLike[str], timeout: float) -> dict[str, str]:
     """Start (or find) the managed local database kept in `directory` and
     return the POLIGN_URL and POLIGN_API_KEY that reach it.
@@ -446,8 +461,11 @@ def _local_server(setup: Sequence[str], directory: str | os.PathLike[str], timeo
     except OSError as exc:
         raise RecallError(f"could not start {argv[0]!r}: {exc}", code="transport_error") from exc
     if done.returncode != 0:
+        hint = "" if _polign_server_found(setup) else (
+            "; local_dir runs polign-server, which comes with "
+            "`pip install 'polign-recall[local]'`")
         raise RecallError(f"local database in {directory} did not start: "
-                          f"{(done.stderr or done.stdout).strip()}", code="transport_error")
+                          f"{(done.stderr or done.stdout).strip()}{hint}", code="transport_error")
     try:
         with open(os.path.join(directory, "runtime.json")) as f:
             url = json.load(f)["url"]
@@ -607,7 +625,7 @@ class Client:
     writes; pass write=False to expose only read operations.
 
     The `recall` binary comes in this package's platform wheel, and
-    polign-server with polign_db. With
+    polign-server with polign_db (`pip install 'polign-recall[local]'`). With
     `local_dir`, the client also runs the database: it keeps a local
     polign-server for that directory and connects to it, ignoring any
     POLIGN_URL or POLIGN_API_KEY. Without it, `recall` connects to POLIGN_URL,

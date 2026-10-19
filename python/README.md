@@ -3,13 +3,20 @@
 A Python client for Recall, correctable agent memory. Requires Python 3.10+.
 
 ```sh
-pip install polign-recall
+pip install 'polign-recall[local]'
 ```
 
-That is the whole install. pip also brings the
+That is the whole install. The `local` extra brings the
 [`polign_db`](https://pypi.org/project/polign-db/) package, which holds the
-`polign` CLI and `polign-server` binaries for Linux, macOS and Windows, so
-there is nothing else to download.
+`polign-server` database binary for Linux, macOS and Windows, so `local_dir`
+below has nothing else to download.
+
+A client that only connects to a Recall server you already run (a `recall
+serve` URL, or `POLIGN_URL`) does not need the database binary:
+
+```sh
+pip install polign-recall
+```
 
 ```python
 from polign_recall import Client
@@ -37,7 +44,7 @@ localhost only and protected by a key stored in the directory. Later clients,
 including ones in other processes, share that server. It keeps running after
 your program exits; its process id is in `runtime.json` and its log in
 `server.log`, both inside the directory. Managed local databases work on Linux
-and macOS.
+and macOS. They need the `local` extra.
 
 To use a server you run yourself, leave `local_dir` out and set `POLIGN_URL`,
 `POLIGN_API_KEY`, and `POLIGN_COLLECTION` in the environment, or pass
