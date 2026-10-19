@@ -178,6 +178,9 @@ class Timeline:
     about: str
     now: tuple[str, ...]
     changes: tuple[Step, ...]
+    # Set by the typed timeline; the text tools never name predicates.
+    subject: str = ""
+    predicate: str = ""
 
 
 @dataclass(frozen=True)
@@ -186,6 +189,11 @@ class Change:
     thing between the two instants of a diff."""
     ended: tuple[str, ...] = ()
     began: tuple[str, ...] = ()
+    # Set by the typed diff, with what was believed at each end.
+    subject: str = ""
+    predicate: str = ""
+    before: tuple[str, ...] = ()
+    after: tuple[str, ...] = ()
 
 
 def _known(cls: type, data: Any) -> dict[str, Any]:
@@ -992,16 +1000,44 @@ class Client:
                                for c in t.get("changes") or ()))
                 for t in data.get("history") or ()]
 
-    def diff(self, since: str | datetime, until: str | datetime | None = None) -> list[Change]:
+    def diff(self, since: str | datetime, until: str | datetime | None = None, *,
+             subject: str | None = None) -> list[Change]:
         """What was believed differently at `until` (default now) than at
-        `since` (text=True only): for each thing a statement touched in
-        between, the sentences that ended and began being believed."""
-        self._need_text("diff")
+        `since`: for each thing a statement touched in between, the sentences
+        that ended and began being believed. On the typed tools each Change
+        also names its subject and predicate with the beliefs at each end, and
+        `subject` limits the diff to one subject."""
         args = {"from": _instant(since, "since")}
         if until is not None:
             args["to"] = _instant(until, "until")
+        if subject is not None:
+            if self._text:
+                raise ValueError("diff(subject=...) uses the typed tools; the text tools diff every subject")
+            args["subject"] = subject
         data = self._new_tool("diff", args)
-        return [Change(tuple(c.get("ended") or ()), tuple(c.get("began") or ())) for c in data.get("changes") or ()]
+        if self._text:
+            return [Change(tuple(c.get("ended") or ()), tuple(c.get("began") or ())) for c in data.get("changes") or ()]
+        return [Change(tuple(c.get("removed") or ()), tuple(c.get("added") or ()), c.get("subject", ""),
+                       c.get("predicate", ""), tuple(c.get("before") or ()), tuple(c.get("after") or ()))
+                for c in data.get("changes") or ()]
+
+    def timeline(self, subject: str, predicate: str) -> Timeline:
+        """How one subject and predicate changed, statement by statement,
+        oldest first (typed tools only; history_text is the words version).
+        Each step agrees with recall(as_of=...) at that instant."""
+        self._need_typed("timeline")
+        t = self._new_tool("timeline", {"subject": subject, "predicate": predicate})
+        name = t.get("predicate", predicate)
+        steps = []
+        for st in t.get("steps") or ():
+            # Name what caused a step that changed nothing, withdrew, or came
+            # from another predicate, as the text tools do.
+            caused = st.get("change") in ("no change", "withdrawn") or st.get("predicate", name) != name
+            steps.append(Step(st.get("at", ""), st.get("change", ""), tuple(st.get("removed") or ()),
+                              tuple(st.get("added") or ()), st.get("evidence", ""),
+                              st.get("statement", "") if caused else ""))
+        return Timeline(f"{t.get('subject', subject)} {name.replace('_', ' ')}", tuple(t.get("now") or ()),
+                        tuple(steps), t.get("subject", subject), name)
 
     def _new_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         """Calls a tool newer servers serve, saying so when this one does not."""

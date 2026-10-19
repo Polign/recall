@@ -69,8 +69,10 @@ Changed between 2026-09-15 00:00 and 2026-10-31 00:00:
 
 Each step of a history is the log folded just before and just after that
 statement, so it agrees with a read at that instant. Agents get the same
-record through the `history` and `diff` MCP tools, and `recall serve` answers
-`POST /v1/history` and `POST /v1/diff`.
+record through the `history` and `diff` MCP tools (`timeline` and `diff` with
+`-typed`), `recall serve` answers them over HTTP at `/v1/history`,
+`/v1/timeline` and `/v1/diff`, and the Python client has `history_text`,
+`timeline` and `diff`.
 
 No model reconciles memory on its own. Recall applies the rules the registry
 declares, shows the candidates that may conflict, and lets your agent confirm

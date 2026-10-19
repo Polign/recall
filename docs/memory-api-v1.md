@@ -25,8 +25,8 @@ Four verbs carry the model. Read helpers go with them.
 | memory_history | Every statement ever recorded for a subject and predicate, oldest first. | 0.15 |
 | list_predicates | The registry: each predicate's cardinality, type, exclusions, historical flag. | 0.15 |
 | explain | Why each belief a question finds is held: source text, definitions, history. | 0.15 |
-| history (text) | How a belief changed: every statement with what it began and ended believing. | unreleased |
-| diff (text) | What began and stopped being believed between two instants. | unreleased |
+| history (text), timeline (typed) | How a belief changed: every statement with what it began and ended believing. | unreleased |
+| diff | What began and stopped being believed between two instants. | unreleased |
 
 ### 2.1 Typed tools
 
@@ -40,6 +40,10 @@ Served by `recall mcp` by default. A server started without write access serves 
 | forget | subject, predicate | no |
 | explain | question | yes |
 | memory_history | subject, predicate | yes |
+| timeline | subject, predicate | yes |
+| diff | from | yes |
+
+Typed `timeline` returns one subject and predicate's history as changes: `subject`, `predicate`, `now` (the beliefs held, as sentences) and `steps`, oldest first, each with `at`, `event_id`, `statement`, the `predicate` it was written under, `source`, `evidence`, `change` (`stated`, `replaced`, `withdrawn` or `no change`), and the sentences it `added` and `removed`. Typed `diff` takes `from`, optional `to` (default now) and optional `subject`, and returns `changes`, one per subject and predicate whose beliefs differ, each with `subject`, `predicate`, `before`, `after`, `added` and `removed`. `memory_history` is unchanged: the raw events.
 
 ### 2.2 Text tools
 
@@ -55,7 +59,7 @@ Served by `recall mcp` (the default; `-typed` serves the typed tools instead). S
 
 Text `remember` takes `text` or `messages`, one of them: messages are `{role, content}` turns with role `user` or `assistant`, and only what the user said or agreed to is kept. Text `recall` takes `question`, `as_of` and `since`, all optional. With a question it searches; without one it reads with no model and no search: everything believed about the user, or with `since`, everything stated after that instant about anyone, newest first, each with what it replaced. With a model embedder, an answer to a question leaves out beliefs scoring under half the best match's similarity.
 
-Text `history` takes `question` and traces each thing it reaches, including things since forgotten: `about` names it, `now` is what is believed, and `changes` lists every statement oldest first with `when`, `change` (`stated`, `replaced`, `withdrawn` or `no change`), and the sentences it `ended` and `began`. A step that a statement of something else caused, such as a dislike ending a like, or that withdrew or changed nothing, also gives the `statement`. Each step is computed by folding the log just before and just after it, so it agrees with `recall` at `as_of` that instant. Text `diff` takes `from` and optional `to` (default now) and returns `changes`, each with the sentences that `ended` and `began` being believed between the two instants. Over HTTP, `POST /v1/history` and `POST /v1/diff` serve them on a text-mode server.
+Text `history` takes `question` and traces each thing it reaches, including things since forgotten: `about` names it, `now` is what is believed, and `changes` lists every statement oldest first with `when`, `change` (`stated`, `replaced`, `withdrawn` or `no change`), and the sentences it `ended` and `began`. A step that a statement of something else caused, such as a dislike ending a like, or that withdrew or changed nothing, also gives the `statement`. Each step is computed by folding the log just before and just after it, so it agrees with `recall` at `as_of` that instant. Text `diff` takes `from` and optional `to` (default now) and returns `changes`, each with the sentences that `ended` and `began` being believed between the two instants. Over HTTP, `POST /v1/history` and `POST /v1/diff` serve them on a text-mode server; on a typed server `POST /v1/timeline` and `POST /v1/diff` serve the typed tools.
 
 ### 2.3 Argument conventions
 

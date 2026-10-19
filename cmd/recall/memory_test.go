@@ -137,7 +137,7 @@ func TestMCPMemoryReadOnly(t *testing.T) {
 			t.Fatalf("%s error = %v", name, err)
 		}
 	}
-	for _, name := range []string{"list_predicates", "recall", "memory_history"} {
+	for _, name := range []string{"list_predicates", "recall", "memory_history", "timeline"} {
 		_, err := s.runTool(t.Context(), name, json.RawMessage(`{"subject":"user","predicate":"likes"}`))
 		if err != nil {
 			t.Fatalf("read-only %s: %v", name, err)
