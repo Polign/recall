@@ -156,6 +156,38 @@ class Memory:
     said: str = ""
 
 
+@dataclass(frozen=True)
+class Step:
+    """One statement in a Timeline: when it was made, what it did (`stated`,
+    `replaced`, `withdrawn` or `no change`), and the sentences it `ended` and
+    `began` being believed. `statement` is set when the step was caused by a
+    statement about something else (a dislike ending a like) or changed
+    nothing."""
+    when: str
+    change: str
+    ended: tuple[str, ...] = ()
+    began: tuple[str, ...] = ()
+    said: str = ""
+    statement: str = ""
+
+
+@dataclass(frozen=True)
+class Timeline:
+    """How one remembered thing changed, oldest first, as history_text tells
+    it, with what is believed `now`."""
+    about: str
+    now: tuple[str, ...]
+    changes: tuple[Step, ...]
+
+
+@dataclass(frozen=True)
+class Change:
+    """What stopped (`ended`) and started (`began`) being believed about one
+    thing between the two instants of a diff."""
+    ended: tuple[str, ...] = ()
+    began: tuple[str, ...] = ()
+
+
 def _known(cls: type, data: Any) -> dict[str, Any]:
     """The keys of `data` that `cls` declares. A newer server may send fields
     this client does not know yet; they are dropped instead of failing."""
@@ -947,6 +979,39 @@ class Client:
         from stay as the record. Needs an extraction model on the server."""
         self._need_text("forget_text")
         return list(self._tool("forget", {"text": text}).get("forgotten") or [])
+
+    def history_text(self, question: str) -> list[Timeline]:
+        """How each thing `question` reaches changed, statement by statement,
+        oldest first (text=True only). Things since forgotten are included.
+        Each step agrees with what ask(as_of=...) answered at that instant."""
+        self._need_text("history_text")
+        data = self._new_tool("history", {"question": question})
+        return [Timeline(t.get("about", ""), tuple(t.get("now") or ()),
+                         tuple(Step(**{"when": "", "change": "", **{k: tuple(v) if k in ("ended", "began") else v
+                                                                    for k, v in _known(Step, c).items()}})
+                               for c in t.get("changes") or ()))
+                for t in data.get("history") or ()]
+
+    def diff(self, since: str | datetime, until: str | datetime | None = None) -> list[Change]:
+        """What was believed differently at `until` (default now) than at
+        `since` (text=True only): for each thing a statement touched in
+        between, the sentences that ended and began being believed."""
+        self._need_text("diff")
+        args = {"from": _instant(since, "since")}
+        if until is not None:
+            args["to"] = _instant(until, "until")
+        data = self._new_tool("diff", args)
+        return [Change(tuple(c.get("ended") or ()), tuple(c.get("began") or ())) for c in data.get("changes") or ()]
+
+    def _new_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        """Calls a tool newer servers serve, saying so when this one does not."""
+        try:
+            return self._tool(name, arguments)
+        except RecallError as exc:
+            if "unknown" in str(exc) and f'tool "{name}"' in str(exc):
+                raise RecallError(f"this server has no {name} tool; it needs a recall newer than 0.21",
+                                  code="unsupported") from exc
+            raise
 
     def _need_text(self, method: str) -> None:
         if not self._text:

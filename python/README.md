@@ -31,6 +31,23 @@ as the record. Without `extract_model`, remembered text is kept as written:
 `ask` finds it by its words, but it replaces nothing, and `forget_text` needs
 a model.
 
+Nothing is deleted, so the record of corrections can be read back:
+
+```python
+for t in memory.history_text("my editor"):       # every statement, oldest first
+    for step in t.changes:
+        print(step.when, step.change, step.ended, step.began)
+memory.ask("Which editor do I use?", as_of="2026-10-01T00:00:00Z")  # believed then
+memory.diff(since="2026-10-01T00:00:00Z")           # what ended and began since
+```
+
+`history_text` returns a `Timeline` per thing the question reaches, including
+things since forgotten: `now` is what is believed, and each `Step` says whether
+it `stated`, `replaced` or `withdrawn` something, with the sentences it `ended`
+and `began`. `diff(since, until=None)` returns a `Change` per thing whose
+beliefs differ between the two instants. Both need a recall server newer than
+0.21; an older one raises `RecallError` with code `unsupported`.
+
 `local_dir` keeps the database on this machine. The first client to open the
 directory starts a `polign-server` for it in the background, listening on
 localhost only and protected by a key stored in the directory. Later clients,
