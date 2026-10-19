@@ -4,6 +4,18 @@
 
 ### Added
 
+- Corrections can be read as a record. `recall history <question>` (or
+  `-subject S -predicate P`) prints how a belief changed: every statement,
+  oldest first, as a diff of what it began and ended believing, including
+  beliefs since forgotten. `recall ask -as-of T` says what was believed at an
+  instant, and `recall diff -from T [-to T]` what began and stopped being
+  believed between two. Instants take RFC3339, a date, or a time ago (`7d`).
+  Each history step is the log folded just before and just after it, so it
+  agrees with a read `as_of` that instant.
+- The text MCP tools gain `history` and `diff`, served over HTTP as
+  `POST /v1/history` and `POST /v1/diff`. Go: `Client.Timeline`,
+  `Client.TimelinesFor`, `Client.Diff`.
+
 - `STABILITY.md` says which surfaces are stable within 0.x and carried into
   1.0 unchanged (stored records, audit bundles, the MCP tool contract,
   `recall serve` HTTP, the Python memory calls, the Go memory API,

@@ -410,6 +410,7 @@ var restTools = map[string]string{
 	"history":    "memory_history",
 	"predicates": "list_predicates",
 	"explain":    "explain",
+	"diff":       "diff",
 }
 
 // handleREST serves POST /v1/<verb> with the tool's arguments as the body.
@@ -423,7 +424,7 @@ func (f *frontDoor) handleREST(w http.ResponseWriter, r *http.Request, p princip
 	}
 	tool, ok := restTools[verb]
 	if !ok {
-		writeError(w, http.StatusNotFound, "not_found", "unknown operation; want one of remember, recall, forget, history, predicates, explain")
+		writeError(w, http.StatusNotFound, "not_found", "unknown operation; want one of remember, recall, forget, history, diff, predicates, explain")
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -434,6 +435,9 @@ func (f *frontDoor) handleREST(w http.ResponseWriter, r *http.Request, p princip
 	s, ok := f.tenant(w, p)
 	if !ok {
 		return
+	}
+	if tool == "memory_history" && s.memory != nil && s.memory.text {
+		tool = "history"
 	}
 	body, err := io.ReadAll(r.Body)
 	if err != nil {

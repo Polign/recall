@@ -209,6 +209,10 @@ func (s *mcpServer) runMemoryTool(ctx context.Context, name string, args json.Ra
 		if s.memory.text {
 			return "", false, nil
 		}
+	case "history", "diff":
+		if !s.memory.text {
+			return "", false, nil
+		}
 	default:
 		return "", false, nil
 	}

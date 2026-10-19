@@ -67,11 +67,30 @@ func (s *mcpServer) textTools() []mcpTool {
 				"text": map[string]any{"type": "string", "description": "what to forget, described in words"},
 			}, "text"),
 		},
+		{
+			Name:        "history",
+			Title:       "History",
+			Description: "How something remembered changed, in words: every statement about it, oldest first, each with what it began and ended believing, and what is believed now. Use it when the user asks what changed, when, or why something is believed, and to show a correction whole. Something since forgotten still has its history.",
+			InputSchema: schema(map[string]any{
+				"question": map[string]any{"type": "string", "description": "what to trace, in words, such as \"my editor\""},
+			}, "question"),
+			Annotations: readOnlyTool,
+		},
+		{
+			Name:        "diff",
+			Title:       "Diff",
+			Description: "What was believed differently at one instant than at another: each thing that began or stopped being believed in between. Use it to say what changed over a period, such as since the last session or during an incident.",
+			InputSchema: schema(map[string]any{
+				"from": map[string]any{"type": "string", "description": "the earlier RFC3339 instant, e.g. 2026-09-01T00:00:00Z"},
+				"to":   map[string]any{"type": "string", "description": "the later RFC3339 instant; omit for now"},
+			}, "from"),
+			Annotations: readOnlyTool,
+		},
 	}
 	if s.write {
 		return tools
 	}
-	return tools[1:2]
+	return append(tools[1:2:2], tools[3:]...)
 }
 
 func (s *mcpServer) textInstructions() string {
@@ -87,7 +106,7 @@ func (s *mcpServer) textInstructions() string {
 	if s.write {
 		b.WriteString("Use forget when the user asks you to forget something. ")
 	}
-	b.WriteString("Nothing is deleted, so recall with as_of answers what was believed earlier.\n")
+	b.WriteString("Nothing is deleted, so recall with as_of answers what was believed earlier, history shows how something changed, and diff what changed between two instants.\n")
 	return b.String()
 }
 
@@ -102,6 +121,10 @@ func (m *memoryRuntime) runTextTool(name string, args json.RawMessage) (string, 
 		return m.textRecall(args)
 	case "forget":
 		return m.textForget(args)
+	case "history":
+		return m.textHistory(args)
+	case "diff":
+		return m.textDiff(args)
 	}
 	return "", fmt.Errorf("unknown tool %q", name)
 }
@@ -199,16 +222,6 @@ func (m *memoryRuntime) textRecall(args json.RawMessage) (string, error) {
 	if err := strictArgs(args, &a); err != nil {
 		return "", err
 	}
-	instant := func(name, v string) (time.Time, error) {
-		if v == "" {
-			return time.Time{}, nil
-		}
-		t, err := time.Parse(time.RFC3339, v)
-		if err != nil {
-			return time.Time{}, fmt.Errorf("%s must be an RFC3339 instant like 2026-09-01T00:00:00Z: %w", name, err)
-		}
-		return t, nil
-	}
 	asOf, err := instant("as_of", a.AsOf)
 	if err != nil {
 		return "", err
@@ -260,6 +273,95 @@ func (m *memoryRuntime) textForget(args json.RawMessage) (string, error) {
 		return "", fmt.Errorf("%s", encoded)
 	}
 	return marshal(map[string]any{"forgotten": forgotten})
+}
+
+// instant reads an RFC3339 argument; empty is the zero time.
+func instant(name, v string) (time.Time, error) {
+	if v == "" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%s must be an RFC3339 instant like 2026-09-01T00:00:00Z: %w", name, err)
+	}
+	return t, nil
+}
+
+// change is one step of a history told for the text tools.
+type change struct {
+	When      string   `json:"when"`
+	Change    string   `json:"change"`
+	Ended     []string `json:"ended,omitempty"`
+	Began     []string `json:"began,omitempty"`
+	Said      string   `json:"said,omitempty"`
+	Statement string   `json:"statement,omitempty"`
+}
+
+func (m *memoryRuntime) textHistory(args json.RawMessage) (string, error) {
+	var a struct {
+		Question string `json:"question"`
+	}
+	if err := strictArgs(args, &a); err != nil {
+		return "", err
+	}
+	timelines, err := m.client.TimelinesFor(m.ctx, a.Question)
+	if err != nil {
+		return "", err
+	}
+	type traced struct {
+		About   string   `json:"about"`
+		Now     []string `json:"now"`
+		Changes []change `json:"changes"`
+	}
+	out := make([]traced, 0, len(timelines))
+	for _, t := range timelines {
+		tr := traced{About: t.Subject + " " + strings.ReplaceAll(t.Predicate, "_", " "), Now: t.Now, Changes: []change{}}
+		for _, st := range t.Steps {
+			c := change{When: st.At.UTC().Format(time.RFC3339), Change: st.Change, Ended: st.Removed, Began: st.Added, Said: st.Evidence}
+			// A step that changed nothing, or that something other than a
+			// plain statement of this caused, says what was stated.
+			if st.Change == "no change" || st.Change == "withdrawn" || st.Predicate != t.Predicate {
+				c.Statement = st.Statement
+			}
+			tr.Changes = append(tr.Changes, c)
+		}
+		out = append(out, tr)
+	}
+	return marshal(map[string]any{"history": out})
+}
+
+func (m *memoryRuntime) textDiff(args json.RawMessage) (string, error) {
+	var a struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	}
+	if err := strictArgs(args, &a); err != nil {
+		return "", err
+	}
+	if a.From == "" {
+		return "", fmt.Errorf("arguments: from is required")
+	}
+	from, err := instant("from", a.From)
+	if err != nil {
+		return "", err
+	}
+	to, err := instant("to", a.To)
+	if err != nil {
+		return "", err
+	}
+	changes, err := m.client.Diff(m.ctx, recall.DiffRequest{From: from, To: to})
+	if err != nil {
+		return "", err
+	}
+	type diffed struct {
+		Ended []string `json:"ended,omitempty"`
+		Began []string `json:"began,omitempty"`
+	}
+	out := make([]diffed, 0, len(changes))
+	for _, c := range changes {
+		out = append(out, diffed{Ended: c.Removed, Began: c.Added})
+	}
+	return marshal(map[string]any{"changes": out})
 }
 
 func day(t time.Time) string { return t.UTC().Format("2006-01-02") }

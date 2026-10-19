@@ -320,6 +320,20 @@ type Explanation = engine.Explanation
 // Rule is one recorded predicate definition in an Explanation.
 type Rule = engine.Rule
 
+// Timeline is one subject and predicate's history told as changes, as
+// Client.Timeline returns it.
+type Timeline = engine.Timeline
+
+// Step is one statement in a Timeline, with the beliefs it began and ended.
+type Step = engine.Step
+
+// DiffRequest names two instants for Client.Diff to compare.
+type DiffRequest = engine.DiffRequest
+
+// PairChange is how one subject and predicate's beliefs differ between the
+// two instants of a Client.Diff.
+type PairChange = engine.PairChange
+
 // Selector picks which remembered statements a request in words is about,
 // for Client.ForgetText.
 type Selector = engine.Selector

@@ -5,6 +5,9 @@
 //	recall mcp [-write] [-agent] [...]   serve the memory tools over stdio
 //	recall setup [-local | -url URL]     configure Recall, optionally install the Claude plugin
 //	recall explain <question>            say why each matching belief is held
+//	recall history <question>            show how a belief changed, statement by statement
+//	recall ask [-as-of T] [question]     say what is believed, now or at an earlier instant
+//	recall diff -from T [-to T]          show what changed between two instants
 //	recall reembed -embed-model <spec>   copy memory into a collection searched by meaning
 //	recall doctor                        check a configured Recall end to end
 //	recall skill                         print the agent guide
@@ -36,7 +39,7 @@ func main() {
 	backend := flag.String("backend", envOr("RECALL_BACKEND", setupBackend), "storage backend: "+strings.Join(recall.Backends(), ", ")+" (default $RECALL_BACKEND, then "+setupBackend+")")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Usage = func() {
-		fmt.Fprintln(flag.CommandLine.Output(), "Usage: recall [global flags] <command> [options]\n\nCommands: mcp, connect, serve, key, explain, reembed, setup, doctor, skill\nAgent guide: recall skill (offline)\n\nGlobal flags:")
+		fmt.Fprintln(flag.CommandLine.Output(), "Usage: recall [global flags] <command> [options]\n\nCommands: mcp, connect, serve, key, explain, history, ask, diff, reembed, setup, doctor, skill\nAgent guide: recall skill (offline)\n\nGlobal flags:")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -73,6 +76,12 @@ func main() {
 		err = cmdKey(c, args, os.Stdout)
 	case "explain":
 		err = cmdExplain(c, url != "", args, os.Stdout)
+	case "history":
+		err = cmdHistory(c, url != "", args, os.Stdout)
+	case "ask":
+		err = cmdAsk(c, url != "", args, os.Stdout)
+	case "diff":
+		err = cmdDiff(c, url != "", args, os.Stdout)
 	case "reembed":
 		err = cmdReembed(c, url != "", args, os.Stdout)
 	case "setup", "doctor":
@@ -80,7 +89,7 @@ func main() {
 	case "skill":
 		err = cmdSkill(args, os.Stdout)
 	default:
-		err = fmt.Errorf("unknown command %q (want mcp, connect, serve, key, explain, reembed, setup, doctor, skill)", cmd)
+		err = fmt.Errorf("unknown command %q (want mcp, connect, serve, key, explain, history, ask, diff, reembed, setup, doctor, skill)", cmd)
 	}
 	if err != nil {
 		log.Fatal(err)
