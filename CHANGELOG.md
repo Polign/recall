@@ -35,8 +35,9 @@
   interfaces for implementors, the MongoDB backend's layout, text
   extraction), how changes are made, and what 1.0 needs.
 - CI now blocks on `govulncheck` over the source and the built binary, builds
-  and smoke-tests the container image on every change, and runs the MongoDB
-  backend's conformance suite on a replica set. Dependabot watches the Go
+  and smoke-tests the container image on every change, and runs the
+  PostgreSQL, Qdrant and MongoDB (on a replica set) backends' conformance
+  suites, which now include reading a correction back as history and diff. Dependabot watches the Go
   module, the Python package and the Actions pins.
 
 ### Changed

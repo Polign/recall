@@ -40,6 +40,86 @@ func Run(t *testing.T, newBackend func(t *testing.T) recall.Backend) {
 	t.Run("Leases", func(t *testing.T) { leases(t, newBackend(t), collection(t)) })
 	t.Run("Fence", func(t *testing.T) { fence(t, newBackend(t), collection(t)) })
 	t.Run("Agent", func(t *testing.T) { agent(t, newBackend(t), collection(t)) })
+	t.Run("Corrections", func(t *testing.T) { corrections(t, newBackend(t), collection(t)) })
+}
+
+// corrections reads a correction back as a record: the timeline of one
+// fact, the same fact found by a question after it was forgotten, what was
+// believed between the two statements, and the diff across them.
+func corrections(t *testing.T, b recall.Backend, c string) {
+	ctx := context.Background()
+	cl, err := recall.NewClient(recall.Config{Backend: b, Collection: c, Registry: recall.DefaultRegistry(), Embedder: recall.LexicalEmbedder{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remember := func(pred, value string) {
+		t.Helper()
+		if _, err := cl.Remember(ctx, recall.RememberRequest{Subject: "user", Predicate: pred, Value: value}); err != nil {
+			t.Fatalf("remember %s=%s: %v", pred, value, err)
+		}
+	}
+	// Stored instants may be as coarse as a millisecond; keep the marks
+	// clear of the writes.
+	pause := func() { time.Sleep(20 * time.Millisecond) }
+	remember("prefers_editor", "vim")
+	remember("uses_technology", "go")
+	pause()
+	between := time.Now().UTC()
+	pause()
+	remember("prefers_editor", "neovim")
+	if _, err := cl.Forget(ctx, recall.ForgetRequest{Subject: "user", Predicate: "prefers_editor", All: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	tl, err := cl.Timeline(ctx, "user", "prefers_editor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var changes []string
+	for _, st := range tl.Steps {
+		changes = append(changes, st.Change)
+	}
+	if strings.Join(changes, ",") != "stated,replaced,withdrawn" || len(tl.Now) != 0 {
+		t.Fatalf("timeline %v, now %v; want stated,replaced,withdrawn and nothing now", changes, tl.Now)
+	}
+	if r := tl.Steps[1].Removed; len(r) != 1 || r[0] != "user prefers editor: vim" {
+		t.Fatalf("the correction removed %v, want vim", r)
+	}
+
+	found, err := cl.TimelinesFor(ctx, "which editor does the user prefer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok := false
+	for _, f := range found {
+		ok = ok || f.Predicate == "prefers_editor" && len(f.Steps) == 3
+	}
+	if !ok {
+		t.Fatalf("a question did not reach the forgotten editor's timeline: %+v", found)
+	}
+
+	then, err := cl.Recall(ctx, recall.Query{Subject: "user", Predicate: "prefers_editor", AsOf: between})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(then) != 1 || then[0].Value != "vim" {
+		t.Fatalf("as of between: %+v, want vim", then)
+	}
+
+	diff, err := cl.Diff(ctx, recall.DiffRequest{Subject: "user", From: between})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diff) != 1 || diff[0].Predicate != "prefers_editor" || len(diff[0].Removed) != 1 || len(diff[0].Added) != 0 {
+		t.Fatalf("diff since between = %+v, want the editor withdrawn and nothing else", diff)
+	}
+	all, err := cl.Diff(ctx, recall.DiffRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 || all[0].Predicate != "uses_technology" {
+		t.Fatalf("diff from the beginning = %+v, want only uses_technology still believed", all)
+	}
 }
 
 var (
