@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-19
+
 ### Added
 
 - Corrections can be read as a record. `recall history <question>` (or
@@ -26,7 +28,6 @@
   `POST /v1/timeline` and `POST /v1/diff`. `memory_history` is unchanged.
   Python: `Client.timeline(subject, predicate)`, and `Client.diff` now works
   on either surface.
-
 - `STABILITY.md` says which surfaces are stable within 0.x and carried into
   1.0 unchanged (stored records, audit bundles, the MCP tool contract,
   `recall serve` HTTP, the Python memory calls, the Go memory API,
@@ -66,8 +67,9 @@
   HTTP/2, `crypto/tls` and `net/textproto`. `go.mod` now carries
   `toolchain go1.27.2`.
 - The MongoDB driver is 2.4.2 (GSSAPI error handling read out of bounds in
-  2.2.2), with `golang.org/x/crypto` 0.52.0 and `klauspost/compress` 1.20.3.
-  `govulncheck` on the release binary now finds no vulnerabilities.
+  2.2.2), with `golang.org/x/crypto` 0.56.0 and `klauspost/compress` 1.20.3.
+  `govulncheck` finds no vulnerabilities in the source or the release binary,
+  and none in a required module that has a fix.
 
 ## [0.21.0] - 2026-10-18
 
