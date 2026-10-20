@@ -83,8 +83,8 @@ judge, upstream prompts:
 With its built-in word search, Recall is about even with BM25 overall and
 behind it on preference questions (70.0 against 83.3). A model embedder puts it
 ahead, and it is the default since 0.20.0 when the extractor is an OpenAI
-model. Recall hands the reader about 36k tokens per question, against about
-168k for the full history.
+model. With word search, Recall handed the reader about 28k tokens per
+question, against about 44k for BM25 and 168k for the full history.
 
 ## Choose an integration
 
