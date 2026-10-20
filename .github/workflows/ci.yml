@@ -1,8 +1,8 @@
 # Test and lint gate for every push and PR. The library itself needs no
 # services; cmd/recall's integration tests run a real polign-server from the
 # latest polign_db wheel, so the HTTP contract Recall depends on is checked
-# against what users install. A PostgreSQL service and a MongoDB replica set
-# run those backends' conformance suites. Separate jobs run govulncheck on the
+# against what users install. A PostgreSQL service, a Qdrant service and a
+# MongoDB replica set run those backends' conformance suites. Separate jobs run govulncheck on the
 # source and the built binary, and build and smoke-test the container image,
 # so a release cannot ship a known vulnerability or an image that does not
 # build (0.18.0 through 0.20.2 shipped without one).
@@ -31,6 +31,10 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      qdrant:
+        image: qdrant/qdrant:v1.19.2
+        ports:
+          - 6333:6333
     steps:
       - uses: actions/checkout@v4
 
@@ -80,6 +84,7 @@ jobs:
           RECALL_REQUIRE_POLIGN: "1"
           RECALL_PGVECTOR_URL: postgres://postgres:recall@localhost:5432/postgres
           RECALL_MONGODB_URL: mongodb://localhost:27017/?directConnection=true
+          RECALL_QDRANT_URL: http://localhost:6333
         run: go test -race -timeout 10m ./...
 
       - name: Wheel builder tests
