@@ -1,45 +1,30 @@
 # Polign Recall
 
-Typed, durable memory for agents. Every fact is a record. Every correction is
-either a rule you declared or a statement the agent made. No model decides what
-to forget.
+Memory for agents whose facts change. When a user corrects something, Recall
+replaces the old fact, tells the agent what it replaced, and keeps the old
+value in a history you can read back. Nothing is deleted, and no model decides
+on its own what to forget.
+
+![Recall, mem0 and Zep answering questions about a user whose facts changed over nine months](docs/demo.gif)
+
+The demo is a real run: one user over nine months, with three homes, three
+employers, and three work emails, then six questions about her now. Opus 5.5 extracted, answered, and judged for
+all three systems, three runs each. Right answers: Recall 18/18, mem0 18/18,
+Zep 12/18. Tokens to save one message: Recall 3.0k, mem0 12.7k, Zep 14.7k.
+
+## Install
 
 ```sh
 pip install polign-recall          # Python client; brings the server with it
 go get github.com/Polign/recall    # Go
 recall mcp -write                  # MCP over stdio: remember(text), recall(question), forget(text)
-recall mcp -write -typed           # the typed tools instead: remember(subject, predicate, value), history
 ```
 
-`recall mcp` serves the text tools: pass a passage to `remember`, and the model
-named by `-extract-model` works out the facts in it. Without a model the text is
-kept as written and replaces nothing. `-typed` serves the typed tools over a
-fixed vocabulary, which is what the rules below are written in.
+The [Quickstart](#quickstart) runs without a model or an API key.
 
-What a session looks like with the typed tools and the personal starter registry:
+## What a correction looks like
 
-```text
-remember(user, likes, mangoes)
-remember(user, dislikes, mangoes)
-  -> superseded: [likes: mangoes]          # the registry says dislikes excludes likes
-
-recall(user, dislikes)
-  -> mangoes   replaced: [likes: mangoes]  # the correction arrives with the answer
-
-remember(user, goal, "run a marathon")
-remember(user, did,  "run a marathon")
-recall(user, goal)
-  -> run a marathon   elsewhere: [did: run a marathon]   # no rule joins goal and did,
-                                                         # so the read shows both
-
-remember(user, did, "run a marathon",
-         replaces=[goal: "run a marathon", goal: "learn piano"])
-  -> replaced:   [goal: run a marathon]
-  -> unreplaced: [goal: learn piano]       # never believed, so reported, not dropped
-```
-
-Nothing is deleted. Every replaced value stays in history, and `as_of` answers
-what was believed at any earlier moment. Three commands read that record:
+Every change is kept. Three commands read that record:
 
 ```text
 $ recall history "which editor do I use"
@@ -67,26 +52,39 @@ Changed between 2026-09-15 00:00 and 2026-10-31 00:00:
 + user preferred editor: zed
 ```
 
-Each step of a history is the log folded just before and just after that
-statement, so it agrees with a read at that instant. Agents get the same
-record through the `history` and `diff` MCP tools (`timeline` and `diff` with
-`-typed`), `recall serve` answers them over HTTP at `/v1/history`,
-`/v1/timeline` and `/v1/diff`, and the Python client has `history_text`,
-`timeline` and `diff`.
+## Why Recall
 
-No model reconciles memory on its own. Recall applies the rules the registry
-declares, shows the candidates that may conflict, and lets your agent confirm
-the rest, so every correction can be read back to the rule or the statement
-that made it.
+- **Corrections are records.** A new value replaces the old one by a rule you
+  can read, and the answer arrives with what it replaced.
+- **Ask about any moment.** `as_of`, `history`, and `diff` answer what the
+  agent believed then, and when that changed.
+- **Every answer has a source.** `recall explain` shows the message a fact came
+  from, the rule that decided it, and its history.
+- **Shared and resumable.** Agents in different processes read and correct the
+  same memory, and a crashed agent [resumes from its records](#resuming-an-agent).
+- **Your storage.** polign_db, PostgreSQL with pgvector, MongoDB, or Qdrant.
+  Apache 2.0.
 
-Agents share memory across processes and sessions: one agent records a
-preference, another corrects it, and both read the same current value and the
-same history. Recall can also [resume an agent from its records](#resuming-an-agent)
-when its process crashes or moves to another machine.
+## Benchmark
 
-Use it through **Go**, **Python**, or **MCP**, with
-[Polign](https://github.com/Polign/polign) as the storage backend. Go applications
-can also supply their own backend.
+LongMemEval user-facts subset (267 questions about a user's own facts,
+preferences, updates, and dates), Recall 0.19.0, Sonnet 5.5 as reader and
+judge, upstream prompts:
+
+| What the reader is given | Score |
+| --- | --- |
+| Nothing | 6.0 |
+| The full chat history | 88.0 |
+| BM25 over sessions, top 10 | 89.9 |
+| Recall, built-in word search | 88.8 |
+| Recall with a model embedder (OpenAI text-embedding-3-small, 512 dims) | 92.9 |
+| Only the sessions that hold the answer | 96.6 |
+
+With its built-in word search, Recall is about even with BM25 overall and
+behind it on preference questions (70.0 against 83.3). A model embedder puts it
+ahead, and it is the default since 0.20.0 when the extractor is an OpenAI
+model. Recall hands the reader about 36k tokens per question, against about
+168k for the full history.
 
 ## Choose an integration
 
@@ -225,9 +223,48 @@ corrected with one event (`Redefine`, `Merge`, `Split`) that every answer
 follows. The model is called on every `remember` and `forget`, and the text is
 sent to its provider. See [text-only tools](docs/mcp.md#text-only-tools).
 
-On the LongMemEval user-facts subset (267 questions, gpt-4o-mini extraction,
-gpt-4o reading and judging), an open vocabulary scored 79.4% against 81.3% for
-a hand-tuned registry, a difference within noise at that size (p = 0.36).
+The [benchmark](#benchmark) above uses these text tools with an open
+vocabulary seeded from the personal starter.
+
+### Typed tools
+
+`recall mcp -write -typed` serves tools over a fixed vocabulary instead, such
+as `remember(subject, predicate, value)`. A session with the personal starter
+registry:
+
+```text
+remember(user, likes, mangoes)
+remember(user, dislikes, mangoes)
+  -> superseded: [likes: mangoes]          # the registry says dislikes excludes likes
+
+recall(user, dislikes)
+  -> mangoes   replaced: [likes: mangoes]  # the correction arrives with the answer
+
+remember(user, goal, "run a marathon")
+remember(user, did,  "run a marathon")
+recall(user, goal)
+  -> run a marathon   elsewhere: [did: run a marathon]   # no rule joins goal and did,
+                                                         # so the read shows both
+
+remember(user, did, "run a marathon",
+         replaces=[goal: "run a marathon", goal: "learn piano"])
+  -> replaced:   [goal: run a marathon]
+  -> unreplaced: [goal: learn piano]       # never believed, so reported, not dropped
+```
+
+No model reconciles memory on its own. Recall applies the rules the registry
+declares, shows the candidates that may conflict, and lets your agent confirm
+the rest, so every correction can be read back to the rule or the statement
+that made it.
+
+### Reading the record
+
+Each step of a history is the log folded just before and just after that
+statement, so it agrees with a read at that instant. Agents get the same
+record through the `history` and `diff` MCP tools (`timeline` and `diff` with
+`-typed`), `recall serve` answers them over HTTP at `/v1/history`,
+`/v1/timeline` and `/v1/diff`, and the Python client has `history_text`,
+`timeline` and `diff`.
 
 ## Resuming an agent
 
@@ -422,6 +459,12 @@ test commands.
 [Connecting through MCP](docs/mcp.md) ·
 [Caching memory reads](docs/materialization.md) ·
 [Exporting and replaying history](docs/audit.md)
+
+## Support the project
+
+If Recall kept your agent from acting on a stale fact, a star on this
+repository helps other people find it. Bugs, questions, and ideas go in
+[issues](https://github.com/Polign/recall/issues).
 
 ## License
 
