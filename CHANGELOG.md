@@ -2,12 +2,19 @@
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-10-22
+
 ### Fixed
 
 - `recall serve` with the local embedder (`local:all-minilm-l6-v2`) failed
   every embedding with "context canceled" after the first request: the model
   session kept the context of the request that loaded it. It now outlives
   that request.
+
+### Security
+
+- Built with Go 1.27.3, which distrusts compromised intermediate
+  certificates in `crypto/x509` (GO-2026-6809).
 
 ## [0.22.0] - 2026-10-19
 
