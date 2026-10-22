@@ -1,6 +1,6 @@
 [Unit]
 Description=Recall first-boot configuration
-Documentation=https://polign.com/docs/recall
+Documentation=https://polign.com/docs
 # Do not order this after walinuxagent.service or cloud-final.service. On
 # Debian both are themselves ordered after multi-user.target, which is what
 # starts this unit, and systemd breaks that cycle by silently dropping this
