@@ -1,0 +1,127 @@
+#!/bin/bash
+# Turns a launch into a configured instance, once.
+#
+# Resolves the store spec, the region, and the node id, writes
+# /etc/recall/recall.env for both services, and generates the two keys this
+# instance runs on:
+#
+#   /etc/recall/polign-key  the key Recall uses to reach the database on
+#                           localhost. Nothing else needs it.
+#   /etc/recall/admin-key   the first Recall admin key. It mints namespace
+#                           keys for applications over HTTP (POST /v1/keys).
+#
+# Both are generated on the instance, so no two launches share a key, and only
+# their ids reach the console log. Anything the launch already put in
+# recall.env wins: this only fills what is missing.
+#
+# This is the Azure counterpart of the AWS build's script. Metadata comes
+# from IMDS with a Metadata:true header, and configuration a launch passes
+# arrives as VM tags (recall-store, recall-embed-model, ...).
+set -euo pipefail
+
+DEFAULTS=${RECALL_DEFAULTS_FILE:-/etc/recall/recall.env.defaults}
+CONF=${RECALL_CONF_FILE:-/etc/recall/recall.env}
+DIR=${RECALL_ETC_DIR:-/etc/recall}
+STATE=${RECALL_STATE_DIR:-/var/lib/recall}
+MD=${RECALL_METADATA_URL:-http://169.254.169.254/metadata}
+API="api-version=2021-02-01"
+
+md() {
+  curl -fsS -H "Metadata: true" --max-time 5 "${MD}/instance/$1?${API}&format=text"
+}
+
+# Tags arrive as "k1:v1;k2:v2". Values may contain ':' (az://...), so split on
+# the first ':' only, and on ';' between pairs. Azure forbids ';' in tag
+# values, which is what makes this parse safe.
+tag() {
+  md compute/tags 2>/dev/null | tr ';' '\n' | awk -F: -v k="$1" '$1 == k { sub(/^[^:]*:/, ""); print; exit }'
+}
+
+# Defaults first, then VM tags, then recall.env, so the most specific
+# setting wins.
+set -a
+# shellcheck disable=SC1090
+. "$DEFAULTS"
+attr() { tag "$1" || true; }
+v=$(attr recall-embed-model); [ -n "$v" ] && POLIGN_EMBED_MODEL=$v
+v=$(attr recall-disk-cache-bytes); [ -n "$v" ] && POLIGN_DISK_CACHE_BYTES=$v
+v=$(attr recall-extra-args); [ -n "$v" ] && RECALL_EXTRA_ARGS=$v
+if [ -f "$CONF" ]; then . "$CONF"; fi
+set +a
+
+: "${POLIGN_NODE_ID:=$(md compute/name || echo recall-0)}"
+
+# The store can also come from the recall-store VM tag.
+if [ -z "${POLIGN_STORE:-}" ]; then
+  POLIGN_STORE=$(attr recall-store)
+fi
+
+if [ -z "${POLIGN_STORE:-}" ]; then
+  cat >&2 <<'MSG'
+Recall is not configured: no store was supplied.
+
+Recall never creates its own bucket. Give this instance one, either by writing
+POLIGN_STORE to /etc/recall/recall.env before boot:
+
+  POLIGN_STORE=az://mystorageaccount/recall/memory
+
+or by setting the VM tag  recall-store = az://mystorageaccount/recall/memory
+The VM also needs a managed identity with the Storage Blob Data Contributor
+role on that container. A system-assigned identity is picked up
+automatically; a user-assigned one needs AZURE_CLIENT_ID in recall.env. Then:
+  systemctl restart recall-firstboot polign-server recall
+MSG
+  exit 1
+fi
+
+# Everything the launch put in recall.env that this script does not manage
+# (an OPENAI_API_KEY, say) is carried over verbatim. That includes
+# AZURE_CLIENT_ID, which is never written empty: the Azure SDK treats a
+# variable that is set but empty as a user-assigned identity with no id.
+umask 027
+tmp=$(mktemp "${CONF}.XXXXXX")
+{
+  echo "# Written by recall-firstboot on first boot. Edit and restart polign-server and recall."
+  for v in POLIGN_STORE POLIGN_STORE_ENCRYPTION_KEY_FILE POLIGN_NODE_ID POLIGN_DISK_CACHE_BYTES \
+      POLIGN_EXTRA_ARGS RECALL_LISTEN POLIGN_EMBED_MODEL POLIGN_EXTRACT_MODEL RECALL_EXTRA_ARGS; do
+    printf '%s=%s\n' "$v" "${!v:-}"
+  done
+  if [ -f "$CONF" ]; then
+    grep -vE '^(#|$|(POLIGN_STORE|POLIGN_STORE_ENCRYPTION_KEY_FILE|POLIGN_NODE_ID|POLIGN_DISK_CACHE_BYTES|POLIGN_EXTRA_ARGS|RECALL_LISTEN|POLIGN_EMBED_MODEL|POLIGN_EXTRACT_MODEL|RECALL_EXTRA_ARGS)=)' "$CONF" || true
+  fi
+} > "$tmp"
+chmod 0600 "$tmp"
+mv "$tmp" "$CONF"
+
+# The database key: "plgn_<id>_<secret>", which polign-server registers at
+# startup through -bootstrap-key-file. Recall reads it from an environment
+# file only systemd opens, so it never appears on a command line.
+if [ ! -s "$DIR/polign-key" ]; then
+  key="plgn_$(openssl rand -hex 8)_$(openssl rand -hex 32)"
+  install -m 0640 -o root -g polign /dev/null "$DIR/polign-key"
+  printf '%s\n' "$key" > "$DIR/polign-key"
+  install -m 0600 -o root -g root /dev/null "$DIR/polign-key.env"
+  printf 'POLIGN_API_KEY=%s\n' "$key" > "$DIR/polign-key.env"
+fi
+
+# The first Recall admin key: "rcl_<id>_<secret>", registered by recall serve
+# through -bootstrap-key-file.
+if [ ! -s "$DIR/admin-key" ]; then
+  key="rcl_$(openssl rand -hex 8)_$(openssl rand -hex 32)"
+  install -m 0640 -o root -g recall /dev/null "$DIR/admin-key"
+  printf '%s\n' "$key" > "$DIR/admin-key"
+  echo "recall: generated admin key $(printf '%s' "$key" | cut -d_ -f2)"
+  echo "recall: secret in $DIR/admin-key; read it over SSH"
+fi
+
+touch "$STATE/.firstboot-done"
+
+cat <<MSG
+Recall configured
+  store     ${POLIGN_STORE}
+  as        VM managed identity${AZURE_CLIENT_ID:+ (client id ${AZURE_CLIENT_ID})}
+  keys      ${POLIGN_STORE_ENCRYPTION_KEY_FILE:-none (storage-side encryption only)}
+  embedder  ${POLIGN_EMBED_MODEL:-lexical}
+  listen    ${RECALL_LISTEN}
+Every request needs a Recall key. Keep the network security group rule scoped to your virtual network.
+MSG

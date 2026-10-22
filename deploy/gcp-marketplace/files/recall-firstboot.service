@@ -1,0 +1,17 @@
+[Unit]
+Description=Recall first-boot configuration
+Documentation=https://polign.com/docs/recall
+After=network-online.target google-guest-agent.service
+Wants=network-online.target
+Before=polign-server.service recall.service
+ConditionPathExists=!/var/lib/recall/.firstboot-done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/recall-firstboot
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

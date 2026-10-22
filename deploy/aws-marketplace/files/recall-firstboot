@@ -1,0 +1,118 @@
+#!/bin/bash
+# Turns a launch into a configured instance, once.
+#
+# Resolves the store spec, the region, and the node id, writes
+# /etc/recall/recall.env for both services, and generates the two keys this
+# instance runs on:
+#
+#   /etc/recall/polign-key  the key Recall uses to reach the database on
+#                           localhost. Nothing else needs it.
+#   /etc/recall/admin-key   the first Recall admin key. It mints namespace
+#                           keys for applications over HTTP (POST /v1/keys).
+#
+# Both are generated on the instance, so no two launches share a key, and only
+# their ids reach the console log. Anything the launch already put in
+# recall.env wins: this only fills what is missing.
+set -euo pipefail
+
+DEFAULTS=${RECALL_DEFAULTS_FILE:-/etc/recall/recall.env.defaults}
+CONF=${RECALL_CONF_FILE:-/etc/recall/recall.env}
+DIR=${RECALL_ETC_DIR:-/etc/recall}
+STATE=${RECALL_STATE_DIR:-/var/lib/recall}
+
+imds() {
+  local token
+  token=$(curl -fsS -X PUT "http://169.254.169.254/latest/api/token" \
+    -H "X-aws-ec2-metadata-token-ttl-seconds: 300" --max-time 5) || return 1
+  curl -fsS -H "X-aws-ec2-metadata-token: $token" --max-time 5 \
+    "http://169.254.169.254/latest/meta-data/$1"
+}
+
+# Defaults first, then whatever the launch supplied, so the launch wins.
+set -a
+# shellcheck disable=SC1090
+. "$DEFAULTS"
+if [ -f "$CONF" ]; then . "$CONF"; fi
+set +a
+
+: "${POLIGN_NODE_ID:=$(imds instance-id || echo recall-0)}"
+: "${AWS_REGION:=$(imds placement/region || true)}"
+
+# The store and the cross-account role can also come from instance tags. The
+# tag path needs instance metadata tags enabled; the listing's CloudFormation
+# template enables them.
+if [ -z "${POLIGN_STORE:-}" ]; then
+  POLIGN_STORE=$(imds "tags/instance/recall:store" 2>/dev/null || true)
+fi
+if [ -z "${POLIGN_STORE_ROLE_ARN:-}" ]; then
+  POLIGN_STORE_ROLE_ARN=$(imds "tags/instance/recall:store-role-arn" 2>/dev/null || true)
+fi
+
+if [ -z "${POLIGN_STORE:-}" ]; then
+  cat >&2 <<'MSG'
+Recall is not configured: no store was supplied.
+
+Recall never creates its own bucket. Give this instance one, either by writing
+POLIGN_STORE to /etc/recall/recall.env before boot:
+
+  POLIGN_STORE=s3://my-bucket/recall
+
+or by tagging the instance  recall:store = s3://my-bucket/recall  with instance
+metadata tags enabled. The instance also needs a role with read and write
+access to that bucket. Then:
+  systemctl restart recall-firstboot polign-server recall
+MSG
+  exit 1
+fi
+
+# Everything the launch put in recall.env that this script does not manage
+# (an OPENAI_API_KEY, say) is carried over verbatim.
+umask 027
+tmp=$(mktemp "${CONF}.XXXXXX")
+{
+  echo "# Written by recall-firstboot on first boot. Edit and restart polign-server and recall."
+  for v in POLIGN_STORE POLIGN_STORE_ROLE_ARN POLIGN_STORE_EXTERNAL_ID POLIGN_STORE_REGION \
+      POLIGN_STORE_ENCRYPTION_KEY_FILE AWS_REGION POLIGN_NODE_ID POLIGN_DISK_CACHE_BYTES \
+      POLIGN_EXTRA_ARGS RECALL_LISTEN POLIGN_EMBED_MODEL POLIGN_EXTRACT_MODEL RECALL_EXTRA_ARGS; do
+    printf '%s=%s\n' "$v" "${!v:-}"
+  done
+  if [ -f "$CONF" ]; then
+    grep -vE '^(#|$|(POLIGN_STORE|POLIGN_STORE_ROLE_ARN|POLIGN_STORE_EXTERNAL_ID|POLIGN_STORE_REGION|POLIGN_STORE_ENCRYPTION_KEY_FILE|AWS_REGION|POLIGN_NODE_ID|POLIGN_DISK_CACHE_BYTES|POLIGN_EXTRA_ARGS|RECALL_LISTEN|POLIGN_EMBED_MODEL|POLIGN_EXTRACT_MODEL|RECALL_EXTRA_ARGS)=)' "$CONF" || true
+  fi
+} > "$tmp"
+chmod 0600 "$tmp"
+mv "$tmp" "$CONF"
+
+# The database key: "plgn_<id>_<secret>", which polign-server registers at
+# startup through -bootstrap-key-file. Recall reads it from an environment
+# file only systemd opens, so it never appears on a command line.
+if [ ! -s "$DIR/polign-key" ]; then
+  key="plgn_$(openssl rand -hex 8)_$(openssl rand -hex 32)"
+  install -m 0640 -o root -g polign /dev/null "$DIR/polign-key"
+  printf '%s\n' "$key" > "$DIR/polign-key"
+  install -m 0600 -o root -g root /dev/null "$DIR/polign-key.env"
+  printf 'POLIGN_API_KEY=%s\n' "$key" > "$DIR/polign-key.env"
+fi
+
+# The first Recall admin key: "rcl_<id>_<secret>", registered by recall serve
+# through -bootstrap-key-file.
+if [ ! -s "$DIR/admin-key" ]; then
+  key="rcl_$(openssl rand -hex 8)_$(openssl rand -hex 32)"
+  install -m 0640 -o root -g recall /dev/null "$DIR/admin-key"
+  printf '%s\n' "$key" > "$DIR/admin-key"
+  echo "recall: generated admin key $(printf '%s' "$key" | cut -d_ -f2)"
+  echo "recall: secret in $DIR/admin-key; read it over Session Manager"
+fi
+
+touch "$STATE/.firstboot-done"
+
+cat <<MSG
+Recall configured
+  store     ${POLIGN_STORE}
+  as        ${POLIGN_STORE_ROLE_ARN:-instance role}
+  keys      ${POLIGN_STORE_ENCRYPTION_KEY_FILE:-none (storage-side encryption only)}
+  region    ${POLIGN_STORE_REGION:-${AWS_REGION:-unset}}
+  embedder  ${POLIGN_EMBED_MODEL:-lexical}
+  listen    ${RECALL_LISTEN}
+Every request needs a Recall key. Keep the security group scoped to your VPC.
+MSG

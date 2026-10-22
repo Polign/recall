@@ -1,0 +1,43 @@
+[Unit]
+StartLimitIntervalSec=0
+Description=polign_db, the store behind Recall
+Documentation=https://polign.com/operations
+Requires=recall-firstboot.service
+After=network-online.target recall-firstboot.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=polign
+Group=polign
+EnvironmentFile=/etc/recall/recall.env
+Environment=HOME=/var/lib/polign
+# Localhost only, with a data key: Recall is the front door.
+ExecStart=/usr/local/bin/polign-server \
+  -store ${POLIGN_STORE} \
+  -telemetry-id-file /var/lib/polign/telemetry-install-id \
+  -http 127.0.0.1:23000 \
+  -grpc 127.0.0.1:23001 \
+  -require-data-key \
+  -bootstrap-key-file /etc/recall/polign-key \
+  -node-id ${POLIGN_NODE_ID} \
+  -disk-cache-dir /var/cache/polign \
+  -disk-cache-bytes ${POLIGN_DISK_CACHE_BYTES} \
+  $POLIGN_EXTRA_ARGS
+Restart=on-failure
+RestartSec=2
+LimitNOFILE=65536
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/polign /var/cache/polign
+
+[Install]
+WantedBy=multi-user.target

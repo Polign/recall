@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Marketplace VM images for AWS, Google Cloud and Azure in
+  `deploy/{aws,gcp,azure}-marketplace`: Recall on `:8080` with polign_db as
+  its store on the same machine (localhost only), the built-in embedding
+  model baked in, and keys generated on first boot. AWS ships a
+  CloudFormation template and Google Cloud a Terraform module.
+
 ## [0.22.0] - 2026-10-19
 
 ### Added

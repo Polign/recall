@@ -1,0 +1,23 @@
+[Unit]
+Description=Recall first-boot configuration
+Documentation=https://polign.com/docs/recall
+# Do not order this after walinuxagent.service or cloud-final.service. On
+# Debian both are themselves ordered after multi-user.target, which is what
+# starts this unit, and systemd breaks that cycle by silently dropping this
+# job (found on the 2026-09-22 smoke test). The script needs only the network
+# and IMDS, and cloud-init.service (the network stage) finishes before
+# network-online.target, so this is early enough and cycle-free.
+After=network-online.target cloud-init.service
+Wants=network-online.target
+Before=polign-server.service recall.service
+ConditionPathExists=!/var/lib/recall/.firstboot-done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/recall-firstboot
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,37 @@
+[Unit]
+StartLimitIntervalSec=0
+Description=Recall memory server
+Documentation=https://polign.com/docs/recall
+Requires=recall-firstboot.service
+Wants=polign-server.service network-online.target
+After=network-online.target recall-firstboot.service polign-server.service
+
+[Service]
+Type=simple
+User=recall
+Group=recall
+EnvironmentFile=/etc/recall/recall.env
+EnvironmentFile=/etc/recall/polign-key.env
+Environment=HOME=/var/lib/recall
+Environment=RECALL_MODEL_DIR=/opt/recall/models
+ExecStart=/usr/local/bin/recall -url http://127.0.0.1:23000 serve \
+  -listen ${RECALL_LISTEN} \
+  -bootstrap-key-file /etc/recall/admin-key \
+  $RECALL_EXTRA_ARGS
+# The database may still be opening its store on the first start.
+Restart=on-failure
+RestartSec=2
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/recall
+
+[Install]
+WantedBy=multi-user.target

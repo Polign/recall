@@ -1,0 +1,119 @@
+#!/bin/bash
+# Turns a launch into a configured instance, once.
+#
+# Resolves the store spec, the region, and the node id, writes
+# /etc/recall/recall.env for both services, and generates the two keys this
+# instance runs on:
+#
+#   /etc/recall/polign-key  the key Recall uses to reach the database on
+#                           localhost. Nothing else needs it.
+#   /etc/recall/admin-key   the first Recall admin key. It mints namespace
+#                           keys for applications over HTTP (POST /v1/keys).
+#
+# Both are generated on the instance, so no two launches share a key, and only
+# their ids reach the console log. Anything the launch already put in
+# recall.env wins: this only fills what is missing.
+#
+# This is the Google Cloud counterpart of the AWS build's script. Metadata
+# comes from the GCE metadata server, and configuration a launch passes
+# arrives as custom metadata attributes, since GCE tags are network tags.
+set -euo pipefail
+
+DEFAULTS=${RECALL_DEFAULTS_FILE:-/etc/recall/recall.env.defaults}
+CONF=${RECALL_CONF_FILE:-/etc/recall/recall.env}
+DIR=${RECALL_ETC_DIR:-/etc/recall}
+STATE=${RECALL_STATE_DIR:-/var/lib/recall}
+MD=${RECALL_METADATA_URL:-http://metadata.google.internal/computeMetadata/v1}
+
+md() {
+  curl -fsS -H "Metadata-Flavor: Google" --max-time 5 "${MD}/$1"
+}
+
+# Defaults first, then metadata attributes, then recall.env, so the most
+# specific setting wins. The Terraform module passes its settings as
+# attributes, which are readable the moment the VM boots; a startup script
+# would race this unit.
+set -a
+# shellcheck disable=SC1090
+. "$DEFAULTS"
+attr() { md "instance/attributes/$1" 2>/dev/null || true; }
+v=$(attr recall-embed-model); [ -n "$v" ] && POLIGN_EMBED_MODEL=$v
+v=$(attr recall-disk-cache-bytes); [ -n "$v" ] && POLIGN_DISK_CACHE_BYTES=$v
+v=$(attr recall-extra-args); [ -n "$v" ] && RECALL_EXTRA_ARGS=$v
+if [ -f "$CONF" ]; then . "$CONF"; fi
+set +a
+
+: "${POLIGN_NODE_ID:=$(md instance/name || echo recall-0)}"
+
+# The store can also come from a custom metadata attribute, which the
+# listing's Terraform module sets.
+if [ -z "${POLIGN_STORE:-}" ]; then
+  POLIGN_STORE=$(md "instance/attributes/recall-store" 2>/dev/null || true)
+fi
+
+if [ -z "${POLIGN_STORE:-}" ]; then
+  cat >&2 <<'MSG'
+Recall is not configured: no store was supplied.
+
+Recall never creates its own bucket. Give this instance one, either by writing
+POLIGN_STORE to /etc/recall/recall.env before boot:
+
+  POLIGN_STORE=gcs://my-bucket/recall
+
+or by setting the instance metadata attribute  recall-store = gcs://my-bucket/recall
+The instance also needs a service account with roles/storage.objectAdmin on
+that bucket, attached with the cloud-platform scope. Then:
+  systemctl restart recall-firstboot polign-server recall
+MSG
+  exit 1
+fi
+
+# Everything the launch put in recall.env that this script does not manage
+# (an OPENAI_API_KEY, say) is carried over verbatim.
+umask 027
+tmp=$(mktemp "${CONF}.XXXXXX")
+{
+  echo "# Written by recall-firstboot on first boot. Edit and restart polign-server and recall."
+  for v in POLIGN_STORE POLIGN_STORE_ENCRYPTION_KEY_FILE GOOGLE_CLOUD_PROJECT POLIGN_NODE_ID POLIGN_DISK_CACHE_BYTES \
+      POLIGN_EXTRA_ARGS RECALL_LISTEN POLIGN_EMBED_MODEL POLIGN_EXTRACT_MODEL RECALL_EXTRA_ARGS; do
+    printf '%s=%s\n' "$v" "${!v:-}"
+  done
+  if [ -f "$CONF" ]; then
+    grep -vE '^(#|$|(POLIGN_STORE|POLIGN_STORE_ENCRYPTION_KEY_FILE|GOOGLE_CLOUD_PROJECT|POLIGN_NODE_ID|POLIGN_DISK_CACHE_BYTES|POLIGN_EXTRA_ARGS|RECALL_LISTEN|POLIGN_EMBED_MODEL|POLIGN_EXTRACT_MODEL|RECALL_EXTRA_ARGS)=)' "$CONF" || true
+  fi
+} > "$tmp"
+chmod 0600 "$tmp"
+mv "$tmp" "$CONF"
+
+# The database key: "plgn_<id>_<secret>", which polign-server registers at
+# startup through -bootstrap-key-file. Recall reads it from an environment
+# file only systemd opens, so it never appears on a command line.
+if [ ! -s "$DIR/polign-key" ]; then
+  key="plgn_$(openssl rand -hex 8)_$(openssl rand -hex 32)"
+  install -m 0640 -o root -g polign /dev/null "$DIR/polign-key"
+  printf '%s\n' "$key" > "$DIR/polign-key"
+  install -m 0600 -o root -g root /dev/null "$DIR/polign-key.env"
+  printf 'POLIGN_API_KEY=%s\n' "$key" > "$DIR/polign-key.env"
+fi
+
+# The first Recall admin key: "rcl_<id>_<secret>", registered by recall serve
+# through -bootstrap-key-file.
+if [ ! -s "$DIR/admin-key" ]; then
+  key="rcl_$(openssl rand -hex 8)_$(openssl rand -hex 32)"
+  install -m 0640 -o root -g recall /dev/null "$DIR/admin-key"
+  printf '%s\n' "$key" > "$DIR/admin-key"
+  echo "recall: generated admin key $(printf '%s' "$key" | cut -d_ -f2)"
+  echo "recall: secret in $DIR/admin-key; read it over SSH through IAP"
+fi
+
+touch "$STATE/.firstboot-done"
+
+cat <<MSG
+Recall configured
+  store     ${POLIGN_STORE}
+  as        attached service account
+  keys      ${POLIGN_STORE_ENCRYPTION_KEY_FILE:-none (storage-side encryption only)}
+  embedder  ${POLIGN_EMBED_MODEL:-lexical}
+  listen    ${RECALL_LISTEN}
+Every request needs a Recall key. Keep the firewall rule scoped to your VPC.
+MSG
