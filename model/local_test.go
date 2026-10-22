@@ -146,3 +146,26 @@ func TestLocalEmbedderRuns(t *testing.T) {
 		t.Errorf("dense text: %d values, %v", len(v), err)
 	}
 }
+
+// The model loads inside the first Embed, usually under a request's context.
+// Ending that request must not end the model: later embeddings run under
+// their own contexts.
+func TestLocalEmbedderOutlivesTheFirstCallersContext(t *testing.T) {
+	dir := os.Getenv("RECALL_TEST_LOCAL_MODEL_DIR")
+	if dir == "" {
+		t.Skip("set RECALL_TEST_LOCAL_MODEL_DIR to run the local model")
+	}
+	e, err := NewLocalEmbedder(EmbedConfig{Provider: "local", Model: DefaultLocalEmbedModel, BaseURL: dir}, os.Stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	first, cancel := context.WithCancel(context.Background())
+	if _, err := e.Embed(first, "the first request"); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if _, err := e.Embed(context.Background(), "a later request"); err != nil {
+		t.Fatalf("after the first caller's context ended: %v", err)
+	}
+}

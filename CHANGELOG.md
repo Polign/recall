@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `recall serve` with the local embedder (`local:all-minilm-l6-v2`) failed
+  every embedding with "context canceled" after the first request: the model
+  session kept the context of the request that loaded it. It now outlives
+  that request.
+
 ## [0.22.0] - 2026-10-19
 
 ### Added

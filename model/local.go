@@ -216,7 +216,11 @@ func (e *LocalEmbedder) load(ctx context.Context) error {
 	if err := FetchLocalModel(ctx, e.name, e.dir, e.progress); err != nil {
 		return err
 	}
-	s, err := hugot.NewGoSession(ctx)
+	// The session keeps the context it starts with and refuses every run
+	// once that context is done. The first Embed usually comes from a
+	// request, so the session must not inherit that request's cancellation,
+	// or every later embedding fails with "context canceled".
+	s, err := hugot.NewGoSession(context.WithoutCancel(ctx))
 	if err != nil {
 		return fmt.Errorf("model: start %s: %w", e.name, err)
 	}
