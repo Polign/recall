@@ -108,7 +108,7 @@ func openMemoryBackend(c *api) (recall.Backend, error) {
 	if name == "" {
 		name = setupBackend
 	}
-	return recall.OpenBackend(name, recall.BackendOptions{URL: c.base, APIKey: c.key})
+	return recall.OpenBackend(name, recall.BackendOptions{URL: c.base, APIKey: c.key, Params: c.params})
 }
 
 // storedDim is the size of the vectors already in collection, or 0 when it
@@ -157,5 +157,5 @@ func fitEmbedding(ctx context.Context, b recall.Backend, collection string, emb 
 // read, such as explain: POLIGN_EMBED_URL, else POLIGN_EMBED_MODEL, else
 // lexical. It never follows an extraction model, because reading has none.
 func envEmbedding() (embedding, error) {
-	return chooseEmbedding(os.Getenv("POLIGN_EMBED_URL"), os.Getenv("POLIGN_EMBED_MODEL"), "")
+	return chooseEmbedding(setting("EMBED_URL"), setting("EMBED_MODEL"), "")
 }

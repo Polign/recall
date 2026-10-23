@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 
 	"github.com/Polign/recall"
@@ -17,15 +16,16 @@ import (
 // embedding each event with a new embedder. Nothing is extracted again and
 // event IDs are kept, so beliefs, histories and as_of reads come out the
 // same; only search changes. The source is left as it was.
-func cmdReembed(c *api, urlGiven bool, args []string, out io.Writer) error {
+func cmdReembed(global *dbFlags, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("reembed", flag.ContinueOnError)
+	sub := addDatabaseFlags(fs)
 	from := fs.String("from", "", "collection to copy (default: the saved setup's, then "+defaultLexicalCollection+")")
 	fromModel := fs.String("from-embed-model", "", "embedder that wrote -from (default: the saved setup's, then lexical)")
-	embedModel := fs.String("embed-model", os.Getenv("POLIGN_EMBED_MODEL"), "embedder for the copy, as provider:model[@dim] (required)")
+	embedModel := fs.String("embed-model", setting("EMBED_MODEL"), "embedder for the copy, as provider:model[@dim] (required)")
 	to := fs.String("to", "", "collection to write; must be empty or hold vectors of this embedder (default: one named after -embed-model)")
-	dir := fs.String("config-dir", recallHome(), "configuration written by recall setup, used when no server URL is given")
+	dir := fs.String("config-dir", recallHome(), "the directory recall setup wrote; its saved setup is used when nothing else names a database")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: recall [global flags] reembed -embed-model provider:model[@dim] [options]")
+		fmt.Fprintln(fs.Output(), "Usage: recall reembed -embed-model provider:model[@dim] [options]")
 		fmt.Fprintln(fs.Output(), "Copies memory into a collection searched by meaning. Run against a saved setup, it also switches the setup to the copy.")
 		fs.PrintDefaults()
 	}
@@ -42,22 +42,16 @@ func cmdReembed(c *api, urlGiven bool, args []string, out io.Writer) error {
 		fs.Usage()
 		return errors.New("reembed: -embed-model is required")
 	}
-	var saved *recallsetup.Config
 	configPath := filepath.Join(*dir, "config.json")
-	if !urlGiven && (c.backend == "" || c.backend == setupBackend) {
-		var cfg recallsetup.Config
-		if err := recallsetup.Read(configPath, &cfg); err == nil {
-			if err := ensureRecallServer(*dir, cfg); err != nil {
-				return err
-			}
-			conn, err := recallAPI(*dir, cfg)
-			if err != nil {
-				return err
-			}
-			conn.backend = c.backend
-			c, saved = conn, &cfg
-		}
+	d, err := resolveDatabase(global, sub, *dir, false)
+	if err != nil {
+		return fmt.Errorf("reembed: %w", err)
 	}
+	c, err := d.connect(context.Background())
+	if err != nil {
+		return fmt.Errorf("reembed: %w", err)
+	}
+	saved := d.Setup
 	if *from == "" {
 		*from = defaultLexicalCollection
 		if saved != nil {

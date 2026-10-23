@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -19,16 +18,17 @@ import (
 // (history), what was believed at an instant (ask -as-of), and what changed
 // between two instants (diff). They read only.
 
-func readFlags(name, usage string) (*flag.FlagSet, *string, *string, *bool) {
+func readFlags(name, usage string) (*flag.FlagSet, *dbFlags, *string, *string, *bool) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	collection := fs.String("collection", os.Getenv("POLIGN_COLLECTION"), "memory collection (default $POLIGN_COLLECTION, the saved setup's, then recall_lexical_v1)")
-	dir := fs.String("config-dir", recallHome(), "configuration written by recall setup, used when no server URL is given")
+	sub := addDatabaseFlags(fs)
+	collection := fs.String("collection", setting("COLLECTION"), "memory collection (default $RECALL_COLLECTION, the saved setup's, then recall_lexical_v1)")
+	dir := fs.String("config-dir", recallHome(), "the directory recall setup wrote; its saved setup is used when nothing else names a database")
 	asJSON := fs.Bool("json", false, "print JSON")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: recall [global flags] "+name+" "+usage)
+		fmt.Fprintln(fs.Output(), "Usage: recall "+name+" "+usage)
 		fs.PrintDefaults()
 	}
-	return fs, collection, dir, asJSON
+	return fs, sub, collection, dir, asJSON
 }
 
 func parseFlags(fs *flag.FlagSet, args []string) (bool, error) {
@@ -43,8 +43,8 @@ func parseFlags(fs *flag.FlagSet, args []string) (bool, error) {
 
 // cmdHistory prints how a belief changed: every statement about it, oldest
 // first, each with what it began and ended believing.
-func cmdHistory(c *api, urlGiven bool, args []string, out io.Writer) error {
-	fs, collection, dir, asJSON := readFlags("history", "[options] <question> | -subject S -predicate P")
+func cmdHistory(global *dbFlags, args []string, out io.Writer) error {
+	fs, sub, collection, dir, asJSON := readFlags("history", "[options] <question> | -subject S -predicate P")
 	subject := fs.String("subject", "", "with -predicate: the subject whose history to print, instead of a question")
 	predicate := fs.String("predicate", "", "with -subject: the predicate whose history to print")
 	if ok, err := parseFlags(fs, args); !ok {
@@ -58,7 +58,7 @@ func cmdHistory(c *api, urlGiven bool, args []string, out io.Writer) error {
 		fs.Usage()
 		return errors.New("history: a question, or -subject and -predicate, is required")
 	}
-	mem, err := openCLIMemory(c, urlGiven, *collection, *dir, "history")
+	mem, err := openCLIMemory(global, sub, *collection, *dir, "history")
 	if err != nil {
 		return err
 	}
@@ -120,8 +120,8 @@ func writeTimeline(out io.Writer, t recall.Timeline) {
 
 // cmdAsk prints what is believed, now or at an earlier instant, each with
 // what it replaced.
-func cmdAsk(c *api, urlGiven bool, args []string, out io.Writer) error {
-	fs, collection, dir, asJSON := readFlags("ask", "[options] [question]")
+func cmdAsk(global *dbFlags, args []string, out io.Writer) error {
+	fs, sub, collection, dir, asJSON := readFlags("ask", "[options] [question]")
 	asOf := fs.String("as-of", "", "answer as of this instant: RFC3339, a date (2026-10-01), or a time ago (36h, 7d)")
 	since := fs.String("since", "", "only what was stated after this instant, newest first")
 	if ok, err := parseFlags(fs, args); !ok {
@@ -135,7 +135,7 @@ func cmdAsk(c *api, urlGiven bool, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	mem, err := openCLIMemory(c, urlGiven, *collection, *dir, "ask")
+	mem, err := openCLIMemory(global, sub, *collection, *dir, "ask")
 	if err != nil {
 		return err
 	}
@@ -167,8 +167,8 @@ func cmdAsk(c *api, urlGiven bool, args []string, out io.Writer) error {
 
 // cmdDiff prints what was believed differently at one instant than at
 // another.
-func cmdDiff(c *api, urlGiven bool, args []string, out io.Writer) error {
-	fs, collection, dir, asJSON := readFlags("diff", "-from T [-to T] [-subject S]")
+func cmdDiff(global *dbFlags, args []string, out io.Writer) error {
+	fs, sub, collection, dir, asJSON := readFlags("diff", "-from T [-to T] [-subject S]")
 	from := fs.String("from", "", "the earlier instant: RFC3339, a date (2026-10-01), or a time ago (36h, 7d); required")
 	to := fs.String("to", "", "the later instant, in the same forms (default now)")
 	subject := fs.String("subject", "", "only this subject (default every subject)")
@@ -191,7 +191,7 @@ func cmdDiff(c *api, urlGiven bool, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	mem, err := openCLIMemory(c, urlGiven, *collection, *dir, "diff")
+	mem, err := openCLIMemory(global, sub, *collection, *dir, "diff")
 	if err != nil {
 		return err
 	}

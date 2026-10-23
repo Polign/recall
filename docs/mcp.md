@@ -25,23 +25,35 @@ for one. See [memory-api-v1.md](memory-api-v1.md).
 
 ## Connect to your memory backend
 
-`recall setup` does all of this for a local database. To connect by hand,
-install [Polign v0.8.0 or later](https://github.com/Polign/polign#install),
-start or connect to a Polign database, and configure your host to launch:
+Configure your host to launch:
 
 ```sh
 recall mcp -write
 ```
 
-Set the connection environment for that process:
+With nothing else set, memory is kept in a local database `recall` runs itself
+in `~/.local/share/recall`, the same one `recall setup` and the Claude plugin
+use. To keep it somewhere else, set the environment for that process. Three
+variables name the database, the same three for every backend:
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `POLIGN_URL` | Your Polign server's address | `http://localhost:23000` |
-| `POLIGN_COLLECTION` | The collection holding your memories | One per embedder: `recall_lexical_v1` for word search |
-| `POLIGN_EMBED_MODEL` | Embedder for search by meaning, as `provider:model[@dim]` or `lexical` | Follows `POLIGN_EXTRACT_MODEL`: OpenAI and Ollama embed with their own models, Anthropic with the model built into recall |
-| `POLIGN_API_KEY` | Credential for a server that requires authentication | Unset |
-| `POLIGN_PREDICATES` | Path to a custom registry of allowed memory types | Built-in registry |
+| `RECALL_BACKEND` | `local`, `polign`, `pgvector`, `mongodb` or `qdrant` | `local`, or what `recall setup` saved |
+| `RECALL_BACKEND_URL` | Where it is, in the backend's own form: a directory, `http://host:23000`, `postgres://user@host/db`, `mongodb://host/db`, `http://host:6333`. Options go on the query string, such as `?schema=memory` | The backend's default |
+| `RECALL_BACKEND_KEY` | The credential, when the backend takes one and the URL does not carry it | Unset |
+
+And these configure the memory itself:
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `RECALL_COLLECTION` | The collection holding your memories | One per embedder: `recall_lexical_v1` for word search |
+| `RECALL_EMBED_MODEL` | Embedder for search by meaning, as `provider:model[@dim]` or `lexical` | Follows `RECALL_EXTRACT_MODEL`: OpenAI and Ollama embed with their own models, Anthropic with the model built into recall |
+| `RECALL_EXTRACT_MODEL` | Model that works out the statements in remembered text, as `provider:model` | Unset: text is kept as written |
+| `RECALL_PREDICATES` | Path to a custom registry of allowed memory types | Built-in registry |
+
+The names used before 0.23.0 (`POLIGN_URL`, `POLIGN_API_KEY`,
+`POLIGN_COLLECTION` and the rest, and each backend's own URL variable) keep
+working, with one line on stderr naming the new one.
 
 For hosts using the common `mcpServers` configuration format:
 
@@ -52,8 +64,9 @@ For hosts using the common `mcpServers` configuration format:
       "command": "/absolute/path/to/recall",
       "args": ["mcp", "-write"],
       "env": {
-        "POLIGN_URL": "http://127.0.0.1:23000",
-        "POLIGN_COLLECTION": "recall_demo"
+        "RECALL_BACKEND": "polign",
+        "RECALL_BACKEND_URL": "http://127.0.0.1:23000",
+        "RECALL_COLLECTION": "recall_demo"
       }
     }
   }
@@ -61,8 +74,9 @@ For hosts using the common `mcpServers` configuration format:
 ```
 
 Replace the executable path and connection settings with yours. Use your host's
-credential settings to supply an API key when needed. Host configuration formats
-vary; the process command and environment above are the connection requirements.
+credential settings to supply `RECALL_BACKEND_KEY` when needed. Host
+configuration formats vary; the process command and environment above are the
+connection requirements.
 
 Each host starts its own MCP process. Hosts share durable memory when those
 processes connect to the same backend, collection, and namespace with compatible

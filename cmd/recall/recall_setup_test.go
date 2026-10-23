@@ -56,22 +56,6 @@ func TestClaudeSetupVersion(t *testing.T) {
 	}
 }
 
-func TestLocalKeyShape(t *testing.T) {
-	key, err := generateLocalKey()
-	if err != nil || !validLocalKey(key) || !strings.HasPrefix(key, "plgn_") || len(key) != len("plgn_")+16+1+64 {
-		t.Fatalf("generated key %q (err %v) does not have the server's shape", key, err)
-	}
-	other, _ := generateLocalKey()
-	if other == key {
-		t.Fatal("two generated keys are identical")
-	}
-	for _, bad := range []string{"", "plgn_", key[:len(key)-1], "PLGN" + key[4:], strings.ToUpper(key), key + "x", `{"key":"` + key + `"}`} {
-		if validLocalKey(bad) {
-			t.Errorf("%q accepted as a local key", bad)
-		}
-	}
-}
-
 func TestDescribeSurface(t *testing.T) {
 	for cfg, want := range map[recallsetup.Config]string{
 		{ExtractModel: "ollama:qwen3:8b"}:              "text-only tools",

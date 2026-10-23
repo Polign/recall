@@ -1,9 +1,10 @@
 // Command recall serves typed, correctable agent memory over MCP, kept in a
-// polign_db instance it reaches through the HTTP API, or in any other backend
-// registered in backends.go and chosen with -backend.
+// local polign_db it runs itself when nothing names a database, or in any
+// backend registered in backends.go: -backend says which, -url where, -key
+// the credential (see database.go).
 //
 //	recall mcp [-write] [-agent] [...]   serve the memory tools over stdio
-//	recall setup [-local | -url URL]     configure Recall, optionally install the Claude plugin
+//	recall setup [-backend B -url URL]   save where memory lives, optionally install the Claude plugin
 //	recall explain <question>            say why each matching belief is held
 //	recall history <question>            show how a belief changed, statement by statement
 //	recall ask [-as-of T] [question]     say what is believed, now or at an earlier instant
@@ -25,8 +26,6 @@ import (
 	"os"
 	"strings"
 	"time"
-
-	"github.com/Polign/recall"
 )
 
 // version is stamped via -ldflags "-X main.version=..." (goreleaser).
@@ -34,12 +33,10 @@ var version = "dev"
 
 func main() {
 	log.SetFlags(0)
-	base := flag.String("url", "", "database base URL (default the backend's URL variable, such as $POLIGN_URL; for polign without either, recall mcp uses what recall setup configured)")
-	key := flag.String("key", "", "API key sent on every request (default the backend's key variable, such as $POLIGN_API_KEY)")
-	backend := flag.String("backend", envOr("RECALL_BACKEND", setupBackend), "storage backend: "+strings.Join(recall.Backends(), ", ")+" (default $RECALL_BACKEND, then "+setupBackend+")")
+	global := addDatabaseFlags(flag.CommandLine)
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Usage = func() {
-		fmt.Fprintln(flag.CommandLine.Output(), "Usage: recall [global flags] <command> [options]\n\nCommands: mcp, connect, serve, key, explain, history, ask, diff, reembed, setup, doctor, skill\nAgent guide: recall skill (offline)\n\nGlobal flags:")
+		fmt.Fprintln(flag.CommandLine.Output(), "Usage: recall [flags] <command> [options]\n\nCommands: mcp, connect, serve, key, explain, history, ask, diff, reembed, setup, doctor, skill\nAgent guide: recall skill (offline)\n\nThe database flags below go before the command or after it:")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -51,41 +48,29 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
-	driver, ok := recall.LookupBackend(*backend)
-	if !ok {
-		log.Fatalf("unknown -backend %q (want one of %s)", *backend, strings.Join(recall.Backends(), ", "))
-	}
-	url := *base
-	if url == "" && driver.URLEnv != "" {
-		url = os.Getenv(driver.URLEnv)
-	}
-	if *key == "" && driver.KeyEnv != "" {
-		*key = os.Getenv(driver.KeyEnv)
-	}
-	c := &api{base: strings.TrimRight(url, "/"), key: *key, backend: *backend}
 	cmd, args := flag.Arg(0), flag.Args()[1:]
 	var err error
 	switch cmd {
 	case "mcp":
-		err = cmdMCP(c, url != "", args)
+		err = cmdMCP(global, args)
 	case "serve":
-		err = cmdServe(c, args)
+		err = cmdServe(global, args)
 	case "connect":
 		err = cmdConnect(args, os.Stdin, os.Stdout)
 	case "key":
-		err = cmdKey(c, args, os.Stdout)
+		err = cmdKey(global, args, os.Stdout)
 	case "explain":
-		err = cmdExplain(c, url != "", args, os.Stdout)
+		err = cmdExplain(global, args, os.Stdout)
 	case "history":
-		err = cmdHistory(c, url != "", args, os.Stdout)
+		err = cmdHistory(global, args, os.Stdout)
 	case "ask":
-		err = cmdAsk(c, url != "", args, os.Stdout)
+		err = cmdAsk(global, args, os.Stdout)
 	case "diff":
-		err = cmdDiff(c, url != "", args, os.Stdout)
+		err = cmdDiff(global, args, os.Stdout)
 	case "reembed":
-		err = cmdReembed(c, url != "", args, os.Stdout)
+		err = cmdReembed(global, args, os.Stdout)
 	case "setup", "doctor":
-		err = cmdRecall(append([]string{cmd}, args...), os.Stdout)
+		err = cmdRecall(global, append([]string{cmd}, args...), os.Stdout)
 	case "skill":
 		err = cmdSkill(args, os.Stdout)
 	default:
@@ -96,16 +81,19 @@ func main() {
 	}
 }
 
-// setupBackend is the backend recall setup configures and the default.
+// setupBackend is the backend the memory runtime opens when an api names
+// none, which only tests do.
 const setupBackend = "polign"
 
 // api is a minimal JSON client for the server's HTTP transport. The key, when
 // set, rides on every request. backend is the registered backend name the
-// memory runtime opens base with; only a polign_db is reached through api itself.
+// memory runtime opens base with, and params that backend's options; only a
+// polign_db is reached through api itself.
 type api struct {
 	base    string
 	key     string
 	backend string
+	params  map[string]string
 }
 
 // apiError is a non-2xx response. It carries the status code so a caller can

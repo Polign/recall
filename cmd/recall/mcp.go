@@ -19,7 +19,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -92,22 +91,25 @@ type mcpServer struct {
 	enc *json.Encoder
 }
 
-// cmdMCP serves memory over MCP. With a server named by -url or POLIGN_URL it
-// connects there, configured by its flags. Without one it serves what recall
-// setup configured, starting the managed local server if that is the setup.
-func cmdMCP(c *api, urlGiven bool, args []string) error {
+// cmdMCP serves memory over MCP from the database the flags, the
+// environment or the saved setup name (database.go). When the saved setup
+// decides, its collection, model and embedder are served too, as the plugin
+// launcher expects; otherwise the flags here configure the session. With
+// nothing named or saved, memory is kept in the local database.
+func cmdMCP(global *dbFlags, args []string) error {
 	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
-	collection := fs.String("collection", os.Getenv("POLIGN_COLLECTION"), "memory collection (default $POLIGN_COLLECTION, then recall_lexical_v1)")
+	sub := addDatabaseFlags(fs)
+	collection := fs.String("collection", setting("COLLECTION"), "memory collection (default $RECALL_COLLECTION, then recall_lexical_v1)")
 	write := fs.Bool("write", false, "also expose the writing tools; read-only by default")
-	predicates := fs.String("predicates", os.Getenv("POLIGN_PREDICATES"), "predicate registry JSON file; omitted uses the 15-predicate starter registry")
-	embedURL := fs.String("embed-url", os.Getenv("POLIGN_EMBED_URL"), "embedding service that answers POST /embed {text} with {values}; needs an explicit -collection")
-	embedModel := fs.String("embed-model", os.Getenv("POLIGN_EMBED_MODEL"), "model that embeds memory so recall searches by meaning, as provider:model[@dim]: openai:text-embedding-3-small@512, ollama:nomic-embed-text, voyage:voyage-3.5, or lexical for word search. Omitted follows -extract-model: openai:* uses openai:text-embedding-3-small@512, ollama:* uses ollama:nomic-embed-text, anthropic:* and no model use word search (default $POLIGN_EMBED_MODEL)")
-	extractModel := fs.String("extract-model", os.Getenv("POLIGN_EXTRACT_MODEL"), "model that works out the statements in text remembered without any, as provider:model: anthropic:claude-opus-5-5, openai:<model>, or ollama:<model> (default $POLIGN_EXTRACT_MODEL; keys from ANTHROPIC_API_KEY or OPENAI_API_KEY)")
+	predicates := fs.String("predicates", setting("PREDICATES"), "predicate registry JSON file; omitted uses the 15-predicate starter registry")
+	embedURL := fs.String("embed-url", setting("EMBED_URL"), "embedding service that answers POST /embed {text} with {values}; needs an explicit -collection")
+	embedModel := fs.String("embed-model", setting("EMBED_MODEL"), "model that embeds memory so recall searches by meaning, as provider:model[@dim]: openai:text-embedding-3-small@512, ollama:nomic-embed-text, voyage:voyage-3.5, or lexical for word search. Omitted follows -extract-model: openai:* uses openai:text-embedding-3-small@512, ollama:* uses ollama:nomic-embed-text, anthropic:* and no model use word search (default $RECALL_EMBED_MODEL)")
+	extractModel := fs.String("extract-model", setting("EXTRACT_MODEL"), "model that works out the statements in text remembered without any, as provider:model: anthropic:claude-opus-5-5, openai:<model>, or ollama:<model> (default $RECALL_EXTRACT_MODEL; keys from ANTHROPIC_API_KEY or OPENAI_API_KEY)")
 	text := fs.Bool("text", true, "serve the text-only tools: remember(text), recall(question), forget(text), with no predicates in them. The server works out what text says with -extract-model; without one, text is kept as written and nothing replaces anything. This is the default; -typed serves the typed tools instead")
 	typed := fs.Bool("typed", os.Getenv("RECALL_TYPED") == "1", "serve the typed tools instead: remember(subject, predicate, value), list_predicates, memory_history, explain, over the starter registry or -predicates (default on when $RECALL_TYPED is 1)")
 	open := fs.Bool("open", os.Getenv("RECALL_OPEN") == "1", "let writes define predicates: a predicate nothing has defined is defined by its first use. The text tools do this unless -predicates is given; the typed tools only with this flag (default on when $RECALL_OPEN is 1)")
 	agent := fs.Bool("agent", false, "also expose the agent resume tools (agent_resume, update_working_state, record_turn, ...); requires -write")
-	dir := fs.String("config-dir", recallHome(), "configuration written by recall setup, used when no server URL is given (default $POLIGN_RECALL_HOME, then ~/.config/polign/recall)")
+	dir := fs.String("config-dir", recallHome(), "the directory recall setup wrote; given explicitly, its saved setup is served whatever the environment says (default $RECALL_HOME, then ~/.local/share/recall)")
 	// polign mcp took -memory-only; recall serves nothing else.
 	_ = fs.Bool("memory-only", true, "accepted for compatibility with polign mcp; always on")
 	if err := fs.Parse(args); err != nil {
@@ -119,27 +121,24 @@ func cmdMCP(c *api, urlGiven bool, args []string) error {
 	if fs.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %v", fs.Args())
 	}
-	// An explicit -config-dir means the saved connection, even when the
-	// environment also names a server: the setup launcher passes it so a
-	// stray POLIGN_URL cannot redirect Claude's memory.
+	// An explicit -config-dir means the saved setup, even when the
+	// environment also names a database: the setup launcher passes it so a
+	// stray variable cannot redirect Claude's memory.
 	explicitDir := false
 	fs.Visit(func(f *flag.Flag) { explicitDir = explicitDir || f.Name == "config-dir" })
-	// recall setup saves a connection to its own backend only.
-	setupApplies := c.backend == "" || c.backend == setupBackend
-	if explicitDir && !setupApplies {
-		return fmt.Errorf("mcp: -config-dir holds a %s setup; with -backend %s, name the server with -url", setupBackend, c.backend)
+	d, err := resolveDatabase(global, sub, *dir, explicitDir)
+	if err != nil {
+		return fmt.Errorf("mcp: %w", err)
 	}
-	if explicitDir {
+	if d.fromSetup() {
+		// The saved setup decided: serve it whole, with its collection,
+		// model and embedder.
 		return serveConfigured(*dir)
 	}
-	if !urlGiven && setupApplies {
-		// Without a server named, serve what recall setup saved.
-		if _, err := os.Stat(filepath.Join(*dir, "config.json")); err == nil {
-			return serveConfigured(*dir)
-		}
+	c, err := d.connect(context.Background())
+	if err != nil {
+		return fmt.Errorf("mcp: %w", err)
 	}
-	// With nothing named or saved, the memory runtime opens the backend's
-	// default address.
 
 	serveText, openAll, err := surface(fs, *text, *typed, *open, *predicates)
 	if err != nil {
@@ -155,7 +154,7 @@ func cmdMCP(c *api, urlGiven bool, args []string) error {
 	}
 	backend, err := openMemoryBackend(c)
 	if err != nil {
-		return fmt.Errorf("mcp: %w", err)
+		return fmt.Errorf("mcp: %s: %w", d, err)
 	}
 	if emb, err = fitMCPCollection(backend, collection, emb); err != nil {
 		return fmt.Errorf("mcp: %w", err)

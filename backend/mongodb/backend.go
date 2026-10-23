@@ -103,11 +103,14 @@ var (
 func init() {
 	recall.RegisterBackend("mongodb", recall.BackendDriver{
 		Open: func(o recall.BackendOptions) (recall.Backend, error) {
-			return New(Config{URL: o.URL, Password: o.APIKey})
+			return New(Config{URL: o.URL, Password: o.APIKey, Database: o.Params["database"]})
 		},
 		DefaultURL: "mongodb://localhost:27017/" + DefaultDatabase,
 		URLEnv:     "MONGODB_URI",
 		KeyEnv:     "MONGODB_PASSWORD",
+		// Option on the connection string, for a URL whose path cannot name
+		// the database: ?database=memory.
+		Params: []string{"database"},
 	})
 }
 

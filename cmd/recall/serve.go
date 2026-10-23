@@ -591,8 +591,9 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 // cmdServe runs the front door.
-func cmdServe(c *api, args []string) error {
+func cmdServe(global *dbFlags, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	sub := addDatabaseFlags(fs)
 	listen := fs.String("listen", envOr("RECALL_LISTEN", ":8080"), "address to listen on (default $RECALL_LISTEN, then :8080)")
 	keysFile := fs.String("keys-file", os.Getenv("RECALL_KEYS_FILE"), "also accept the keys in this file, one \"<key> <namespace>\" per line (default $RECALL_KEYS_FILE)")
 	bootstrapKey := fs.String("bootstrap-key-file", os.Getenv("RECALL_BOOTSTRAP_KEY_FILE"), "file holding one admin key to register at startup if the store does not know it, so an install driven from manifests can mint keys over HTTP (default $RECALL_BOOTSTRAP_KEY_FILE)")
@@ -606,11 +607,11 @@ func cmdServe(c *api, args []string) error {
 	kubeKeyTTL := fs.Duration("kubernetes-key-ttl", defaultKubeKeyTTL, "lifetime of a key minted for a pod; the pod renews it")
 	kubeSandboxClaims := fs.Bool("kubernetes-sandbox-claims", os.Getenv("RECALL_KUBERNETES_SANDBOX_CLAIMS") == "1", "with agent-sandbox, the agent is the name of the SandboxClaim that owns the pod's Sandbox (pod -> Sandbox -> SandboxClaim); a Sandbox with no claim falls back to -kubernetes-agent-label, then the pod's name. Needs get on pods, sandboxes and sandboxclaims (default on when $RECALL_KUBERNETES_SANDBOX_CLAIMS is 1)")
 	kubeAgentLabel := fs.String("kubernetes-agent-label", os.Getenv("RECALL_KUBERNETES_AGENT_LABEL"), "label on the pod that names the agent, for pods handed out by a pool under generated names; empty uses the pod's name. The namespace stays <tenant>:<agent>")
-	collection := fs.String("collection", envOr("POLIGN_COLLECTION", "recall_lexical_v1"), "collection name prefix; each namespace gets its own collection under it")
-	predicates := fs.String("predicates", os.Getenv("POLIGN_PREDICATES"), "predicate registry JSON file; omitted uses the starter registry")
-	embedURL := fs.String("embed-url", os.Getenv("POLIGN_EMBED_URL"), "embedding service that answers POST /embed {text} with {values}")
-	embedModel := fs.String("embed-model", os.Getenv("POLIGN_EMBED_MODEL"), "model that embeds memory so recall searches by meaning, as provider:model[@dim]: openai:text-embedding-3-small@512, ollama:nomic-embed-text, or voyage:voyage-3.5. Omitted is word search; unlike recall mcp, serve does not follow -extract-model, because every tenant's collection was written with the embedder it was started with (default $POLIGN_EMBED_MODEL)")
-	extractModel := fs.String("extract-model", os.Getenv("POLIGN_EXTRACT_MODEL"), "model that works out the statements in text remembered without any, as provider:model")
+	collection := fs.String("collection", settingOr("COLLECTION", "recall_lexical_v1"), "collection name prefix; each namespace gets its own collection under it")
+	predicates := fs.String("predicates", setting("PREDICATES"), "predicate registry JSON file; omitted uses the starter registry")
+	embedURL := fs.String("embed-url", setting("EMBED_URL"), "embedding service that answers POST /embed {text} with {values}")
+	embedModel := fs.String("embed-model", setting("EMBED_MODEL"), "model that embeds memory so recall searches by meaning, as provider:model[@dim]: openai:text-embedding-3-small@512, ollama:nomic-embed-text, or voyage:voyage-3.5. Omitted is word search; unlike recall mcp, serve does not follow -extract-model, because every tenant's collection was written with the embedder it was started with (default $RECALL_EMBED_MODEL)")
+	extractModel := fs.String("extract-model", setting("EXTRACT_MODEL"), "model that works out the statements in text remembered without any, as provider:model")
 	text := fs.Bool("text", true, "serve the text-only tools (the default)")
 	typed := fs.Bool("typed", os.Getenv("RECALL_TYPED") == "1", "serve the typed tools instead (default on when $RECALL_TYPED is 1)")
 	open := fs.Bool("open", os.Getenv("RECALL_OPEN") == "1", "let writes define predicates; the text tools do unless -predicates is given, the typed tools only with this flag (default on when $RECALL_OPEN is 1)")
@@ -658,13 +659,22 @@ func cmdServe(c *api, args []string) error {
 	if err != nil {
 		return fmt.Errorf("serve: -extract-model: %w", err)
 	}
-	name := c.backend
-	if name == "" {
-		name = setupBackend
-	}
-	backend, err := recall.OpenBackend(name, recall.BackendOptions{URL: c.base, APIKey: c.key})
+	d, err := resolveDatabase(global, sub, recallHome(), false)
 	if err != nil {
-		return fmt.Errorf("serve: backend: %w", err)
+		return fmt.Errorf("serve: %w", err)
+	}
+	c, err := d.connect(context.Background())
+	if err != nil {
+		return fmt.Errorf("serve: %w", err)
+	}
+	// The first log line says where memory is, so an install that meant to
+	// name a database and did not sees that it is writing to a local
+	// directory.
+	log.Printf("serve: memory in %s (%s)", d, d.sources())
+	name := d.Backend
+	backend, err := openMemoryBackend(c)
+	if err != nil {
+		return fmt.Errorf("serve: %s: %w", d, err)
 	}
 	tenants := newTenantServers(serveConfig{backend: backend, registry: registry, embedder: embedder, extractor: extractor, base: *collection, open: openAll, text: serveText, agents: *agent})
 	_, leases := backend.(recall.LeaseBackend)

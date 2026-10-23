@@ -2,6 +2,51 @@
 
 ## [Unreleased]
 
+### Added
+
+- One way to say where memory lives, the same for every backend and every
+  command: `-backend` / `RECALL_BACKEND` names the backend (`local`,
+  `polign`, `pgvector`, `mongodb`, `qdrant`), `-url` / `RECALL_BACKEND_URL`
+  where it is in that backend's own form, and `-key` / `RECALL_BACKEND_KEY`
+  the credential when the URL does not carry it. Each resolves as the flag,
+  then the variable, then the saved setup, then the default. The flags go
+  before the command or after it. A backend's other options are query keys
+  on the URL: `?schema=` and `?text_search=` for pgvector, `?distance=` for
+  qdrant, `?database=` for mongodb, `?server=` for local. Go: `BackendDriver`
+  gains `Params`, the keys it takes, and `OpenBackend` moves them from the
+  URL into `BackendOptions.Params`.
+- A `local` backend, the default when nothing names a database: a polign_db
+  `recall` runs itself in `$RECALL_HOME` (`~/.local/share/recall`), started
+  on a free loopback port by the first process that needs it and found by
+  the rest. `recall mcp -write` and `recall serve` now work with nothing
+  configured, and every agent on the machine shares one memory unless a
+  database is named. It is what `recall setup -local` ran before, moved into
+  `backend/local` so Go programs can open it too. It needs `polign-server`
+  beside `recall`, which pip and Homebrew install.
+- `recall setup` saves any backend, not only polign (`recall setup -backend
+  qdrant -url http://localhost:6333`), so `recall doctor` and the Claude
+  plugin work on every backend. `recall doctor` works without a saved setup
+  and says where the database it checks came from.
+- `recall serve` logs where memory is on its first line.
+- Recall's own settings take the `RECALL_` prefix: `RECALL_COLLECTION`,
+  `RECALL_PREDICATES`, `RECALL_EMBED_MODEL`, `RECALL_EMBED_URL`,
+  `RECALL_EXTRACT_MODEL`, `RECALL_HOME`.
+
+### Deprecated
+
+- The names each backend had for its URL and key (`POLIGN_URL`,
+  `POLIGN_API_KEY`, `DATABASE_URL`, `PGPASSWORD`, `MONGODB_URI`,
+  `MONGODB_PASSWORD`, `QDRANT_URL`, `QDRANT_API_KEY`), the `POLIGN_` spelling
+  of Recall's settings, and `POLIGN_RECALL_HOME`. All keep working, with one
+  line on stderr naming the new name, until 0.25.0 at the earliest. A setup
+  saved by an earlier release is read as it is, and the old configuration
+  directory `~/.config/polign/recall` stays the home when it holds one.
+- With nothing naming a backend, a polign_db answering at
+  `http://localhost:23000` is still used, as every release before this one
+  did, with a line on stderr. Set `RECALL_BACKEND=polign` to keep that
+  without the line, or `RECALL_BACKEND=local` to use the local database.
+  Goes away with the names above.
+
 ## [0.22.1] - 2026-10-22
 
 ### Fixed

@@ -15,12 +15,15 @@ Zep 12/18. Tokens to save one message: Recall 3.0k, mem0 12.7k, Zep 14.7k.
 ## Install
 
 ```sh
-pip install polign-recall          # Python client; brings the server with it
+pip install polign-recall          # Python client; brings the database with it
 go get github.com/Polign/recall    # Go
 recall mcp -write                  # MCP over stdio: remember(text), recall(question), forget(text)
 ```
 
-The [Quickstart](#quickstart) runs without a model or an API key.
+Nothing else to configure: with no database named, `recall` keeps memory in a
+local polign_db it runs itself, in `~/.local/share/recall`, shared by every
+agent on the machine. The [Quickstart](#quickstart) runs without a model or an
+API key. To keep memory somewhere else, see [Backends](#backends).
 
 ## What a correction looks like
 
@@ -152,8 +155,9 @@ macOS.
 
 To share memory between machines, run `polign-server` yourself (requires
 [Polign v0.8.0 or later](https://github.com/Polign/polign#install)), leave
-`local_dir` out, and set `POLIGN_URL`, `POLIGN_COLLECTION`, and
-`POLIGN_API_KEY` when authentication is required.
+`local_dir` out, and set `RECALL_BACKEND=polign` and `RECALL_BACKEND_URL` to
+its address, with `RECALL_BACKEND_KEY` when authentication is required, and
+`RECALL_COLLECTION` for the collection.
 
 For examples covering forgetting as well, see the
 [Python session example](examples/python/sessions.py) or
@@ -307,9 +311,15 @@ memory for many agents at once, over HTTP, each inside the namespace its key
 names. The server holds the store's credentials; agents hold Recall keys.
 
 ```sh
-recall -url http://polign:23000 serve -bootstrap-key-file admin.key   # admin.key holds one rcl_... line
-recall -url http://polign:23000 key create -namespace acme:agent-7 -expires 168h
+recall serve -backend polign -url http://polign:23000 -bootstrap-key-file admin.key   # admin.key holds one rcl_... line
+recall key create -backend polign -url http://polign:23000 -namespace acme:agent-7 -expires 168h
 ```
+
+With no database named, `recall serve` runs on the local database like every
+other command, and `recall key create -namespace team:agent-1` against the
+same default mints a key for it: a shared memory server for several agents on
+one machine, with nothing configured. Its first log line says where memory
+is, so a container that meant to name a database and did not is told at once.
 
 Each namespace gets its own collection, so nothing a caller sends can reach
 another namespace's records. Keys are stored hashed, expire if asked, renew at
@@ -330,6 +340,29 @@ client is written against is [docs/memory-api-v1.md](docs/memory-api-v1.md).
 
 ## Storage and search
 
+Three things say where memory lives, the same three for every backend and
+every command:
+
+| Flag | Variable | What it is |
+| --- | --- | --- |
+| `-backend` | `RECALL_BACKEND` | `local` (the default), `polign`, `pgvector`, `mongodb` or `qdrant` |
+| `-url` | `RECALL_BACKEND_URL` | Where the database is, in the backend's own form: a directory, `http://host:23000`, `postgres://user@host/db`, `mongodb://host/db`, `http://host:6333` |
+| `-key` | `RECALL_BACKEND_KEY` | The credential, when the backend takes one and the URL does not carry it: the API key of polign and qdrant, the password of pgvector and mongodb |
+
+Each resolves in the same order: the flag, the variable, the setup `recall
+setup` saved, the default. The flags go before the command or after it. A
+backend's other options are query keys on the URL, listed in the table below;
+anything else in the query goes to the driver as it is
+(`postgres://host/db?schema=memory&sslmode=require`).
+
+Nothing else about the database has a variable. The names each backend had
+before 0.23.0 (`POLIGN_URL`, `POLIGN_API_KEY`, `DATABASE_URL`, `PGPASSWORD`,
+`MONGODB_URI`, `MONGODB_PASSWORD`, `QDRANT_URL`, `QDRANT_API_KEY`) keep
+working as aliases, with one line on stderr naming the new one, and so does a
+polign_db already answering at `http://localhost:23000` when nothing names a
+backend, which is where 0.22 looked. See [STABILITY.md](STABILITY.md) for
+when they go away.
+
 Recall provides memory rules, validation, and history; the backend provides
 persistence and access to the data. Agents share memory by using the same
 backend, collection, and namespace, with compatible Recall versions and memory
@@ -340,25 +373,27 @@ does not add transaction isolation or replication.
 
 ### Backends
 
-| | polign_db (default) | PostgreSQL + pgvector | MongoDB | Qdrant |
-| --- | --- | --- | --- | --- |
-| Package | [`polign/`](polign) | [`backend/pgvector/`](backend/pgvector) | [`backend/mongodb/`](backend/mongodb) | [`backend/qdrant/`](backend/qdrant) |
-| `recall mcp` | default | `-backend pgvector` | `-backend mongodb` | `-backend qdrant` |
-| URL and key variables | `POLIGN_URL`, `POLIGN_API_KEY` | `DATABASE_URL`, `PGPASSWORD` | `MONGODB_URI`, `MONGODB_PASSWORD` | `QDRANT_URL`, `QDRANT_API_KEY` |
-| Server version | 0.8.0 or later | PostgreSQL 13 or later with pgvector 0.6.0 or later; 0.8.0 or later recommended | 6.0 or later, Atlas or self-hosted | 1.10 or later |
-| Remember, recall, forget, history, as-of | yes | yes | yes | yes |
-| Evidence links, audit export | yes | yes | yes | yes |
-| Keyword search | yes, BM25 | yes, PostgreSQL full-text search | yes, MongoDB text search | no, vector search only |
-| Cached reads | yes | yes | yes | no, every read refolds the history |
-| Agent leases (`recall mcp -agent`) | yes | yes | yes | no; Go `Resume` with `Unleased: true` only |
-| Agent writes fenced on the server | yes | yes, in the write's transaction | yes on a replica set or Atlas, in the write's transaction; checked just before the write on a standalone server | no |
-| `recall setup` and the Claude plugin | yes | no, add `recall mcp` by hand | no, add `recall mcp` by hand | no, add `recall mcp` by hand |
+| | local (default) | polign_db | PostgreSQL + pgvector | MongoDB | Qdrant |
+| --- | --- | --- | --- | --- | --- |
+| Package | [`backend/local/`](backend/local) | [`polign/`](polign) | [`backend/pgvector/`](backend/pgvector) | [`backend/mongodb/`](backend/mongodb) | [`backend/qdrant/`](backend/qdrant) |
+| `RECALL_BACKEND` | `local` | `polign` | `pgvector` | `mongodb` | `qdrant` |
+| `RECALL_BACKEND_URL` | a directory (default `~/.local/share/recall`) | `http://host:23000` | `postgres://user:pw@host:5432/db` | `mongodb://user:pw@host:27017/db` | `http://host:6333` |
+| `RECALL_BACKEND_KEY` | not used; a key is generated in the directory | the polign_db API key | the password, when the URL has none | the password, when the URL has none | the Qdrant API key |
+| Options on the URL | `?server=/path/to/polign-server` | none | `?schema=recall&text_search=english` | `?database=recall` | `?distance=Cosine` |
+| Server version | the `polign-server` beside `recall`, which pip and Homebrew install; started on a loopback port and left running | 0.8.0 or later | PostgreSQL 13 or later with pgvector 0.6.0 or later; 0.8.0 or later recommended | 6.0 or later, Atlas or self-hosted | 1.10 or later |
+| Remember, recall, forget, history, as-of | yes | yes | yes | yes | yes |
+| Evidence links, audit export | yes | yes | yes | yes | yes |
+| Keyword search | as polign_db | yes, BM25 | yes, PostgreSQL full-text search | yes, MongoDB text search | no, vector search only |
+| Cached reads | yes | yes | yes | yes | no, every read refolds the history |
+| Agent leases (`recall mcp -agent`) | yes | yes | yes | yes | no; Go `Resume` with `Unleased: true` only |
+| Agent writes fenced on the server | yes | yes | yes, in the write's transaction | yes on a replica set or Atlas, in the write's transaction; checked just before the write on a standalone server | no |
+| `recall setup` and the Claude plugin | yes | yes | yes | yes | yes |
 
 To run Recall on a PostgreSQL database:
 
 ```sh
-export DATABASE_URL=postgres://user:password@localhost:5432/mydb
-recall -backend pgvector mcp -write
+export RECALL_BACKEND=pgvector RECALL_BACKEND_URL=postgres://user:password@localhost:5432/mydb
+recall mcp -write
 ```
 
 The first write creates a `recall` schema with one table per collection and
@@ -372,9 +407,9 @@ Pitfalls on PostgreSQL:
 - Every write to a collection takes a row lock on that collection's revision,
   so writes to one collection are serialized. That is fine at conversation
   pace but slows a bulk import.
-- Keyword search uses the `english` text search configuration unless the Go
-  `Config.TextSearchConfig` says otherwise. It is fixed when a collection is
-  created.
+- Keyword search uses the `english` text search configuration unless
+  `?text_search=` on the URL (Go: `Config.TextSearchConfig`) says otherwise.
+  It is fixed when a collection is created.
 - On pgvector older than 0.8.0, a filtered vector search can return fewer
   hits than asked for, because the index stops scanning at `ef_search`
   candidates before the filter applies.
@@ -382,8 +417,8 @@ Pitfalls on PostgreSQL:
 To run Recall on MongoDB:
 
 ```sh
-export MONGODB_URI=mongodb://user:password@localhost:27017/recall
-recall -backend mongodb mcp -write
+export RECALL_BACKEND=mongodb RECALL_BACKEND_URL=mongodb://user:password@localhost:27017/recall
+recall mcp -write
 ```
 
 The database is the connection string's path, `recall` when it has none. The
@@ -437,6 +472,7 @@ embedder for semantic search. See the [embedding guide](docs/reference.md#embedd
 | --- | --- |
 | [`recall.go`](recall.go), [`doc.go`](doc.go) | Public Go API at `github.com/Polign/recall` |
 | [`internal/engine/`](internal/engine) | Memory implementation and unit tests |
+| [`backend/local/`](backend/local) | The default backend: a polign_db recall runs itself |
 | [`polign/`](polign) | polign_db backend |
 | [`backend/pgvector/`](backend/pgvector) | PostgreSQL + pgvector backend |
 | [`backend/mongodb/`](backend/mongodb) | MongoDB backend |

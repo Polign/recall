@@ -18,7 +18,7 @@ arguments, new fields, new backends. Removals and renames are not.
 | `recall serve` HTTP | `/mcp`, `/v1/remember`, `/v1/recall`, `/v1/forget`, `/v1/history`, `/v1/keys`, `/v1/auth/kubernetes`, and the response contract in the same document. |
 | Python client | The memory calls of `polign_recall.Client` (`remember`, `recall`, `forget`, `ask`, `history`, and the result types they return), as documented in [python/README.md](python/README.md). |
 | Go memory API | The memory methods of `recall.Client` and the types they take and return: remember, recall, forget, history, events, audit export, the registry. |
-| Configuration | The `recall` commands `mcp`, `serve`, `setup` and `doctor`, their documented flags, and the environment variables `RECALL_BACKEND`, `POLIGN_URL`, `POLIGN_API_KEY`, `DATABASE_URL`, `PGPASSWORD`, `MONGODB_URI`, `MONGODB_PASSWORD`, `QDRANT_URL`, `QDRANT_API_KEY`. |
+| Configuration | The `recall` commands `mcp`, `serve`, `setup` and `doctor`, their documented flags, and the environment variables `RECALL_BACKEND`, `RECALL_BACKEND_URL`, `RECALL_BACKEND_KEY`, `RECALL_HOME`, `RECALL_COLLECTION`, `RECALL_PREDICATES`, `RECALL_EMBED_MODEL`, `RECALL_EMBED_URL`, `RECALL_EXTRACT_MODEL`. The names used before 0.23.0 are deprecated and still read: `POLIGN_URL`, `POLIGN_API_KEY`, `DATABASE_URL`, `PGPASSWORD`, `MONGODB_URI`, `MONGODB_PASSWORD`, `QDRANT_URL`, `QDRANT_API_KEY`, `POLIGN_COLLECTION`, `POLIGN_PREDICATES`, `POLIGN_EMBED_MODEL`, `POLIGN_EMBED_URL`, `POLIGN_EXTRACT_MODEL`, `POLIGN_RECALL_HOME`, and the use of a polign_db answering at `http://localhost:23000` when nothing names a backend. They are removed no earlier than 0.25.0, under a **Breaking** heading. |
 
 ## Beta
 

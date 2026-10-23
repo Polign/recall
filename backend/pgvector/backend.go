@@ -94,11 +94,13 @@ var (
 func init() {
 	recall.RegisterBackend("pgvector", recall.BackendDriver{
 		Open: func(o recall.BackendOptions) (recall.Backend, error) {
-			return New(Config{URL: o.URL, Password: o.APIKey})
+			return New(Config{URL: o.URL, Password: o.APIKey, Schema: o.Params["schema"], TextSearchConfig: o.Params["text_search"]})
 		},
 		DefaultURL: "postgres://localhost:5432/postgres",
 		URLEnv:     "DATABASE_URL",
 		KeyEnv:     "PGPASSWORD",
+		// Options on the connection string: ?schema=memory&text_search=simple.
+		Params: []string{"schema", "text_search"},
 	})
 }
 

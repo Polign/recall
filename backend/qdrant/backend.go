@@ -76,11 +76,13 @@ var (
 func init() {
 	recall.RegisterBackend("qdrant", recall.BackendDriver{
 		Open: func(o recall.BackendOptions) (recall.Backend, error) {
-			return New(Config{BaseURL: o.URL, APIKey: o.APIKey})
+			return New(Config{BaseURL: o.URL, APIKey: o.APIKey, Distance: o.Params["distance"]})
 		},
 		DefaultURL: "http://localhost:6333",
 		URLEnv:     "QDRANT_URL",
 		KeyEnv:     "QDRANT_API_KEY",
+		// Option on the URL: ?distance=Dot (Cosine, Dot, Euclid or Manhattan).
+		Params: []string{"distance"},
 	})
 }
 

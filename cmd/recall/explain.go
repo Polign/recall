@@ -7,21 +7,19 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/Polign/recall"
-	"github.com/Polign/recall/internal/recallsetup"
 )
 
 // cmdExplain prints why each belief a question finds is held: the text it
 // came from, the name it was written under, the definitions that decide how
 // it folds, and its history. It reads only.
-func cmdExplain(c *api, urlGiven bool, args []string, out io.Writer) error {
+func cmdExplain(global *dbFlags, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("explain", flag.ContinueOnError)
-	collection := fs.String("collection", os.Getenv("POLIGN_COLLECTION"), "memory collection (default $POLIGN_COLLECTION, the saved setup's, then recall_lexical_v1)")
-	dir := fs.String("config-dir", recallHome(), "configuration written by recall setup, used when no server URL is given")
+	sub := addDatabaseFlags(fs)
+	collection := fs.String("collection", setting("COLLECTION"), "memory collection (default $RECALL_COLLECTION, the saved setup's, then recall_lexical_v1)")
+	dir := fs.String("config-dir", recallHome(), "the directory recall setup wrote; its saved setup is used when nothing else names a database")
 	asJSON := fs.Bool("json", false, "print the explanations as JSON")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: recall [global flags] explain [options] <question>")
@@ -38,7 +36,7 @@ func cmdExplain(c *api, urlGiven bool, args []string, out io.Writer) error {
 		fs.Usage()
 		return errors.New("explain: a question is required")
 	}
-	mem, err := openCLIMemory(c, urlGiven, *collection, *dir, "explain")
+	mem, err := openCLIMemory(global, sub, *collection, *dir, "explain")
 	if err != nil {
 		return err
 	}
@@ -104,32 +102,32 @@ func writeExplanation(out io.Writer, e recall.Explanation) {
 	}
 }
 
-// openCLIMemory opens memory for a one-shot read command: the server or
-// backend the global flags name, or else the configuration recall setup
-// saved in dir, with its collection and embedder.
-func openCLIMemory(c *api, urlGiven bool, collection, dir, cmd string) (*memoryRuntime, error) {
-	predicates := os.Getenv("POLIGN_PREDICATES")
+// openCLIMemory opens memory for a one-shot read command: the database the
+// flags, the environment or the saved setup name (database.go). When the
+// saved setup decides, its collection, predicates and embedder apply too.
+func openCLIMemory(global, sub *dbFlags, collection, dir, cmd string) (*memoryRuntime, error) {
+	predicates := setting("PREDICATES")
 	emb, err := envEmbedding()
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", cmd, err)
 	}
-	if !urlGiven && c.backend == setupBackend || !urlGiven && c.backend == "" {
-		var cfg recallsetup.Config
-		if err := recallsetup.Read(filepath.Join(dir, "config.json"), &cfg); err == nil {
-			saved, err := recallAPI(dir, cfg)
-			if err != nil {
-				return nil, err
-			}
-			saved.backend = c.backend
-			c = saved
-			if collection == "" {
-				collection = cfg.Collection
-			}
-			predicates = cfg.Predicates
-			if os.Getenv("POLIGN_EMBED_URL") == "" && os.Getenv("POLIGN_EMBED_MODEL") == "" {
-				if emb, err = openEmbedding(cfg.EmbedModel, false); err != nil {
-					return nil, fmt.Errorf("%s: saved embedder: %w", cmd, err)
-				}
+	d, err := resolveDatabase(global, sub, dir, false)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", cmd, err)
+	}
+	c, err := d.connect(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", cmd, err)
+	}
+	if d.fromSetup() {
+		cfg := d.Setup
+		if collection == "" {
+			collection = cfg.Collection
+		}
+		predicates = cfg.Predicates
+		if setting("EMBED_URL") == "" && setting("EMBED_MODEL") == "" {
+			if emb, err = openEmbedding(cfg.EmbedModel, false); err != nil {
+				return nil, fmt.Errorf("%s: saved embedder: %w", cmd, err)
 			}
 		}
 	}

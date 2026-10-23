@@ -1,30 +1,33 @@
 Use Recall for durable user preferences and project facts with corrections,
 withdrawals, and history. The `recall` command serves it over MCP and keeps the
-memory in a Polign database (`polign-server`), or in another backend chosen
-with `-backend`.
+memory in a local database it runs itself, or in a backend named with
+`-backend` and `-url`: polign, pgvector, mongodb or qdrant.
 
 ## Connect
 
-Use an existing Recall connection when available. To connect an MCP host directly
-to a Polign database, configure it to launch:
+Use an existing Recall connection when available. To connect an MCP host,
+configure it to launch:
 
 ```sh
 recall mcp -write
 ```
 
-Set `POLIGN_URL` to the database address, `POLIGN_API_KEY` to its key when
-required, and `POLIGN_COLLECTION` to a dedicated memory collection (default
-`recall_lexical_v1`). Without `POLIGN_URL`, `recall mcp` uses the connection
-`recall setup` saved. Keep credentials private. Omit
-`-write` for read-only tools. The process speaks MCP on stdin/stdout; use the
-host's MCP integration to call tools.
+With nothing else set, memory is kept in a local database in
+`~/.local/share/recall`, shared with the Claude plugin and anything else on
+the machine that runs `recall`. To keep it elsewhere, set `RECALL_BACKEND`
+(`polign`, `pgvector`, `mongodb`, `qdrant`), `RECALL_BACKEND_URL` to the
+database address in that backend's own form, and `RECALL_BACKEND_KEY` when it
+needs a credential the URL does not carry. `RECALL_COLLECTION` names a
+dedicated memory collection (default `recall_lexical_v1`). Without any of
+these, `recall mcp` uses what `recall setup` saved. Keep credentials private.
+Omit `-write` for read-only tools. The process speaks MCP on stdin/stdout;
+use the host's MCP integration to call tools.
 
-To create a managed local database and connection, `recall setup
--no-plugin -local` writes local configuration and starts the database. Then
-configure the host to launch `recall mcp`. `recall doctor` checks
-the saved connection and says which tools it serves. Omitting `-no-plugin` from
-setup also installs the Claude Code plugin. These setup actions are separate
-from reading this guide.
+`recall setup -no-plugin` saves the database, collection and model for the
+machine and checks them; `recall doctor` says which database the flags, the
+environment and the saved setup resolve to and whether it answers. Omitting
+`-no-plugin` from setup also installs the Claude Code plugin. These setup
+actions are separate from reading this guide.
 
 A server can offer one of two tool surfaces:
 

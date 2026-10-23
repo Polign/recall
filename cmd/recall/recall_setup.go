@@ -3,8 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -21,42 +19,28 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Polign/recall/backend/local"
 	"github.com/Polign/recall/internal/recallsetup"
 	"golang.org/x/term"
 )
 
-func recallHome() string {
-	if dir := os.Getenv("POLIGN_RECALL_HOME"); dir != "" {
-		return dir
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		// Returning "" here would become a relative path under the current
-		// directory once filepath.Abs runs, quietly scattering configuration
-		// and a private key wherever setup happened to be invoked.
-		return ""
-	}
-	return filepath.Join(home, ".config", "polign", "recall")
-}
-
-func cmdRecall(args []string, out io.Writer) error {
+// cmdRecall is recall setup, recall doctor, and the recall mcp -config-dir the
+// plugin launcher runs. setup saves where memory lives (any backend), the
+// collection and the models, checks the connection, and installs the Claude
+// plugin; doctor reports the database the flags, environment and saved setup
+// resolve to and checks it.
+func cmdRecall(global *dbFlags, args []string, out io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: recall <setup|doctor|mcp> [options]")
 	}
-	if runtime.GOOS == "windows" {
-		// The plugin launcher is a /bin/sh script and the local database is
-		// managed through Unix conventions. The server and the rest of the
-		// CLI run on Windows; Recall setup does not yet.
-		return fmt.Errorf("recall %s is not supported on Windows yet; run polign-server directly and point the Recall plugin at it with POLIGN_URL", args[0])
-	}
 	fs := flag.NewFlagSet("recall "+args[0], flag.ContinueOnError)
-	dir := fs.String("config-dir", recallHome(), "persistent Recall configuration and local data directory (default $POLIGN_RECALL_HOME, then ~/.config/polign/recall)")
-	endpoint := fs.String("url", "", "connect to an existing server; API key comes from POLIGN_API_KEY")
-	local := fs.Bool("local", false, "use a managed local database, ignoring POLIGN_URL")
-	collection := fs.String("collection", "", "memory collection (default $POLIGN_COLLECTION, then one named after the embedding model: recall_lexical_v1 for word search)")
+	dir := fs.String("config-dir", recallHome(), "where Recall keeps its configuration and, for the local backend, its data (default $RECALL_HOME, then ~/.local/share/recall)")
+	sub := addDatabaseFlags(fs)
+	localFlag := fs.Bool("local", false, "keep memory in the local database, the same as -backend local")
+	collection := fs.String("collection", "", "memory collection (default $RECALL_COLLECTION, then one named after the embedding model: recall_lexical_v1 for word search)")
 	noPlugin := fs.Bool("no-plugin", false, "configure and check Recall without installing the Claude plugin")
 	claude := fs.String("claude", "", "Claude executable (otherwise auto-detected)")
-	server := fs.String("server", "", "Polign server executable (otherwise alongside this CLI)")
+	server := fs.String("server", "", "polign-server executable for the local backend (otherwise alongside this CLI, then PATH)")
 	extractModel := fs.String("extract-model", "", "model that works out what remembered text says, as provider:model (anthropic:claude-haiku-4-5-20251001, openai:<model>, ollama:<model>); with one, Recall serves the text-only tools. none clears a saved model")
 	typed := fs.Bool("typed", false, "serve the typed tools (remember with subject, predicate and value) even with a model saved; -typed=false goes back to the text-only tools")
 	embedModel := fs.String("embed-model", "", "model that embeds memory so recall searches by meaning, as provider:model[@dim] (openai:text-embedding-3-small@512, ollama:nomic-embed-text, voyage:voyage-3.5), or lexical for word search. Omitted, a new setup follows -extract-model: openai and ollama embed with their own provider (Ollama's model is pulled if missing); anthropic asks at a terminal. Changing it copies the saved memory into a new collection")
@@ -70,85 +54,39 @@ func cmdRecall(args []string, out io.Writer) error {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
 	}
 	if strings.TrimSpace(*dir) == "" {
-		return fmt.Errorf("no home directory: pass -config-dir or set POLIGN_RECALL_HOME")
+		return fmt.Errorf("no home directory: pass -config-dir or set RECALL_HOME")
 	}
 	absolute, err := filepath.Abs(*dir)
 	if err != nil {
 		return err
 	}
 	*dir = absolute
-	if args[0] != "setup" {
-		if *endpoint != "" || *local || *collection != "" || *noPlugin || *claude != "" || *server != "" || *extractModel != "" || *typed || *embedModel != "" {
+	if *localFlag {
+		if sub.given("backend") && *sub.backend != local.Name {
+			return fmt.Errorf("choose either -local or -backend %s", *sub.backend)
+		}
+		_ = fs.Set("backend", local.Name)
+	}
+	setupOnly := *collection != "" || *noPlugin || *claude != "" || *server != "" || *extractModel != "" || *typed || *embedModel != ""
+	switch args[0] {
+	case "doctor":
+		if setupOnly {
+			return fmt.Errorf("those options belong to recall setup")
+		}
+		return doctor(global, sub, *dir, out)
+	case "mcp":
+		if setupOnly || sub.given("backend") || sub.given("url") || sub.given("key") {
 			return fmt.Errorf("connection options belong to recall setup")
 		}
-		var cfg recallsetup.Config
-		if err := recallsetup.Read(filepath.Join(*dir, "config.json"), &cfg); err != nil {
-			return fmt.Errorf("recall is not configured: run recall setup (%w)", err)
-		}
-		switch args[0] {
-		case "doctor":
-			fmt.Fprintf(out, "Configured CLI: %s\nDoctor version: %s\nConfiguration: %s\nCollection: %s\n", cfg.Executable, version, *dir, cfg.Collection)
-			fmt.Fprintln(out, describeSurface(cfg))
-			fmt.Fprintln(out, describeSearch(cfg))
-			if path, err := exec.LookPath("recall"); err == nil && path != cfg.Executable {
-				fmt.Fprintf(out, "PATH selects %s; Recall uses the saved executable above.\n", path)
-			}
-			c, err := recallAPI(*dir, cfg)
-			if err != nil {
-				return err
-			}
-			if err := checkRecall(c, cfg); err != nil {
-				return err
-			}
-			fmt.Fprintf(out, "Database: %s\nAuthentication and memory read: OK\n", c.base)
-			if err := checkRecallLauncher(filepath.Join(*dir, "launch"), cfg); err != nil {
-				return err
-			}
-			fmt.Fprintln(out, "MCP handshake and memory tools: OK\nIf Claude still shows a cached failure, restart Claude and check /mcp.")
-			return nil
-		case "mcp":
-			if err := ensureRecallServer(*dir, cfg); err != nil {
-				return err
-			}
-			c, err := recallAPI(*dir, cfg)
-			if err != nil {
-				return err
-			}
-			spec := envOr("POLIGN_EXTRACT_MODEL", cfg.ExtractModel)
-			text := spec != "" && !cfg.Typed
-			// A saved setup embeds with what setup saved, never with what
-			// the extraction model would pick: the collection was written
-			// with that embedder.
-			emb, err := openEmbedding(envOr("POLIGN_EMBED_MODEL", cfg.EmbedModel), false)
-			if err != nil {
-				return fmt.Errorf("embedding model %q: %w", cfg.EmbedModel, err)
-			}
-			backend, err := openMemoryBackend(c)
-			if err != nil {
-				return err
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			emb, _, err = fitEmbedding(ctx, backend, cfg.Collection, emb)
-			cancel()
-			if err != nil {
-				return fmt.Errorf("%w; run recall setup again", err)
-			}
-			mem, err := newMemoryRuntime(c, cfg.Collection, cfg.Predicates, emb.Embedder, cfg.Predicates == "" && (cfg.Open || text))
-			if err != nil {
-				return err
-			}
-			if mem.extractor, err = newExtractor(spec); err != nil {
-				return fmt.Errorf("extraction model %q: %w", spec, err)
-			}
-			mem.text = text
-			s := &mcpServer{api: c, collection: cfg.Collection, search: emb.spec, memory: mem, write: true, enc: json.NewEncoder(os.Stdout)}
-			return s.serve(context.Background(), os.Stdin)
-		default:
-			return fmt.Errorf("unknown Recall command %q (want setup, doctor, mcp)", args[0])
-		}
+		return serveSetup(*dir)
+	case "setup":
+	default:
+		return fmt.Errorf("unknown Recall command %q (want setup, doctor, mcp)", args[0])
 	}
-	if *local && *endpoint != "" {
-		return fmt.Errorf("choose either -local or -url")
+	if runtime.GOOS == "windows" {
+		// The plugin launcher is a /bin/sh script. The rest of the CLI runs
+		// on Windows, local database included.
+		return fmt.Errorf("recall setup is not supported on Windows yet. recall mcp works there with nothing configured, keeping memory in %s, or with -backend and -url", recallHome())
 	}
 	if err := os.MkdirAll(*dir, 0o700); err != nil {
 		return err
@@ -170,6 +108,7 @@ func cmdRecall(args []string, out io.Writer) error {
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		return fmt.Errorf("read existing configuration: %w", readErr)
 	}
+	first := readErr != nil
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -183,12 +122,52 @@ func cmdRecall(args []string, out io.Writer) error {
 		}
 	}
 	cfg.Executable = exe
-	if readErr != nil {
-		cfg.URL = os.Getenv("POLIGN_URL")
-		cfg.Key = os.Getenv("POLIGN_API_KEY")
-		cfg.Collection = os.Getenv("POLIGN_COLLECTION") // "" is named after the embedder below
-		cfg.Predicates = os.Getenv("POLIGN_PREDICATES")
+	if first {
+		cfg.Collection = setting("COLLECTION") // "" is named after the embedder below
+		cfg.Predicates = setting("PREDICATES")
 		cfg.Open = true
+	}
+	// Where memory lives. On a first setup the flags and the environment
+	// decide, with the local database as the default. A rerun keeps what was
+	// saved unless a database flag changes it; the environment alone does
+	// not, which is what "later runs preserve the saved connection" promises.
+	d, err := setupTarget(global, sub, *dir, cfg, first)
+	if err != nil {
+		return err
+	}
+	previous := cfg
+	cfg.Backend = d.Backend
+	switch d.Backend {
+	case local.Name:
+		resolved, err := local.Resolve(d.URL)
+		if err != nil {
+			return err
+		}
+		cfg.URL = ""
+		if resolved != *dir {
+			cfg.URL = resolved
+		}
+		// A saved server path has to survive a rerun. Recomputing it would
+		// silently move an explicitly chosen server back to whatever sits
+		// next to this CLI.
+		switch {
+		case *server != "":
+			if cfg.Server, err = filepath.Abs(*server); err != nil {
+				return err
+			}
+		case d.Params["server"] != "":
+			cfg.Server = d.Params["server"]
+		}
+		cfg.Key = ""
+	default:
+		cfg.URL = strings.TrimRight(d.URL, "/")
+		cfg.Key = d.Key
+		cfg.Server = ""
+		if d.Backend == "polign" {
+			if err := validateRecallURL(cfg.URL); err != nil {
+				return err
+			}
+		}
 	}
 	switch *extractModel {
 	case "":
@@ -215,28 +194,17 @@ func cmdRecall(args []string, out io.Writer) error {
 		}
 		cfg.ExtractModel = choice
 	}
-	spec, namedEmbed, err := setupEmbedding(cfg, *embedModel, readErr != nil || *extractModel != "", os.Stdin, isTerminal(os.Stdin), out)
+	spec, namedEmbed, err := setupEmbedding(cfg, *embedModel, first || *extractModel != "", os.Stdin, isTerminal(os.Stdin), out)
 	if err != nil {
 		return err
 	}
 	if spec, err = prepareEmbedding(spec, namedEmbed, out); err != nil {
 		return err
 	}
-	previous := cfg
-	switching := readErr == nil && spec != cfg.EmbedModel
+	switching := !first && spec != cfg.EmbedModel
 	cfg.EmbedModel = spec
 	if cfg.Collection == "" || switching && *collection == "" {
 		cfg.Collection = defaultCollection(cfg.EmbedModel)
-	}
-	if *endpoint != "" {
-		cfg.URL = *endpoint
-		cfg.Key = os.Getenv("POLIGN_API_KEY")
-		cfg.Server = ""
-	}
-	if *local {
-		cfg.URL = ""
-		cfg.Server = ""
-		cfg.Key = ""
 	}
 	if *collection != "" {
 		cfg.Collection = *collection
@@ -250,44 +218,6 @@ func cmdRecall(args []string, out io.Writer) error {
 			return err
 		}
 	}
-	if cfg.URL != "" {
-		if err := validateRecallURL(cfg.URL); err != nil {
-			return err
-		}
-		cfg.URL = strings.TrimRight(cfg.URL, "/")
-	} else {
-		// A saved server path has to survive a rerun, which is what "subsequent
-		// runs preserve the saved connection" promises. Recomputing it
-		// unconditionally would silently move an explicitly chosen server back
-		// to whatever sits next to this CLI.
-		if *server != "" {
-			if cfg.Server, err = filepath.Abs(*server); err != nil {
-				return err
-			}
-		} else if cfg.Server == "" {
-			cfg.Server = localServerPath(exe)
-		}
-		if err := checkRecallBinary(cfg.Server, "-runtime-file"); err != nil {
-			return err
-		}
-		// Reuse the private local key even when switching back from a remote
-		// server. The server registers this key itself at every start (see
-		// ensureRecallServer), so setup only has to make sure a well-formed key
-		// exists; it never touches the data directory.
-		key, err := readLocalKey(*dir)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if !validLocalKey(key) {
-			if key, err = generateLocalKey(); err != nil {
-				return err
-			}
-			if err := writeLocalKey(*dir, key); err != nil {
-				return err
-			}
-		}
-		cfg.Key = key
-	}
 	var claudePath string
 	if !*noPlugin {
 		claudePath, err = findClaude(*claude)
@@ -295,12 +225,15 @@ func cmdRecall(args []string, out io.Writer) error {
 			return err
 		}
 	}
-	if err := ensureRecallServer(*dir, cfg); err != nil {
-		return err
-	}
-	c, err := recallAPI(*dir, cfg)
+	// Connect, which for the local backend starts the directory's server.
+	c, err := setupDatabase(*dir, cfg).connect(context.Background())
 	if err != nil {
 		return err
+	}
+	if cfg.Backend == local.Name {
+		// The key the directory holds, kept in the configuration as every
+		// release before 0.23.0 did.
+		cfg.Key = c.key
 	}
 	if err := checkRecall(c, cfg); err != nil {
 		return err
@@ -331,14 +264,14 @@ func cmdRecall(args []string, out io.Writer) error {
 		restoreRecallFile(launchPath, previousLaunch, launchExisted, 0o700)
 		return err
 	}
-	fmt.Fprintf(out, "Recall connected: %s\nCollection: %s\nConfiguration: %s\n", c.base, cfg.Collection, *dir)
+	fmt.Fprintf(out, "Recall connected: %s\nCollection: %s\nConfiguration: %s\n", setupDatabase(*dir, cfg), cfg.Collection, *dir)
 	fmt.Fprintln(out, describeSurface(cfg))
 	fmt.Fprintln(out, describeSearch(cfg))
 	if cfg.ExtractModel == "" {
 		fmt.Fprintln(out, modelHint())
 	}
-	if cfg.URL == "" {
-		fmt.Fprintf(out, "Local data: %s\nThe local server starts automatically when Recall connects.\n", filepath.Join(*dir, "data"))
+	if cfg.Backend == local.Name {
+		fmt.Fprintf(out, "Local data: %s\nThe local server starts automatically when Recall connects.\n", filepath.Join(setupDatabase(*dir, cfg).displayURL(), "data"))
 	}
 	if !*noPlugin {
 		if err := installRecallPlugin(claudePath, out); err != nil {
@@ -349,42 +282,167 @@ func cmdRecall(args []string, out io.Writer) error {
 	return nil
 }
 
+// setupTarget is the database a setup saves. A first setup resolves it from
+// the flags, the environment and the defaults, never from a database that
+// happens to answer at the old address. A rerun keeps the saved database
+// unless a database flag is given; then the flags decide and the environment
+// fills what they leave out. -url alone keeps the saved backend when the URL
+// fits it, else means polign, which is what -url meant before 0.23.0.
+func setupTarget(global, sub *dbFlags, dir string, cfg recallsetup.Config, first bool) (database, error) {
+	given := func(name string) bool { return sub.given(name) || global.given(name) }
+	if !first && !given("backend") && !given("url") && !given("key") {
+		return setupDatabase(dir, cfg), nil
+	}
+	if given("url") && !given("backend") {
+		rawURL := *sub.url
+		if !sub.given("url") {
+			rawURL = *global.url
+		}
+		candidates := []string{"polign"}
+		if !first {
+			candidates = append([]string{cfg.BackendName()}, candidates...)
+		}
+		for _, name := range candidates {
+			if fits(name, rawURL, "-url") == nil {
+				_ = sub.fs.Set("backend", name)
+				break
+			}
+		}
+	}
+	r := databases
+	r.probe = func() bool { return false }
+	return r.resolve(global, sub, dir, false)
+}
+
+// setupDatabase is the database a saved setup names.
+func setupDatabase(dir string, cfg recallsetup.Config) database {
+	from := "the setup saved in " + dir
+	d := database{Backend: cfg.BackendName(), URL: cfg.URL, Key: cfg.Key, Params: map[string]string{}, BackendFrom: from, URLFrom: from, KeyFrom: from, Dir: dir, Setup: &cfg}
+	if d.Backend == local.Name {
+		if d.URL == "" {
+			d.URL = dir
+		}
+		if cfg.Server != "" {
+			d.Params["server"] = cfg.Server
+		}
+	}
+	return d
+}
+
+// doctor says where memory lives, where that came from, and whether it
+// answers. With a saved setup in play it also checks the plugin launcher.
+func doctor(global, sub *dbFlags, dir string, out io.Writer) error {
+	d, err := resolveDatabase(global, sub, dir, false)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Doctor version: %s\nDatabase: %s\n  %s\n", version, d, d.sources())
+	check := recallsetup.Config{Collection: settingOr("COLLECTION", defaultLexicalCollection)}
+	switch {
+	case d.fromSetup():
+		check = *d.Setup
+		fmt.Fprintf(out, "Configured CLI: %s\nConfiguration: %s\nCollection: %s\n", check.Executable, dir, check.Collection)
+		fmt.Fprintln(out, describeSurface(check))
+		fmt.Fprintln(out, describeSearch(check))
+		if path, err := exec.LookPath("recall"); err == nil && path != check.Executable {
+			fmt.Fprintf(out, "PATH selects %s; Recall uses the saved executable above.\n", path)
+		}
+	default:
+		if _, err := os.Stat(filepath.Join(dir, "config.json")); err == nil {
+			fmt.Fprintf(out, "The setup saved in %s is not in use, because the %s names a database.\n", dir, d.BackendFrom)
+		} else {
+			fmt.Fprintf(out, "No setup is saved in %s. recall mcp serves this database with its defaults (collection %s); run recall setup to save a configuration and install the Claude plugin.\n", dir, check.Collection)
+		}
+	}
+	c, err := d.connect(context.Background())
+	if err != nil {
+		return err
+	}
+	if err := checkRecall(c, check); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "Connection and memory read: OK")
+	if !d.fromSetup() {
+		return nil
+	}
+	if err := checkRecallLauncher(filepath.Join(dir, "launch"), check); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "MCP handshake and memory tools: OK\nIf Claude still shows a cached failure, restart Claude and check /mcp.")
+	return nil
+}
+
+// serveSetup serves memory over MCP from what recall setup saved in dir,
+// with its collection, model and embedder: the command the plugin launcher
+// runs.
+func serveSetup(dir string) error {
+	var cfg recallsetup.Config
+	if err := recallsetup.Read(filepath.Join(dir, "config.json"), &cfg); err != nil {
+		return fmt.Errorf("recall is not configured: run recall setup (%w)", err)
+	}
+	c, err := setupDatabase(dir, cfg).connect(context.Background())
+	if err != nil {
+		return err
+	}
+	spec := settingOr("EXTRACT_MODEL", cfg.ExtractModel)
+	text := spec != "" && !cfg.Typed
+	// A saved setup embeds with what setup saved, never with what the
+	// extraction model would pick: the collection was written with that
+	// embedder.
+	emb, err := openEmbedding(settingOr("EMBED_MODEL", cfg.EmbedModel), false)
+	if err != nil {
+		return fmt.Errorf("embedding model %q: %w", cfg.EmbedModel, err)
+	}
+	backend, err := openMemoryBackend(c)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	emb, _, err = fitEmbedding(ctx, backend, cfg.Collection, emb)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("%w; run recall setup again", err)
+	}
+	mem, err := newMemoryRuntime(c, cfg.Collection, cfg.Predicates, emb.Embedder, cfg.Predicates == "" && (cfg.Open || text))
+	if err != nil {
+		return err
+	}
+	if mem.extractor, err = newExtractor(spec); err != nil {
+		return fmt.Errorf("extraction model %q: %w", spec, err)
+	}
+	mem.text = text
+	s := &mcpServer{api: c, collection: cfg.Collection, search: emb.spec, memory: mem, write: true, enc: json.NewEncoder(os.Stdout)}
+	return s.serve(context.Background(), os.Stdin)
+}
+
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 
+// validateRecallURL checks a polign_db address: an http(s) endpoint without
+// credentials, query, or fragment, since the key travels in a header.
 func validateRecallURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return fmt.Errorf("recall URL must be an http(s) endpoint without credentials, query, or fragment; use POLIGN_API_KEY for authentication")
+		return fmt.Errorf("recall URL must be an http(s) endpoint without credentials, query, or fragment; use -key or RECALL_BACKEND_KEY for authentication")
 	}
 	return nil
 }
 
-func recallAPI(dir string, cfg recallsetup.Config) (*api, error) {
-	endpoint := cfg.URL
-	if endpoint == "" {
-		var state recallsetup.Runtime
-		if err := recallsetup.Read(filepath.Join(dir, "runtime.json"), &state); err != nil {
-			return nil, fmt.Errorf("local database is stopped; run recall setup to start it (%w)", err)
-		}
-		endpoint = state.URL
-	}
-	if err := validateRecallURL(endpoint); err != nil {
-		return nil, err
-	}
-	return &api{base: endpoint, key: cfg.Key}, nil
-}
-
+// checkRecall checks a connection without writing: that a polign_db is
+// ready, and that a memory read with the configured collection and
+// credential succeeds on any backend.
 func checkRecall(c *api, cfg recallsetup.Config) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := c.doCtx(ctx, http.MethodGet, "/readyz", nil, nil); err != nil {
-		// Recall-capable 0.6.4 servers predate the readiness route.
-		var status *apiError
-		if errors.As(err, &status) && status.Code == http.StatusNotFound {
-			err = c.doCtx(ctx, http.MethodGet, "/healthz", nil, nil)
-		}
-		if err != nil {
-			return fmt.Errorf("database is not ready at %s; check the URL and server: %w", c.base, err)
+	if c.backend == "" || c.backend == setupBackend {
+		if err := c.doCtx(ctx, http.MethodGet, "/readyz", nil, nil); err != nil {
+			// Recall-capable 0.6.4 servers predate the readiness route.
+			var status *apiError
+			if errors.As(err, &status) && status.Code == http.StatusNotFound {
+				err = c.doCtx(ctx, http.MethodGet, "/healthz", nil, nil)
+			}
+			if err != nil {
+				return fmt.Errorf("database is not ready at %s; check the URL and server: %w", c.base, err)
+			}
 		}
 	}
 	mem, err := newMemoryRuntime(c, cfg.Collection, cfg.Predicates, nil, false)
@@ -404,117 +462,7 @@ func checkRecall(c *api, cfg recallsetup.Config) error {
 	if c.key != "" {
 		err = errors.New(strings.ReplaceAll(err.Error(), c.key, "[redacted]"))
 	}
-	return fmt.Errorf("memory read failed (check POLIGN_API_KEY and the collection, then rerun setup -url with the same endpoint): %w", err)
-}
-
-func checkRecallBinary(path, capability string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	b, _ := exec.CommandContext(ctx, path, "-help").CombinedOutput() //nolint:gosec // G702: executable explicitly selected by the local user; no shell
-	if !strings.Contains(string(b), capability) {
-		return fmt.Errorf("%s does not support Recall setup; upgrade Polign and run the CLI from the same installation", path)
-	}
-	return nil
-}
-
-func ensureRecallServer(dir string, cfg recallsetup.Config) error {
-	if cfg.URL != "" {
-		return nil
-	}
-	if c, err := recallAPI(dir, cfg); err == nil && checkRecall(c, cfg) == nil {
-		return nil
-	}
-	if cfg.Server == "" {
-		return fmt.Errorf("local server is not configured; run recall setup")
-	}
-	if err := checkRecallBinary(cfg.Server, "-runtime-file"); err != nil {
-		return err
-	}
-	logPath := filepath.Join(dir, "server.log")
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return err
-	}
-	defer logFile.Close()
-	// The server registers the local key from this file at every start, so a
-	// data directory that was deleted or restored from a backup older than the
-	// key gets its credential record back on the next launch instead of
-	// answering 401 for ever. Recreating the file from the saved configuration
-	// also carries over a setup written by an earlier release, which kept the
-	// key in a different file.
-	if cfg.Key == "" {
-		return fmt.Errorf("local API key is not configured; run recall setup")
-	}
-	keyPath := filepath.Join(dir, localKeyName)
-	if key, err := readLocalKey(dir); err != nil || key != cfg.Key {
-		if err := writeLocalKey(dir, cfg.Key); err != nil {
-			return err
-		}
-	}
-	cmd := exec.Command(cfg.Server, "-store", "fs:"+filepath.Join(dir, "data"), "-http", "127.0.0.1:0", "-grpc", "127.0.0.1:0", "-require-data-key", "-bootstrap-key-file", keyPath, "-bootstrap-key-namespace", "recall", "-telemetry=false", "-runtime-file", filepath.Join(dir, "runtime.json")) //nolint:gosec,noctx // G204: saved local executable; the detached server must outlive this command
-	cmd.Stdout, cmd.Stderr = logFile, logFile
-	cmd.SysProcAttr = detachAttr()
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	// Reap the child while the CLI lives; detachment lets the server outlive
-	// this invocation. The server's kernel lock excludes concurrent starters.
-	go func() { _ = cmd.Wait() }()
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		if c, err := recallAPI(dir, cfg); err == nil && checkRecall(c, cfg) == nil {
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	return fmt.Errorf("local Recall database did not become ready; inspect %s, then rerun recall setup", logPath)
-}
-
-// localKeyName holds the key the local server accepts, as the single
-// "plgn_<id>_<secret>" line that polign-server -bootstrap-key-file reads. The
-// shape mirrors the server's key format; the server stays the authority and
-// refuses to start on a key it cannot parse.
-const localKeyName = "local-key"
-
-func generateLocalKey() (string, error) {
-	var id [8]byte
-	var secret [32]byte
-	if _, err := rand.Read(id[:]); err != nil {
-		return "", err
-	}
-	if _, err := rand.Read(secret[:]); err != nil {
-		return "", err
-	}
-	return "plgn_" + hex.EncodeToString(id[:]) + "_" + hex.EncodeToString(secret[:]), nil
-}
-
-func validLocalKey(key string) bool {
-	rest, ok := strings.CutPrefix(key, "plgn_")
-	if !ok {
-		return false
-	}
-	id, secret, ok := strings.Cut(rest, "_")
-	if !ok || len(id) != 16 || len(secret) != 64 {
-		return false
-	}
-	for _, c := range id + secret {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
-}
-
-func readLocalKey(dir string) (string, error) {
-	b, err := os.ReadFile(filepath.Join(dir, localKeyName))
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(b)), nil
-}
-
-func writeLocalKey(dir, key string) error {
-	return recallsetup.WriteFile(filepath.Join(dir, localKeyName), []byte(key+"\n"), 0o600)
+	return fmt.Errorf("memory read failed (check the key and the collection, then rerun setup with the same database): %w", err)
 }
 
 func findClaude(explicit string) (string, error) {
@@ -695,32 +643,11 @@ func checkRecallLauncher(launchPath string, cfg recallsetup.Config) error {
 // no extraction model, or keeps the typed tools with -typed. Others serve
 // the text-only tools.
 func typedSetup(cfg recallsetup.Config) bool {
-	return envOr("POLIGN_EXTRACT_MODEL", cfg.ExtractModel) == "" || cfg.Typed
+	return settingOr("EXTRACT_MODEL", cfg.ExtractModel) == "" || cfg.Typed
 }
 
 // serveConfigured serves memory over MCP from what recall setup saved in dir.
-func serveConfigured(dir string) error {
-	return cmdRecall([]string{"mcp", "-config-dir", dir}, os.Stdout)
-}
-
-// localServerPath is the polign-server the managed local database runs: the
-// one installed beside this binary (a pip environment, Homebrew, a release
-// archive), else the first on PATH. polign_db ships it; Recall does not.
-func localServerPath(exe string) string {
-	beside := filepath.Join(filepath.Dir(exe), "polign-server")
-	if runtime.GOOS == "windows" {
-		beside += ".exe"
-	}
-	if _, err := os.Stat(beside); err == nil {
-		return beside
-	}
-	if found, err := exec.LookPath("polign-server"); err == nil {
-		if abs, err := filepath.Abs(found); err == nil {
-			return abs
-		}
-	}
-	return beside // checkRecallBinary reports it missing, naming where it looked
-}
+func serveConfigured(dir string) error { return serveSetup(dir) }
 
 // describeSurface says which tools a saved setup serves, and why.
 func describeSurface(cfg recallsetup.Config) string {

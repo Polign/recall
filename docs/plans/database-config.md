@@ -356,8 +356,11 @@ the 0.18.0 text-default release did) instead of a two-step rollout.
   settings; aliases with the stderr note.
 - Tests: a table test over `resolveDatabase` (every combination of flag,
   environment, saved setup, old names, and the mismatch error); one test per
-  subcommand that it calls the shared resolver; `backend/local` under
-  `backendtest` with a real `polign-server` when `RECALL_TEST_POLIGN` is set;
+  subcommand that it calls the shared resolver; `backend/local` started
+  twice and written through with a real `polign-server` when one is on PATH
+  (not the conformance suite: the local server runs cold-first, as setup
+  always started it, and answers text search only once an index is
+  published; the polign backend's own tests cover the rest);
   query params reaching each backend's `Config`; a Windows build of the local
   backend; a compatibility test that replays each row of the table above (a
   0.22.1 `config.json` and `launch` file, each old variable set, a server on

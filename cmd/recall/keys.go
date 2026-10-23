@@ -427,13 +427,14 @@ func (c authChain) Authenticate(ctx context.Context, credential string) (princip
 }
 
 // cmdKey manages keys straight against the backend: recall key create | list | revoke.
-func cmdKey(c *api, args []string, out io.Writer) error {
+func cmdKey(global *dbFlags, args []string, out io.Writer) error {
 	if len(args) == 0 {
 		return errors.New("key: want create, list or revoke")
 	}
 	sub, rest := args[0], args[1:]
 	fs := flag.NewFlagSet("key "+sub, flag.ContinueOnError)
-	collection := fs.String("collection", envOr("POLIGN_COLLECTION", "recall_lexical_v1"), "collection name prefix the server was started with")
+	db := addDatabaseFlags(fs)
+	collection := fs.String("collection", settingOr("COLLECTION", "recall_lexical_v1"), "collection name prefix the server was started with")
 	ns := fs.String("namespace", "", "namespace the key reaches (create)")
 	agent := fs.String("agent", "", "fix the key to one agent_id (create)")
 	session := fs.String("session", "", "session the key carries (create)")
@@ -446,16 +447,20 @@ func cmdKey(c *api, args []string, out io.Writer) error {
 		}
 		return err
 	}
-	name := c.backend
-	if name == "" {
-		name = setupBackend
-	}
-	backend, err := recall.OpenBackend(name, recall.BackendOptions{URL: c.base, APIKey: c.key})
+	ctx := context.Background()
+	d, err := resolveDatabase(global, db, recallHome(), false)
 	if err != nil {
-		return fmt.Errorf("key: backend: %w", err)
+		return fmt.Errorf("key: %w", err)
+	}
+	c, err := d.connect(ctx)
+	if err != nil {
+		return fmt.Errorf("key: %w", err)
+	}
+	backend, err := openMemoryBackend(c)
+	if err != nil {
+		return fmt.Errorf("key: %s: %w", d, err)
 	}
 	store := newKeyStore(backend, *collection, 0)
-	ctx := context.Background()
 	switch sub {
 	case "create":
 		if fs.NArg() != 0 {

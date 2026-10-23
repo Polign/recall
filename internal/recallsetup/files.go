@@ -8,12 +8,20 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 )
 
 type Config struct {
 	Executable string `json:"executable"`
-	Server     string `json:"server,omitempty"`
+	// Backend is the registered backend name the setup connects to. Setups
+	// written before 0.23.0 have none: with a URL they meant polign, without
+	// one the managed local database. BackendName reads either.
+	Backend string `json:"backend,omitempty"`
+	// Server is the polign-server the local backend runs, when one was chosen.
+	Server string `json:"server,omitempty"`
+	// URL is the database, in the backend's own form. For the local backend
+	// it is the data directory, or empty for the configuration directory.
 	URL        string `json:"url,omitempty"`
 	Key        string `json:"api_key,omitempty"`
 	Collection string `json:"collection"`
@@ -31,6 +39,18 @@ type Config struct {
 	// searches by meaning. Empty is Recall's built-in word search, which is
 	// what every setup made before it existed keeps.
 	EmbedModel string `json:"embed_model,omitempty"`
+}
+
+// BackendName is the backend a setup connects to, reading setups written
+// before the field existed as what they meant then.
+func (c Config) BackendName() string {
+	switch {
+	case c.Backend != "":
+		return c.Backend
+	case strings.Contains(c.URL, "://"):
+		return "polign"
+	}
+	return "local"
 }
 
 type Runtime struct {
