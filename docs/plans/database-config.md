@@ -67,8 +67,11 @@ is a loopback connect, refused in under a millisecond when nothing listens,
 and it goes away with the other deprecated behavior. `recall serve` had the
 same `:23000` default on 0.22.1, so the step applies to it too.
 
-`-backend` decides. A `RECALL_BACKEND_URL` whose scheme does not fit the backend
-is an error that names the fix:
+`-backend` decides, with one carry-over from 0.22.1: an `http(s)://` URL with
+no backend named (`-url`, `RECALL_BACKEND_URL` or `POLIGN_URL`) means polign,
+because that was the default backend and `recall -url http://polign:23000
+serve` has to keep working. Any other `RECALL_BACKEND_URL` whose scheme does
+not fit the backend is an error that names the fix:
 
 ```
 recall: RECALL_BACKEND_URL is a postgres:// URL but the backend is local (the
@@ -440,3 +443,6 @@ the 0.18.0 text-default release did) instead of a two-step rollout.
 3. The connection variable is `RECALL_BACKEND_URL`, not `DATABASE_URL`, with
    `RECALL_BACKEND_KEY` beside it. `DATABASE_URL` stays as pgvector's alias
    until the other old names go.
+4. (Found in review, 2026-10-23.) An http(s) URL alone means polign, as it
+   did before; a postgres or mongodb URL alone is still an error, since those
+   never worked without `-backend`.
