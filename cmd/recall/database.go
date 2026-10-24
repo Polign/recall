@@ -168,7 +168,10 @@ func resolveDatabase(global, sub *dbFlags, dir string, explicitDir bool) (databa
 // memory, and then the saved setup wins over the environment.
 func (r resolver) resolve(global, sub *dbFlags, dir string, explicitDir bool) (database, error) {
 	d := database{Dir: dir, Params: map[string]string{}}
-	flag := func(name string) (string, string) {
+	// flag is the value and source of a database flag, from after the
+	// command first, then before it. A flag given empty on purpose still
+	// counts as given, so -key '' sends no key whatever the environment says.
+	flag := func(name string) (value, from string) {
 		for _, f := range []*dbFlags{sub, global} {
 			if f.given(name) {
 				return f.value(name), "-" + name
@@ -221,10 +224,24 @@ func (r resolver) resolve(global, sub *dbFlags, dir string, explicitDir bool) (d
 			d.Backend, d.BackendFrom = v, "RECALL_BACKEND"
 		}
 	}
-	if d.Backend == "" && r.env("RECALL_BACKEND_URL") == "" && r.env("POLIGN_URL") != "" {
-		// Before 0.23.0, POLIGN_URL on its own named a polign_db, and it
-		// beat the saved setup, as the environment does here.
-		d.Backend, d.BackendFrom = "polign", "POLIGN_URL"
+	if d.Backend == "" {
+		// Before 0.23.0 the backend was polign unless named, so an http(s)
+		// URL on its own (-url, RECALL_BACKEND_URL or POLIGN_URL) still
+		// means a polign_db there, and it beats the saved setup as the
+		// environment does here. A URL in another backend's form does not
+		// pick that backend: -backend decides (see fits).
+		url, from := flag("url")
+		if from == "" {
+			for _, name := range []string{"RECALL_BACKEND_URL", "POLIGN_URL"} {
+				if v := r.env(name); v != "" {
+					url, from = v, name
+					break
+				}
+			}
+		}
+		if scheme := urlScheme(url); scheme == "http" || scheme == "https" {
+			d.Backend, d.BackendFrom = "polign", "the URL from "+from
+		}
 	}
 	if d.Backend == "" && saved != nil {
 		useSaved("backend")
@@ -244,21 +261,22 @@ func (r resolver) resolve(global, sub *dbFlags, dir string, explicitDir bool) (d
 
 	// The URL.
 	d.URL, d.URLFrom = flag("url")
-	if d.URL == "" && explicitDir && savedFits {
+	urlGiven := d.URLFrom != ""
+	if d.URL == "" && !urlGiven && explicitDir && savedFits {
 		useSaved("url")
 	}
-	if d.URL == "" {
+	if d.URL == "" && !urlGiven {
 		if v := r.env("RECALL_BACKEND_URL"); v != "" {
 			d.URL, d.URLFrom = v, "RECALL_BACKEND_URL"
 		}
 	}
-	if d.URL == "" && driver.URLEnv != "" {
+	if d.URL == "" && !urlGiven && driver.URLEnv != "" {
 		if v := r.env(driver.URLEnv); v != "" {
 			d.URL, d.URLFrom = v, driver.URLEnv
 			r.deprecated(driver.URLEnv, "RECALL_BACKEND_URL")
 		}
 	}
-	if d.URL == "" && savedFits {
+	if d.URL == "" && !urlGiven && savedFits {
 		useSaved("url")
 	}
 	if d.URL == "" && legacy {
@@ -282,24 +300,40 @@ func (r resolver) resolve(global, sub *dbFlags, dir string, explicitDir bool) (d
 	if err := fits(d.Backend, d.URL, d.URLFrom); err != nil {
 		return d, err
 	}
+	if d.Backend == local.Name && strings.Contains(d.URL, "?") {
+		// The local backend's one option rides on its URL like the others'
+		// (?server=/path/to/polign-server); take it off before the URL is
+		// used as a directory.
+		rest, params, err := recall.SplitParams(d.URL, []string{"server"})
+		if err != nil {
+			return d, fmt.Errorf("the URL from %s: %w", d.URLFrom, err)
+		}
+		d.URL = rest
+		for k, v := range params {
+			d.Params[k] = v
+		}
+	}
 
-	// The key.
+	// The key. A saved key goes only to the saved URL, never to a server
+	// named elsewhere.
+	urlFromSetup := d.URLFrom == "the setup saved in "+dir
 	d.Key, d.KeyFrom = flag("key")
-	if d.Key == "" && explicitDir && savedFits {
+	keyGiven := d.KeyFrom != ""
+	if d.Key == "" && !keyGiven && explicitDir && savedFits && urlFromSetup {
 		useSaved("key")
 	}
-	if d.Key == "" {
+	if d.Key == "" && !keyGiven {
 		if v := r.env("RECALL_BACKEND_KEY"); v != "" {
 			d.Key, d.KeyFrom = v, "RECALL_BACKEND_KEY"
 		}
 	}
-	if d.Key == "" && driver.KeyEnv != "" {
+	if d.Key == "" && !keyGiven && driver.KeyEnv != "" {
 		if v := r.env(driver.KeyEnv); v != "" {
 			d.Key, d.KeyFrom = v, driver.KeyEnv
 			r.deprecated(driver.KeyEnv, "RECALL_BACKEND_KEY")
 		}
 	}
-	if d.Key == "" && savedFits && d.URLFrom == "the setup saved in "+dir {
+	if d.Key == "" && !keyGiven && savedFits && urlFromSetup {
 		useSaved("key")
 	}
 	if d.Key == "" {
@@ -308,14 +342,19 @@ func (r resolver) resolve(global, sub *dbFlags, dir string, explicitDir bool) (d
 	return d, nil
 }
 
+// urlScheme is the scheme of rawURL in lower case, or "" for none.
+func urlScheme(rawURL string) string {
+	if i := strings.Index(rawURL, "://"); i >= 0 {
+		return strings.ToLower(rawURL[:i])
+	}
+	return ""
+}
+
 // fits checks that the URL is in the backend's own form, so that a
 // connection string meant for one database is never handed to another. The
 // error names the backend the URL fits.
 func fits(backend, rawURL, from string) error {
-	scheme := ""
-	if i := strings.Index(rawURL, "://"); i >= 0 {
-		scheme = strings.ToLower(rawURL[:i])
-	}
+	scheme := urlScheme(rawURL)
 	var want []string
 	switch backend {
 	case local.Name:

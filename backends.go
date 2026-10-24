@@ -127,12 +127,24 @@ func OpenBackend(name string, opts BackendOptions) (Backend, error) {
 // returns the URL without them beside the values found. Keys not listed are
 // left in place. A key given twice is an error, since the two values cannot
 // both be meant.
+//
+// Only the query string is parsed. The rest of the URL is passed through
+// untouched, so connection strings Go's URL parser would refuse but the
+// driver underneath accepts (a MongoDB host list, say) still work; a URL
+// without any of the keys comes back as it was.
 func SplitParams(rawURL string, keys []string) (string, map[string]string, error) {
-	u, err := url.Parse(rawURL)
+	base, query, found := strings.Cut(rawURL, "?")
+	if !found {
+		return rawURL, nil, nil
+	}
+	fragment := ""
+	if i := strings.IndexByte(query, '#'); i >= 0 {
+		query, fragment = query[:i], query[i:]
+	}
+	q, err := url.ParseQuery(query)
 	if err != nil {
 		return "", nil, err
 	}
-	q := u.Query()
 	params := map[string]string{}
 	for _, k := range keys {
 		vals, ok := q[k]
@@ -145,7 +157,12 @@ func SplitParams(rawURL string, keys []string) (string, map[string]string, error
 		params[k] = vals[0]
 		q.Del(k)
 	}
-	u.RawQuery = q.Encode()
-	u.ForceQuery = false
-	return u.String(), params, nil
+	if len(params) == 0 {
+		return rawURL, nil, nil
+	}
+	rest := base
+	if enc := q.Encode(); enc != "" {
+		rest += "?" + enc
+	}
+	return rest + fragment, params, nil
 }

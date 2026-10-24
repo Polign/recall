@@ -135,8 +135,20 @@ func cmdMCP(global *dbFlags, args []string) error {
 	}
 	if d.fromSetup() {
 		// The saved setup decided: serve it whole, with its collection,
-		// model and embedder.
-		return serveConfigured(*dir)
+		// model and embedder, as every release before 0.23 did when nothing
+		// named a database. -agent is honored; the flags the setup fixes are
+		// not, and are named on stderr rather than silently dropped.
+		var ignored []string
+		fs.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "collection", "predicates", "embed-url", "embed-model", "extract-model", "typed", "text", "open":
+				ignored = append(ignored, "-"+f.Name)
+			}
+		})
+		if len(ignored) > 0 {
+			fmt.Fprintf(os.Stderr, "recall: serving the setup saved in %s, which fixes what %s would set; name a database with -backend and -url to use them, or run recall setup to change the saved one\n", *dir, strings.Join(ignored, ", "))
+		}
+		return serveSetup(*dir, *agent)
 	}
 	c, err := d.connect(context.Background())
 	if err != nil {

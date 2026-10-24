@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Polign/recall/internal/recallhome"
 	"github.com/knights-analytics/hugot"
 	"github.com/knights-analytics/hugot/pipelines"
 )
@@ -64,20 +65,17 @@ var localModels = map[string]localModel{
 }
 
 // LocalModelDir is where downloaded models live: $RECALL_MODEL_DIR, else
-// models/ under $POLIGN_RECALL_HOME, else ~/.config/polign/recall/models.
-// Copy a model's files there to use it on a machine without internet access.
+// models/ under Recall's home ($RECALL_HOME, then ~/.local/share/recall, with
+// the spellings before 0.23.0 still honored; see recallhome.Home). Copy a
+// model's files there to use it on a machine without internet access.
 func LocalModelDir() string {
 	if d := os.Getenv("RECALL_MODEL_DIR"); d != "" {
 		return d
 	}
-	if d := os.Getenv("POLIGN_RECALL_HOME"); d != "" {
-		return filepath.Join(d, "models")
+	if home := recallhome.Home(); home != "" {
+		return filepath.Join(home, "models")
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(".", "recall-models")
-	}
-	return filepath.Join(home, ".config", "polign", "recall", "models")
+	return filepath.Join(".", "recall-models")
 }
 
 // LocalModelReady reports whether every file of a local model is already

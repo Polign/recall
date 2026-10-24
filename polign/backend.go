@@ -203,8 +203,11 @@ func (b *Backend) Search(ctx context.Context, collection string, values []float3
 	}
 	if err := b.do(ctx, http.MethodPost, path+"/query", map[string]any{"values": values, "k": k, "filter": filter, "typed_metadata": true}, &result); err != nil {
 		var status *StatusError
-		if errors.As(err, &status) && status.NotFound() {
-			return []recall.Hit{}, nil // nothing written to this collection yet
+		if errors.As(err, &status) && status.NotFound() && strings.Contains(status.Message, "collection") {
+			// The server knows no such collection: nothing written here yet.
+			// Any other 404 (a wrong address, a proxy, some other server)
+			// stays an error rather than reading as an empty memory.
+			return []recall.Hit{}, nil
 		}
 		return nil, err
 	}

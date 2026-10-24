@@ -342,4 +342,14 @@ func TestSearchOnACollectionNothingWroteToFindsNothing(t *testing.T) {
 	if err != nil || hits == nil || len(hits) != 0 {
 		t.Fatalf("search = %v, %v; want no hits and no error, as a read of an empty memory", hits, err)
 	}
+	// A 404 that is not about the collection is some other server, or a
+	// wrong address, and stays an error.
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "404 page not found", http.StatusNotFound)
+	}))
+	defer other.Close()
+	b, _ = polign.New(polign.Config{BaseURL: other.URL})
+	if _, err := b.Search(context.Background(), "memories", []float32{1, 2}, 5, nil); err == nil {
+		t.Fatal("a 404 from something that is not a polign_db read as an empty memory")
+	}
 }

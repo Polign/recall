@@ -99,11 +99,17 @@ func Ensure(ctx context.Context, o Options) (Connection, error) {
 	if err != nil {
 		return Connection{}, err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return Connection{}, fmt.Errorf("local: %w", err)
-	}
-	// The directory holds a private key; the owner needs execute to traverse.
-	if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // G302: private directory, not a regular file
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		// A directory this package creates is private: it holds a key. One
+		// the user already had keeps its permissions; the key file itself is
+		// always 0600.
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return Connection{}, fmt.Errorf("local: %w", err)
+		}
+		if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // G302: private directory, not a regular file
+			return Connection{}, fmt.Errorf("local: %w", err)
+		}
+	} else if err != nil {
 		return Connection{}, fmt.Errorf("local: %w", err)
 	}
 	// Another process may be mid-start; it holds the lock only until its
@@ -117,7 +123,11 @@ func Ensure(ctx context.Context, o Options) (Connection, error) {
 	if err != nil {
 		return Connection{}, err
 	}
-	if conn, ok := running(ctx, dir, key); ok {
+	conn, ok, err := running(ctx, dir, key)
+	if err != nil {
+		return Connection{}, err
+	}
+	if ok {
 		return conn, nil
 	}
 	server, err := ServerPath(o.Server)
@@ -129,7 +139,11 @@ func Ensure(ctx context.Context, o Options) (Connection, error) {
 	}
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		if conn, ok := running(ctx, dir, key); ok {
+		conn, ok, err := running(ctx, dir, key)
+		if err != nil {
+			return Connection{}, err
+		}
+		if ok {
 			return conn, nil
 		}
 		select {
@@ -163,35 +177,58 @@ func Resolve(dir string) (string, error) {
 	return abs, nil
 }
 
-// running reports the directory's server when one answers with this key.
-func running(ctx context.Context, dir, key string) (Connection, bool) {
+// running reports the directory's server when one answers and accepts this
+// key. A server that answers but refuses the key is an error, not "not
+// running": starting a second server on the same store would not help, and
+// the one way out is to stop it or restore the key it was started with.
+func running(ctx context.Context, dir, key string) (Connection, bool, error) {
 	var state recallsetup.Runtime
 	if err := recallsetup.Read(filepath.Join(dir, runtimeFile), &state); err != nil || state.URL == "" {
-		return Connection{}, false
+		return Connection{}, false, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	for _, path := range []string{"/readyz", "/healthz"} {
+	get := func(path string) (int, bool) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, state.URL+path, nil)
 		if err != nil {
-			return Connection{}, false
+			return 0, false
 		}
 		req.Header.Set("Authorization", "Bearer "+key)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
-			return Connection{}, false
+			return 0, false
 		}
 		resp.Body.Close()
-		switch {
-		case resp.StatusCode == http.StatusOK:
-			return Connection{URL: state.URL, Key: key, Dir: dir}, true
-		case resp.StatusCode == http.StatusNotFound:
-			continue // a server older than /readyz
-		default:
-			return Connection{}, false
+		return resp.StatusCode, true
+	}
+	ready := false
+	for _, path := range []string{"/readyz", "/healthz"} {
+		code, answered := get(path)
+		if !answered {
+			return Connection{}, false, nil
+		}
+		if code == http.StatusOK {
+			ready = true
+			break
+		}
+		if code != http.StatusNotFound { // a server older than /readyz answers 404 there
+			return Connection{}, false, nil
 		}
 	}
-	return Connection{}, false
+	if !ready {
+		return Connection{}, false, nil
+	}
+	// The health routes take no key. A data route does, and answers 404 for
+	// a record that does not exist once the key is accepted.
+	code, answered := get("/v1/collections/recall_probe/vectors/recall-probe")
+	if !answered {
+		return Connection{}, false, nil
+	}
+	if code == http.StatusUnauthorized || code == http.StatusForbidden {
+		return Connection{}, false, fmt.Errorf("local: the database server for %s (pid %d, %s) does not accept the key in %s; stop that server, or restore the key it was started with, then connect again",
+			dir, state.PID, state.URL, filepath.Join(dir, keyFile))
+	}
+	return Connection{URL: state.URL, Key: key, Dir: dir}, true, nil
 }
 
 // start runs polign-server detached, so it outlives this process, on the

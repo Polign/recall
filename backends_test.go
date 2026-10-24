@@ -70,7 +70,7 @@ func (paramBackend) Search(context.Context, string, []float32, int, map[string]a
 func TestOpenBackendMovesListedQueryKeysIntoParams(t *testing.T) {
 	recall.RegisterBackend("test-params", recall.BackendDriver{
 		Open:   func(o recall.BackendOptions) (recall.Backend, error) { return paramBackend{o.URL, o.Params}, nil },
-		Params: []string{"schema", "text_search"},
+		Params: []string{"schema", "text_search", "database"},
 	})
 	b, err := recall.OpenBackend("test-params", recall.BackendOptions{URL: "postgres://u@h/db?schema=memory&sslmode=require&text_search=simple"})
 	if err != nil {
@@ -82,6 +82,15 @@ func TestOpenBackendMovesListedQueryKeysIntoParams(t *testing.T) {
 	}
 	if got.params["schema"] != "memory" || got.params["text_search"] != "simple" || len(got.params) != 2 {
 		t.Fatalf("params = %v", got.params)
+	}
+	// A host list Go's URL parser refuses is fine: only the query is parsed.
+	hosts := "mongodb://h1:27017,h2:27017/recall?replicaSet=rs0&database=memory"
+	b, err = recall.OpenBackend("test-params", recall.BackendOptions{URL: hosts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := b.(paramBackend); got.url != "mongodb://h1:27017,h2:27017/recall?replicaSet=rs0" || got.params["database"] != "memory" {
+		t.Fatalf("host list = %#v", got)
 	}
 	// Nothing to move: the URL is passed through untouched, query and all.
 	b, _ = recall.OpenBackend("test-params", recall.BackendOptions{URL: "postgres://u@h/db?sslmode=require"})

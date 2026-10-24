@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Polign/recall"
 	"github.com/Polign/recall/backend/local"
 	"github.com/Polign/recall/internal/recallsetup"
 	"golang.org/x/term"
@@ -78,7 +79,7 @@ func cmdRecall(global *dbFlags, args []string, out io.Writer) error {
 		if setupOnly || sub.given("backend") || sub.given("url") || sub.given("key") {
 			return fmt.Errorf("connection options belong to recall setup")
 		}
-		return serveSetup(*dir)
+		return serveSetup(*dir, false)
 	case "setup":
 	default:
 		return fmt.Errorf("unknown Recall command %q (want setup, doctor, mcp)", args[0])
@@ -349,7 +350,7 @@ func doctor(global, sub *dbFlags, dir string, out io.Writer) error {
 		}
 	default:
 		if _, err := os.Stat(filepath.Join(dir, "config.json")); err == nil {
-			fmt.Fprintf(out, "The setup saved in %s is not in use, because the %s names a database.\n", dir, d.BackendFrom)
+			fmt.Fprintf(out, "The setup saved in %s is not in use: the URL comes from %s.\n", dir, d.URLFrom)
 		} else {
 			fmt.Fprintf(out, "No setup is saved in %s. recall mcp serves this database with its defaults (collection %s); run recall setup to save a configuration and install the Claude plugin.\n", dir, check.Collection)
 		}
@@ -374,8 +375,8 @@ func doctor(global, sub *dbFlags, dir string, out io.Writer) error {
 
 // serveSetup serves memory over MCP from what recall setup saved in dir,
 // with its collection, model and embedder: the command the plugin launcher
-// runs.
-func serveSetup(dir string) error {
+// runs. agent also serves the resume tools, for a client that asked.
+func serveSetup(dir string, agent bool) error {
 	var cfg recallsetup.Config
 	if err := recallsetup.Read(filepath.Join(dir, "config.json"), &cfg); err != nil {
 		return fmt.Errorf("recall is not configured: run recall setup (%w)", err)
@@ -412,7 +413,17 @@ func serveSetup(dir string) error {
 	}
 	mem.text = text
 	s := &mcpServer{api: c, collection: cfg.Collection, search: emb.spec, memory: mem, write: true, enc: json.NewEncoder(os.Stdout), database: setupDatabase(dir, cfg).report(c)}
-	return s.serve(context.Background(), os.Stdin)
+	if agent {
+		if _, ok := mem.backend.(recall.LeaseBackend); !ok {
+			return fmt.Errorf("mcp: -agent needs agent leases, which the %s backend does not provide", cfg.BackendName())
+		}
+		s.agents = newAgentRuntime()
+	}
+	err = s.serve(context.Background(), os.Stdin)
+	if s.agents != nil {
+		s.agents.releaseAll()
+	}
+	return err
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
@@ -647,7 +658,7 @@ func typedSetup(cfg recallsetup.Config) bool {
 }
 
 // serveConfigured serves memory over MCP from what recall setup saved in dir.
-func serveConfigured(dir string) error { return serveSetup(dir) }
+func serveConfigured(dir string) error { return serveSetup(dir, false) }
 
 // describeSurface says which tools a saved setup serves, and why.
 func describeSurface(cfg recallsetup.Config) string {
