@@ -28,6 +28,16 @@ local database in `~/.local/share/recall`, started on first use and shared by
 every agent on the machine. The [Quickstart](#quickstart) runs without a model
 or an API key. see [Backends](#backends) to keep the memory in the currently integrated locations.
 
+Add it to the agent you use:
+
+```sh
+claude mcp add recall -- recall mcp -write      # Claude Code
+```
+
+[Add to Cursor](https://cursor.com/en/install-mcp?name=recall&config=eyJjb21tYW5kIjoicmVjYWxsIiwiYXJncyI6WyJtY3AiLCItd3JpdGUiXX0%3D) ·
+[Add to VS Code](https://vscode.dev/redirect/mcp/install?name=recall&config=%7B%22command%22%3A%22recall%22%2C%22args%22%3A%5B%22mcp%22%2C%22-write%22%5D%7D) ·
+any other host: command `recall`, arguments `mcp -write` ([details](docs/mcp.md)).
+
 Today that local database is polign_db, so `recall` needs the `polign-server`
 binary next to it. pip and Homebrew install both. `go get` and
 `go install github.com/Polign/recall/cmd/recall` give you the library and the
