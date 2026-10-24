@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: pgvector/pgvector:0.8.1-pg17
@@ -74,6 +74,9 @@ jobs:
           docker run -d --name mongo -p 27017:27017 mongo:8.0 --replSet rs0 --bind_ip_all
           for i in $(seq 1 30); do
             docker exec mongo mongosh --quiet --eval 'db.runCommand({ping:1}).ok' >/dev/null 2>&1 && break
+            if [ "$(docker inspect -f '{{.State.Running}}' mongo)" != true ]; then
+              echo "mongo exited:"; docker logs mongo | tail -40; exit 1
+            fi
             sleep 1
           done
           docker exec mongo mongosh --quiet --eval 'rs.initiate({_id:"rs0",members:[{_id:0,host:"localhost:27017"}]})'
@@ -108,7 +111,7 @@ jobs:
           args: check
 
   python:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         python: ["3.10", "3.14"]
@@ -128,7 +131,7 @@ jobs:
   # dependency or in the standard library. go.mod's toolchain line is what
   # keeps the standard library current; bump it when this job goes red.
   vulncheck:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -146,7 +149,7 @@ jobs:
   # The container image, built the way container-release.yml builds it and
   # smoke-tested against a real polign-server, without pushing anything.
   image:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
