@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-10-24
+
 ### Added
 
 - One way to say where memory lives, the same for every backend and every

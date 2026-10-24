@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   goreleaser:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write # create the release and upload artifacts
       id-token: write # keyless Sigstore signing through GitHub OIDC
@@ -90,7 +90,7 @@ jobs:
   pypi:
     needs: goreleaser
     if: ${{ !contains(github.ref_name, '-') }} # no PyPI upload for prereleases
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: pypi
     permissions:
       contents: read
