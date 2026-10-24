@@ -9,7 +9,7 @@
 # the instance role, and a VPC-scoped security group.
 #
 #   packer init .
-#   AWS_PROFILE=polign packer build -var recall_version=v0.22.1 .
+#   AWS_PROFILE=polign packer build -var recall_version=v0.23.0 .
 #
 # The profile matters: the image must be built in the Marketplace seller
 # account (see the seller_account variable), and the default profile is a
@@ -26,7 +26,7 @@ packer {
 
 variable "recall_version" {
   type        = string
-  default     = "v0.22.1"
+  default     = "v0.23.0"
   description = "Recall release tag to install (must be a published, non-draft release)."
 }
 

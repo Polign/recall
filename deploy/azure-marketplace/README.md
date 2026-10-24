@@ -64,10 +64,10 @@ so a new definition needs no new grants.
 cd deploy/azure-marketplace
 packer init .
 az account set --subscription a19d6e8f-f315-4df4-be3e-6c4659ce0ba8
-packer build -var recall_version=v0.22.1 -var polign_version=v0.15.0 .
+packer build -var recall_version=v0.23.0 -var polign_version=v0.15.0 .
 ```
 
-The gallery version is the Recall version (v0.22.1 publishes 0.22.1). A
+The gallery version is the Recall version (v0.23.0 publishes 0.22.1). A
 version cannot be overwritten, so a rebuild of the same release needs
 `-var gallery_version=0.22.2`.
 

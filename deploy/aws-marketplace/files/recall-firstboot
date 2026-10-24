@@ -73,11 +73,11 @@ tmp=$(mktemp "${CONF}.XXXXXX")
   echo "# Written by recall-firstboot on first boot. Edit and restart polign-server and recall."
   for v in POLIGN_STORE POLIGN_STORE_ROLE_ARN POLIGN_STORE_EXTERNAL_ID POLIGN_STORE_REGION \
       POLIGN_STORE_ENCRYPTION_KEY_FILE AWS_REGION POLIGN_NODE_ID POLIGN_DISK_CACHE_BYTES \
-      POLIGN_EXTRA_ARGS RECALL_LISTEN POLIGN_EMBED_MODEL POLIGN_EXTRACT_MODEL RECALL_EXTRA_ARGS; do
+      POLIGN_EXTRA_ARGS RECALL_LISTEN RECALL_EMBED_MODEL RECALL_EXTRACT_MODEL RECALL_EXTRA_ARGS; do
     printf '%s=%s\n' "$v" "${!v:-}"
   done
   if [ -f "$CONF" ]; then
-    grep -vE '^(#|$|(POLIGN_STORE|POLIGN_STORE_ROLE_ARN|POLIGN_STORE_EXTERNAL_ID|POLIGN_STORE_REGION|POLIGN_STORE_ENCRYPTION_KEY_FILE|AWS_REGION|POLIGN_NODE_ID|POLIGN_DISK_CACHE_BYTES|POLIGN_EXTRA_ARGS|RECALL_LISTEN|POLIGN_EMBED_MODEL|POLIGN_EXTRACT_MODEL|RECALL_EXTRA_ARGS)=)' "$CONF" || true
+    grep -vE '^(#|$|(POLIGN_STORE|POLIGN_STORE_ROLE_ARN|POLIGN_STORE_EXTERNAL_ID|POLIGN_STORE_REGION|POLIGN_STORE_ENCRYPTION_KEY_FILE|AWS_REGION|POLIGN_NODE_ID|POLIGN_DISK_CACHE_BYTES|POLIGN_EXTRA_ARGS|RECALL_LISTEN|RECALL_EMBED_MODEL|RECALL_EXTRACT_MODEL|RECALL_EXTRA_ARGS)=)' "$CONF" || true
   fi
 } > "$tmp"
 chmod 0600 "$tmp"
@@ -91,7 +91,7 @@ if [ ! -s "$DIR/polign-key" ]; then
   install -m 0640 -o root -g polign /dev/null "$DIR/polign-key"
   printf '%s\n' "$key" > "$DIR/polign-key"
   install -m 0600 -o root -g root /dev/null "$DIR/polign-key.env"
-  printf 'POLIGN_API_KEY=%s\n' "$key" > "$DIR/polign-key.env"
+  printf 'RECALL_BACKEND_KEY=%s\n' "$key" > "$DIR/polign-key.env"
 fi
 
 # The first Recall admin key: "rcl_<id>_<secret>", registered by recall serve
@@ -112,7 +112,7 @@ Recall configured
   as        ${POLIGN_STORE_ROLE_ARN:-instance role}
   keys      ${POLIGN_STORE_ENCRYPTION_KEY_FILE:-none (storage-side encryption only)}
   region    ${POLIGN_STORE_REGION:-${AWS_REGION:-unset}}
-  embedder  ${POLIGN_EMBED_MODEL:-lexical}
+  embedder  ${RECALL_EMBED_MODEL:-lexical}
   listen    ${RECALL_LISTEN}
 Every request needs a Recall key. Keep the security group scoped to your VPC.
 MSG

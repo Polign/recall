@@ -10,7 +10,7 @@
 #
 #   az login
 #   packer init .
-#   packer build -var recall_version=v0.22.1 .
+#   packer build -var recall_version=v0.23.0 .
 #
 # The build publishes straight into the Azure Compute Gallery that Partner
 # Center reads from. The gallery, its image definition, and the resource group
@@ -31,7 +31,7 @@ packer {
 
 variable "recall_version" {
   type        = string
-  default     = "v0.22.1"
+  default     = "v0.23.0"
   description = "Recall release tag to install (must be a published, non-draft release)."
 }
 
@@ -128,7 +128,7 @@ locals {
 variable "gallery_version" {
   type        = string
   default     = ""
-  description = "Gallery image version to publish. Empty derives it from recall_version (v0.22.1 -> 0.22.1). A version already in the gallery cannot be overwritten."
+  description = "Gallery image version to publish. Empty derives it from recall_version (v0.23.0 -> 0.22.1). A version already in the gallery cannot be overwritten."
 }
 
 source "azure-arm" "recall" {

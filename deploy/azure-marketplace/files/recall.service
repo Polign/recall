@@ -14,7 +14,7 @@ EnvironmentFile=/etc/recall/recall.env
 EnvironmentFile=/etc/recall/polign-key.env
 Environment=HOME=/var/lib/recall
 Environment=RECALL_MODEL_DIR=/opt/recall/models
-ExecStart=/usr/local/bin/recall -url http://127.0.0.1:23000 serve \
+ExecStart=/usr/local/bin/recall serve -backend polign -url http://127.0.0.1:23000 \
   -listen ${RECALL_LISTEN} \
   -bootstrap-key-file /etc/recall/admin-key \
   $RECALL_EXTRA_ARGS

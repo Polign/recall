@@ -293,7 +293,7 @@ Resources:
                   POLIGN_STORE_EXTERNAL_ID=${StoreExternalId}
                   AWS_REGION=${AWS::Region}
                   POLIGN_DISK_CACHE_BYTES=${DiskCacheBytes}
-                  POLIGN_EMBED_MODEL=${EmbedModel}
+                  RECALL_EMBED_MODEL=${EmbedModel}
           - B: !If [CreateBucket, !Ref Bucket, !Ref BucketName]
 
   LoadBalancer:

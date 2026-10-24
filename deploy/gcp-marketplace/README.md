@@ -45,7 +45,7 @@ load balancer in front.
 cd deploy/gcp-marketplace
 packer init .
 gcloud config set project polign-admin
-packer build -var project_id=polign-admin -var recall_version=v0.22.1 -var polign_version=v0.15.0 .
+packer build -var project_id=polign-admin -var recall_version=v0.23.0 -var polign_version=v0.15.0 .
 ```
 
 The image goes into the producer project, and the build stops if the active

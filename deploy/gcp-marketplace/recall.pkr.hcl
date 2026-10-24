@@ -9,7 +9,7 @@
 # VPC-scoped firewall rule.
 #
 #   packer init .
-#   packer build -var project_id=polign-admin -var recall_version=v0.22.1 .
+#   packer build -var project_id=polign-admin -var recall_version=v0.23.0 .
 #
 # The project matters the same way the seller account matters on AWS: the
 # Producer Portal ingests images from the producer project you registered, so
@@ -27,7 +27,7 @@ packer {
 
 variable "recall_version" {
   type        = string
-  default     = "v0.22.1"
+  default     = "v0.23.0"
   description = "Recall release tag to install (must be a published, non-draft release)."
 }
 

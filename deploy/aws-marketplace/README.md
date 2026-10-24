@@ -44,7 +44,7 @@ load balancer in front.
 ```sh
 cd deploy/aws-marketplace
 packer init .
-AWS_PROFILE=polign packer build -var recall_version=v0.22.1 -var polign_version=v0.15.0 .
+AWS_PROFILE=polign packer build -var recall_version=v0.23.0 -var polign_version=v0.15.0 .
 ```
 
 Build in the Marketplace seller account (298123941500, profile `polign`).

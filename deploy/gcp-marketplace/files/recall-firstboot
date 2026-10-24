@@ -37,7 +37,7 @@ set -a
 # shellcheck disable=SC1090
 . "$DEFAULTS"
 attr() { md "instance/attributes/$1" 2>/dev/null || true; }
-v=$(attr recall-embed-model); [ -n "$v" ] && POLIGN_EMBED_MODEL=$v
+v=$(attr recall-embed-model); [ -n "$v" ] && RECALL_EMBED_MODEL=$v
 v=$(attr recall-disk-cache-bytes); [ -n "$v" ] && POLIGN_DISK_CACHE_BYTES=$v
 v=$(attr recall-extra-args); [ -n "$v" ] && RECALL_EXTRA_ARGS=$v
 if [ -f "$CONF" ]; then . "$CONF"; fi
@@ -75,11 +75,11 @@ tmp=$(mktemp "${CONF}.XXXXXX")
 {
   echo "# Written by recall-firstboot on first boot. Edit and restart polign-server and recall."
   for v in POLIGN_STORE POLIGN_STORE_ENCRYPTION_KEY_FILE GOOGLE_CLOUD_PROJECT POLIGN_NODE_ID POLIGN_DISK_CACHE_BYTES \
-      POLIGN_EXTRA_ARGS RECALL_LISTEN POLIGN_EMBED_MODEL POLIGN_EXTRACT_MODEL RECALL_EXTRA_ARGS; do
+      POLIGN_EXTRA_ARGS RECALL_LISTEN RECALL_EMBED_MODEL RECALL_EXTRACT_MODEL RECALL_EXTRA_ARGS; do
     printf '%s=%s\n' "$v" "${!v:-}"
   done
   if [ -f "$CONF" ]; then
-    grep -vE '^(#|$|(POLIGN_STORE|POLIGN_STORE_ENCRYPTION_KEY_FILE|GOOGLE_CLOUD_PROJECT|POLIGN_NODE_ID|POLIGN_DISK_CACHE_BYTES|POLIGN_EXTRA_ARGS|RECALL_LISTEN|POLIGN_EMBED_MODEL|POLIGN_EXTRACT_MODEL|RECALL_EXTRA_ARGS)=)' "$CONF" || true
+    grep -vE '^(#|$|(POLIGN_STORE|POLIGN_STORE_ENCRYPTION_KEY_FILE|GOOGLE_CLOUD_PROJECT|POLIGN_NODE_ID|POLIGN_DISK_CACHE_BYTES|POLIGN_EXTRA_ARGS|RECALL_LISTEN|RECALL_EMBED_MODEL|RECALL_EXTRACT_MODEL|RECALL_EXTRA_ARGS)=)' "$CONF" || true
   fi
 } > "$tmp"
 chmod 0600 "$tmp"
@@ -93,7 +93,7 @@ if [ ! -s "$DIR/polign-key" ]; then
   install -m 0640 -o root -g polign /dev/null "$DIR/polign-key"
   printf '%s\n' "$key" > "$DIR/polign-key"
   install -m 0600 -o root -g root /dev/null "$DIR/polign-key.env"
-  printf 'POLIGN_API_KEY=%s\n' "$key" > "$DIR/polign-key.env"
+  printf 'RECALL_BACKEND_KEY=%s\n' "$key" > "$DIR/polign-key.env"
 fi
 
 # The first Recall admin key: "rcl_<id>_<secret>", registered by recall serve
@@ -113,7 +113,7 @@ Recall configured
   store     ${POLIGN_STORE}
   as        attached service account
   keys      ${POLIGN_STORE_ENCRYPTION_KEY_FILE:-none (storage-side encryption only)}
-  embedder  ${POLIGN_EMBED_MODEL:-lexical}
+  embedder  ${RECALL_EMBED_MODEL:-lexical}
   listen    ${RECALL_LISTEN}
 Every request needs a Recall key. Keep the firewall rule scoped to your VPC.
 MSG
