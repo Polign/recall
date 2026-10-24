@@ -76,7 +76,10 @@ in the environment, then what `recall setup` saved, then a local database in
 machine shares. So a bare `Client()` works on a fresh machine with nothing
 configured. The names used before recall 0.23 (`POLIGN_URL` and the rest)
 still work in the environment, and a client given `backend=` against an older
-binary says the same thing in the names that binary knows.
+binary says the same thing in the names that binary knows. `Client.database`
+says where memory ended up, as the binary resolved it: a `Database` with the
+`backend`, the `url` (a directory for local) and, for local, the loopback
+`server` address; `None` from a binary older than 0.23 or a `recall serve`.
 
 The client owns a long-lived `recall mcp -write -text` subprocess and shares
 the Go implementation's validation and fold. Use `write=False` for a read-only

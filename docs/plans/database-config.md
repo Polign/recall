@@ -2,10 +2,10 @@
 
 Status: decided 2026-10-23 (see the end). Phases 1 and 2 built the same day
 on `at/database-config` in Polign/recall and Polign/polign, unreleased.
-Phase 3 (the site) waits for 0.23.0 on every channel. Deferred from phase 2:
-the `Client.database` property (the binary does not yet report the resolved
-database in the MCP initialize reply); recall-vapi reads `runtime.json` and
-`local-key` as before, which the local backend keeps writing.
+Phase 3 (the site) waits for 0.23.0 on every channel. `Client.database`
+reads the `database` the binary reports in the MCP initialize reply;
+recall-vapi uses it, and falls back to `runtime.json` and `local-key` with an
+older binary.
 
 ## The problem
 

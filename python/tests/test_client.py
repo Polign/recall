@@ -712,6 +712,8 @@ for line in sys.stdin:
     if "id" not in request:
         continue
     result = {"tools": []} if request["method"] == "tools/list" else {}
+    if request["method"] == "initialize":
+        result = {"serverInfo": {"name": "recall", "version": "0.23.0", "database": {"backend": "local", "url": "/m", "server": "http://127.0.0.1:5"}}}
     print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
 '''
 
@@ -814,8 +816,9 @@ class ClientDatabaseTests(unittest.TestCase):
         self.assertNotIn("POLIGN_URL", seen)
 
     def test_nothing_named_leaves_the_environment_to_the_binary(self):
-        with Client():
-            pass
+        from polign_recall import Database
+        with Client() as client:
+            self.assertEqual(client.database, Database("local", "/m", "http://127.0.0.1:5"))
         seen = self.seen()
         self.assertEqual(seen["RECALL_BACKEND"], "mongodb")
         self.assertEqual(seen["POLIGN_URL"], "http://stale:23000")

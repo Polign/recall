@@ -28,6 +28,10 @@
   plugin work on every backend. `recall doctor` works without a saved setup
   and says where the database it checks came from.
 - `recall serve` logs where memory is on its first line.
+- The MCP `initialize` reply's `serverInfo` carries `database`: the backend
+  and URL `recall mcp` resolved, and for the local backend the address its
+  server listens on, never a key. Python: `Client.database`, a `Database`
+  with `backend`, `url` and `server`, or `None` from an older server.
 - Python: `Client(backend=, backend_url=, backend_key=)` name the database
   with the same three names; `local_dir=X` stays as the short spelling of
   `backend="local", backend_url=X`. Given none of them, a bare `Client()`

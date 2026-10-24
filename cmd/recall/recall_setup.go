@@ -411,7 +411,7 @@ func serveSetup(dir string) error {
 		return fmt.Errorf("extraction model %q: %w", spec, err)
 	}
 	mem.text = text
-	s := &mcpServer{api: c, collection: cfg.Collection, search: emb.spec, memory: mem, write: true, enc: json.NewEncoder(os.Stdout)}
+	s := &mcpServer{api: c, collection: cfg.Collection, search: emb.spec, memory: mem, write: true, enc: json.NewEncoder(os.Stdout), database: setupDatabase(dir, cfg).report(c)}
 	return s.serve(context.Background(), os.Stdin)
 }
 

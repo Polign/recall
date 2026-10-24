@@ -232,3 +232,25 @@ func TestSetupDatabaseReadsA022LocalSetup(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestInitializeReportsTheDatabase(t *testing.T) {
+	d := database{Backend: "local", URL: t.TempDir()}
+	s := &mcpServer{api: &api{base: "http://unused"}, database: d.report(&api{base: "http://127.0.0.1:9"})}
+	reply := s.initialize(nil).(map[string]any)
+	info := reply["serverInfo"].(map[string]any)
+	got := info["database"].(map[string]any)
+	if got["backend"] != "local" || got["url"] != d.URL || got["server"] != "http://127.0.0.1:9" {
+		t.Fatalf("database = %v", got)
+	}
+	if _, leaked := got["key"]; leaked {
+		t.Fatal("the key must not be reported")
+	}
+	bare := (&mcpServer{api: &api{base: "http://unused"}}).initialize(nil).(map[string]any)
+	if _, ok := bare["serverInfo"].(map[string]any)["database"]; ok {
+		t.Fatal("a server with no database resolved reported one")
+	}
+	remote := database{Backend: "qdrant", URL: "http://q:6333", Key: "secret"}.report(&api{base: "http://q:6333"})
+	if remote["server"] != nil || remote["url"] != "http://q:6333" {
+		t.Fatalf("remote = %v", remote)
+	}
+}

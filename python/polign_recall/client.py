@@ -30,6 +30,16 @@ class RecallError(Exception):
 
 
 @dataclass(frozen=True)
+class Database:
+    """Where memory lives, as the server resolved it: the backend name, the
+    URL in that backend's own form (a directory for local), and for the local
+    backend the loopback address its polign-server listens on. Never a key."""
+    backend: str
+    url: str
+    server: str = ""
+
+
+@dataclass(frozen=True)
 class PriorValue:
     """A value that a newer statement replaced."""
     value: Value
@@ -734,7 +744,9 @@ class Client:
     `recall setup` saved, then a local database in RECALL_HOME it runs itself.
     `local_dir=X` is the short spelling of `backend="local", backend_url=X`.
     The first client to open a directory starts its polign-server and later
-    ones share it. With a recall binary older than 0.23 the client says the
+    ones share it. `Client.database` says what the server resolved, as a
+    `Database`, or None when the server is older than 0.23 or a `recall
+    serve`. With a recall binary older than 0.23 the client says the
     same thing in the names that binary knows.
 
     `agent=True` also turns on the agent resume tools, for `resume`. It needs
@@ -771,6 +783,7 @@ class Client:
         if text and typed:
             raise ValueError("text=True and typed=True name different tools; pass one")
         self.server_version = ""
+        self.database: Database | None = None
         self._http: _HTTPSession | None = None
         self._process: subprocess.Popen[bytes] | None = None
         if local_dir is not None:
@@ -859,6 +872,9 @@ class Client:
                                           "clientInfo": {"name": "polign-recall-python", "version": "0.1.0"}})
         info = result.get("serverInfo") if isinstance(result, dict) else None
         self.server_version = str((info or {}).get("version") or "")
+        reported = (info or {}).get("database")
+        if isinstance(reported, dict) and reported.get("backend"):
+            self.database = Database(str(reported["backend"]), str(reported.get("url") or ""), str(reported.get("server") or ""))
 
     def _tool_names(self) -> set[str]:
         return {t.get("name") for t in self._rpc("tools/list", {}).get("tools", [])}

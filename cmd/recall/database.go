@@ -118,6 +118,17 @@ func (d database) sources() string {
 	return s
 }
 
+// report is what the MCP initialize reply says about where memory lives,
+// for a client that named nothing: the backend and URL, and for the local
+// backend the address its server listens on. Never the key.
+func (d database) report(c *api) map[string]any {
+	out := map[string]any{"backend": d.Backend, "url": d.displayURL()}
+	if d.Backend == local.Name && c != nil {
+		out["server"] = c.base
+	}
+	return out
+}
+
 // fromSetup reports whether the saved setup decided where memory lives, so a
 // command can also take its collection, predicates and embedder.
 func (d database) fromSetup() bool { return d.Setup != nil }

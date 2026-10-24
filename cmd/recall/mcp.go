@@ -79,6 +79,9 @@ var readOnlyTool = map[string]any{"readOnlyHint": true, "openWorldHint": false}
 type mcpServer struct {
 	api        *api
 	collection string // the memory collection
+	// database says where memory lives, as resolved (database.report), so a
+	// client that named nothing can find out; nil when not reported.
+	database map[string]any
 	// search names the embedder when memory is searched by meaning; empty
 	// is word search.
 	search string
@@ -167,7 +170,7 @@ func cmdMCP(global *dbFlags, args []string) error {
 		return fmt.Errorf("mcp: -extract-model: %w", err)
 	}
 	mem.text = serveText
-	s := &mcpServer{api: c, collection: *collection, search: emb.spec, write: *write, memory: mem, enc: json.NewEncoder(os.Stdout)}
+	s := &mcpServer{api: c, collection: *collection, search: emb.spec, write: *write, memory: mem, enc: json.NewEncoder(os.Stdout), database: d.report(c)}
 	if *agent {
 		if !*write {
 			return errors.New("mcp: -agent requires -write")
@@ -300,10 +303,14 @@ func (s *mcpServer) initialize(params json.RawMessage) any {
 	if slices.Contains(mcpVersions, p.ProtocolVersion) {
 		negotiated = p.ProtocolVersion
 	}
+	info := map[string]any{"name": "recall", "version": version}
+	if s.database != nil {
+		info["database"] = s.database
+	}
 	return map[string]any{
 		"protocolVersion": negotiated,
 		"capabilities":    map[string]any{"tools": map[string]any{}},
-		"serverInfo":      map[string]any{"name": "recall", "version": version},
+		"serverInfo":      info,
 		"instructions":    s.instructions(),
 	}
 }
