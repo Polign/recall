@@ -202,6 +202,10 @@ func (b *Backend) Search(ctx context.Context, collection string, values []float3
 		Hits *[]recall.Hit `json:"hits"`
 	}
 	if err := b.do(ctx, http.MethodPost, path+"/query", map[string]any{"values": values, "k": k, "filter": filter, "typed_metadata": true}, &result); err != nil {
+		var status *StatusError
+		if errors.As(err, &status) && status.NotFound() {
+			return []recall.Hit{}, nil // nothing written to this collection yet
+		}
 		return nil, err
 	}
 	if result.Hits == nil || len(*result.Hits) > k {

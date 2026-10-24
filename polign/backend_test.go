@@ -324,3 +324,22 @@ func TestGetWireContract(t *testing.T) {
 		t.Fatal("empty get accepted")
 	}
 }
+
+func TestSearchOnACollectionNothingWroteToFindsNothing(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/query") {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"not found: no segments for collection \"memories\" (segindex: no index published)"}`))
+	}))
+	defer ts.Close()
+	b, err := polign.New(polign.Config{BaseURL: ts.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hits, err := b.Search(context.Background(), "memories", []float32{1, 2}, 5, nil)
+	if err != nil || hits == nil || len(hits) != 0 {
+		t.Fatalf("search = %v, %v; want no hits and no error, as a read of an empty memory", hits, err)
+	}
+}

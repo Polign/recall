@@ -32,6 +32,13 @@
   `RECALL_PREDICATES`, `RECALL_EMBED_MODEL`, `RECALL_EMBED_URL`,
   `RECALL_EXTRACT_MODEL`, `RECALL_HOME`.
 
+### Fixed
+
+- A `recall` before anything was ever remembered failed with a polign_db
+  404 ("no segments for collection") instead of answering that nothing is
+  remembered yet. The polign backend's vector search now reads a missing
+  collection as empty, as its reads by id already did.
+
 ### Deprecated
 
 - The names each backend had for its URL and key (`POLIGN_URL`,
