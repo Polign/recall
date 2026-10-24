@@ -86,6 +86,7 @@ func TestResolveDatabase(t *testing.T) {
 		{name: "a 0.22 local setup", saved: &legacyLocal, backend: "local", url: "DIR", server: "/opt/polign-server", fromSetup: true, backendFrom: "the setup saved in DIR"},
 		{name: "a 0.22 remote setup", saved: &legacyRemote, backend: "polign", url: "http://memory.internal:23000", key: "plgn_remote", fromSetup: true},
 		{name: "a saved qdrant setup", saved: &qdrantSetup, backend: "qdrant", url: "http://q:6333", key: "qk", fromSetup: true},
+		{name: "POLIGN_URL beats a saved local setup, as before 0.23", saved: &legacyLocal, env: map[string]string{"POLIGN_URL": "http://other:23000"}, backend: "polign", url: "http://other:23000", backendFrom: "POLIGN_URL", fromSetup: false, wantWarn: "POLIGN_URL"},
 		{name: "the environment beats the saved setup", saved: &legacyRemote, env: map[string]string{"POLIGN_URL": "http://other:23000"}, backend: "polign", url: "http://other:23000", fromSetup: false, wantWarn: "POLIGN_URL"},
 		{name: "an explicit -config-dir beats the environment", saved: &legacyRemote, explicitDir: true, env: map[string]string{"POLIGN_URL": "http://other:23000", "RECALL_BACKEND": "qdrant"}, backend: "polign", url: "http://memory.internal:23000", key: "plgn_remote", fromSetup: true},
 		{name: "an explicit -config-dir with nothing saved", explicitDir: true, wantErr: "no setup is saved"},

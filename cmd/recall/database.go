@@ -221,12 +221,13 @@ func (r resolver) resolve(global, sub *dbFlags, dir string, explicitDir bool) (d
 			d.Backend, d.BackendFrom = v, "RECALL_BACKEND"
 		}
 	}
+	if d.Backend == "" && r.env("RECALL_BACKEND_URL") == "" && r.env("POLIGN_URL") != "" {
+		// Before 0.23.0, POLIGN_URL on its own named a polign_db, and it
+		// beat the saved setup, as the environment does here.
+		d.Backend, d.BackendFrom = "polign", "POLIGN_URL"
+	}
 	if d.Backend == "" && saved != nil {
 		useSaved("backend")
-	}
-	if d.Backend == "" && r.env("RECALL_BACKEND_URL") == "" && r.env("POLIGN_URL") != "" {
-		// Before 0.23.0, POLIGN_URL on its own named a polign_db.
-		d.Backend, d.BackendFrom = "polign", "POLIGN_URL"
 	}
 	if d.Backend == "" && r.probe() {
 		d.Backend, d.BackendFrom, legacy = "polign", "a polign_db answering at "+legacyDefaultURL, true
