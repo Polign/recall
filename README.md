@@ -15,15 +15,25 @@ Zep 12/18. Tokens to save one message: Recall 3.0k, mem0 12.7k, Zep 14.7k.
 ## Install
 
 ```sh
-pip install polign-recall          # Python client; brings the database with it
-go get github.com/Polign/recall    # Go
+pip install polign-recall          # Python client, the recall binary, and the database it runs
+brew install polign/tap/recall     # the same for Homebrew
 recall mcp -write                  # MCP over stdio: remember(text), recall(question), forget(text)
 ```
 
 Nothing else to configure: with no database named, `recall` keeps memory in a
-local polign_db it runs itself, in `~/.local/share/recall`, shared by every
-agent on the machine. The [Quickstart](#quickstart) runs without a model or an
-API key. To keep memory somewhere else, see [Backends](#backends).
+local database in `~/.local/share/recall`, started on first use and shared by
+every agent on the machine. The [Quickstart](#quickstart) runs without a model
+or an API key. To keep memory somewhere else, see [Backends](#backends).
+
+Today that local database is polign_db, so `recall` needs the `polign-server`
+binary next to it. pip and Homebrew install both. `go get` and
+`go install github.com/Polign/recall/cmd/recall` give you the library and the
+binary but not the database: name one with `-backend` and `-url`, or install
+polign_db (`pip install polign-db` or `brew install polign/tap/polign`). In
+0.23.0 a `recall mcp` with nothing configured and no `polign-server` exits
+before the MCP handshake; the next release serves the tools and reports the
+missing database on the first memory call instead. A local database that needs
+no second binary is being built.
 
 ## What a correction looks like
 
