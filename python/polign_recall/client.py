@@ -461,9 +461,84 @@ def _server() -> tuple[list[str], list[str]]:
     return [polign, "mcp", "-memory-only"], [polign, "recall", "setup"]
 
 
+# The variables that name a database, in the spelling recall 0.23 reads and
+# the ones each backend had before it. A client that names a database strips
+# all of them from the environment it hands the binary, so the binary resolves
+# exactly what the caller gave.
+_DATABASE_VARS = ("RECALL_BACKEND", "RECALL_BACKEND_URL", "RECALL_BACKEND_KEY",
+                  "POLIGN_URL", "POLIGN_API_KEY", "DATABASE_URL", "PGPASSWORD",
+                  "MONGODB_URI", "MONGODB_PASSWORD", "QDRANT_URL", "QDRANT_API_KEY")
+
 # Connection settings that belong to some other server. A managed local
 # database must not inherit them, from the caller or from the environment.
-_CONNECTION = ("POLIGN_URL", "POLIGN_API_KEY", "POLIGN_COLLECTION", "POLIGN_PREDICATES")
+_CONNECTION = _DATABASE_VARS + ("RECALL_COLLECTION", "RECALL_PREDICATES", "POLIGN_COLLECTION", "POLIGN_PREDICATES")
+
+_versions: dict[str, tuple[int, ...]] = {}
+
+
+def _version(binary: str) -> tuple[int, ...]:
+    """The version `recall -version` prints, as a tuple, cached per binary.
+    A development build ("dev") counts as the newest. A binary that does not
+    answer counts as older than every release."""
+    if binary in _versions:
+        return _versions[binary]
+    version: tuple[int, ...] = (0,)
+    try:
+        out = subprocess.run([binary, "-version"], capture_output=True, text=True, timeout=10,
+                             stdin=subprocess.DEVNULL).stdout.strip()
+        if out == "dev":
+            version = (999,)
+        else:
+            version = tuple(int(part) for part in out.lstrip("v").split("-")[0].split("."))
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+    _versions[binary] = version
+    return version
+
+
+def _database_env(backend: str | None, url: str | os.PathLike[str] | None, key: str | None,
+                  serve: Sequence[str], setup: Sequence[str], timeout: float) -> dict[str, str]:
+    """The environment that names the database to the binary.
+
+    recall 0.23 and later read RECALL_BACKEND, RECALL_BACKEND_URL and
+    RECALL_BACKEND_KEY and resolve the rest themselves, local database
+    included. An older binary gets the same database in the names it knows:
+    for the local backend that means running `recall setup -local` for the
+    directory, as this client always did.
+    """
+    if url is not None:
+        url = os.fspath(url)
+    if "-memory-only" not in serve and _version(serve[0]) >= (0, 23):
+        env = {}
+        if backend is not None:
+            env["RECALL_BACKEND"] = backend
+        if url is not None:
+            env["RECALL_BACKEND_URL"] = url
+        if key is not None:
+            env["RECALL_BACKEND_KEY"] = key
+        return env
+    # An older binary: what -url meant to it depends on its form.
+    if backend is None:
+        backend = "polign" if url and "://" in url else "local"
+    if url and "?" in url and backend in ("local", "polign", "qdrant"):
+        raise RecallError(f"options on the {backend} URL ({url!r}) need recall 0.23 or later; "
+                          "this environment runs an older recall binary", code="unsupported")
+    if backend == "local":
+        directory = url or os.environ.get("RECALL_HOME") or os.environ.get("POLIGN_RECALL_HOME") \
+            or os.path.join(os.path.expanduser("~"), ".config", "polign", "recall")
+        return _local_server(setup, directory, timeout)
+    names = {"polign": ("POLIGN_URL", "POLIGN_API_KEY"), "pgvector": ("DATABASE_URL", "PGPASSWORD"),
+             "mongodb": ("MONGODB_URI", "MONGODB_PASSWORD"), "qdrant": ("QDRANT_URL", "QDRANT_API_KEY")}
+    if backend not in names:
+        raise RecallError(f"backend {backend!r} needs recall 0.23 or later; this environment runs an older recall binary",
+                          code="unsupported")
+    url_var, key_var = names[backend]
+    env = {"RECALL_BACKEND": backend}
+    if url is not None:
+        env[url_var] = url
+    if key is not None:
+        env[key_var] = key
+    return env
 
 
 def _local_server(setup: Sequence[str], directory: str | os.PathLike[str], timeout: float) -> dict[str, str]:
@@ -648,10 +723,19 @@ class Client:
 
     The `recall` binary comes in this package's platform wheel, and
     polign-server with polign_db. With
-    `local_dir`, the client also runs the database: it keeps a local
-    polign-server for that directory and connects to it, ignoring any
-    POLIGN_URL or POLIGN_API_KEY. Without it, `recall` connects to POLIGN_URL,
-    or to what `recall setup` configured when POLIGN_URL is unset.
+    `backend`, `backend_url` and `backend_key` say where memory lives, the
+    same three names as `recall -backend`, `-url` and `-key` and the
+    RECALL_BACKEND, RECALL_BACKEND_URL and RECALL_BACKEND_KEY variables:
+    `backend` is "local", "polign", "pgvector", "mongodb" or "qdrant", the URL
+    is in that backend's own form (a directory for local), and the key is the
+    credential when the URL does not carry one. Given any of them, the client
+    hands the binary exactly those and nothing the environment says about a
+    database. Given none, the binary resolves it: the environment, then what
+    `recall setup` saved, then a local database in RECALL_HOME it runs itself.
+    `local_dir=X` is the short spelling of `backend="local", backend_url=X`.
+    The first client to open a directory starts its polign-server and later
+    ones share it. With a recall binary older than 0.23 the client says the
+    same thing in the names that binary knows.
 
     `agent=True` also turns on the agent resume tools, for `resume`. It needs
     write=True. Agents resumed through this client stay held until they are
@@ -678,7 +762,8 @@ class Client:
                  write: bool = True, local_dir: str | os.PathLike[str] | None = None,
                  agent: bool = False, extract_model: str | None = None, text: bool | None = None,
                  typed: bool = False, url: str | None = None, api_key: str | None = None,
-                 token_file: str | None = None):
+                 token_file: str | None = None, backend: str | None = None,
+                 backend_url: str | os.PathLike[str] | None = None, backend_key: str | None = None):
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be finite and positive")
         if agent and not write:
@@ -688,9 +773,16 @@ class Client:
         self.server_version = ""
         self._http: _HTTPSession | None = None
         self._process: subprocess.Popen[bytes] | None = None
+        if local_dir is not None:
+            if backend not in (None, "local"):
+                raise ValueError(f"local_dir keeps memory in the local backend; it cannot be combined with backend={backend!r}")
+            if backend_url is not None:
+                raise ValueError("local_dir and backend_url both name the directory; pass one")
+            backend, backend_url = "local", local_dir
+        names_database = backend is not None or backend_url is not None or backend_key is not None
         if url is not None:
-            if command is not None or local_dir is not None or extract_model is not None or env is not None:
-                raise ValueError("url connects to a recall serve; command, local_dir, env and extract_model configure a local process and cannot be combined with it")
+            if command is not None or names_database or extract_model is not None or env is not None:
+                raise ValueError("url connects to a recall serve; command, backend, backend_url, backend_key, local_dir, env and extract_model configure a local process and cannot be combined with it")
             self.timeout = timeout
             self._lock = threading.RLock()
             self._id = 0
@@ -708,8 +800,8 @@ class Client:
             raise ValueError("api_key and token_file go with url")
         if extract_model is not None and command is not None:
             raise ValueError("extract_model configures the recall server and cannot be combined with command")
-        if local_dir is not None and command is not None:
-            raise ValueError("local_dir runs the recall server itself and cannot be combined with command")
+        if names_database and command is not None:
+            raise ValueError("backend, backend_url, backend_key and local_dir tell the recall server where memory is and cannot be combined with command")
         self.timeout = timeout
         self._lock = threading.RLock()
         self._responses: queue.Queue[Any] = queue.Queue()
@@ -728,11 +820,18 @@ class Client:
         argv = list(command) if command is not None else (
             serve + (["-write"] if write else []) + (["-agent"] if agent else []) + surface
             + (["-extract-model", extract_model] if extract_model else []))
-        if local_dir is not None:
-            env = {**(env or {}), **_local_server(setup, local_dir, timeout)}
+        inherited = dict(os.environ)
+        if names_database:
+            # The binary resolves exactly what was given: nothing the
+            # environment says about a database may fill in or override it.
+            # A local database also keeps no collection or registry meant
+            # for some other server.
+            strip = _CONNECTION if backend == "local" else _DATABASE_VARS
+            inherited = {k: v for k, v in inherited.items() if k not in strip}
+            env = {**(env or {}), **_database_env(backend, backend_url, backend_key, serve, setup, timeout)}
         try:
             self._process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                             stderr=None, env={**os.environ, **(env or {})})
+                                             stderr=None, env={**inherited, **(env or {})})
         except OSError as exc:
             # The documented contract is that failures arrive as RecallError.
             # A missing binary is the most common first run, and it must not
@@ -792,7 +891,7 @@ class Client:
         token_file = os.environ.get("RECALL_TOKEN_FILE") or None
         if not api_key and not token_file and os.path.exists(_DEFAULT_TOKEN_FILE):
             token_file = _DEFAULT_TOKEN_FILE
-        for forbidden in ("command", "local_dir", "extract_model", "env", "url", "api_key", "token_file"):
+        for forbidden in ("command", "local_dir", "backend", "backend_url", "backend_key", "extract_model", "env", "url", "api_key", "token_file"):
             kwargs.pop(forbidden, None)
         return cls(url=url, api_key=api_key, token_file=token_file, **kwargs)
 

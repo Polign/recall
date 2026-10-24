@@ -28,6 +28,12 @@
   plugin work on every backend. `recall doctor` works without a saved setup
   and says where the database it checks came from.
 - `recall serve` logs where memory is on its first line.
+- Python: `Client(backend=, backend_url=, backend_key=)` name the database
+  with the same three names; `local_dir=X` stays as the short spelling of
+  `backend="local", backend_url=X`. Given none of them, a bare `Client()`
+  lets the binary resolve the database, so it works on a fresh machine with
+  nothing configured. Against a `recall` binary older than 0.23 the client
+  translates the three into the names that binary knows.
 - Recall's own settings take the `RECALL_` prefix: `RECALL_COLLECTION`,
   `RECALL_PREDICATES`, `RECALL_EMBED_MODEL`, `RECALL_EMBED_URL`,
   `RECALL_EXTRACT_MODEL`, `RECALL_HOME`.

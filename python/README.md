@@ -56,11 +56,27 @@ your program exits; its process id is in `runtime.json` and its log in
 `server.log`, both inside the directory. Managed local databases work on Linux
 and macOS.
 
-To use a server you run yourself, leave `local_dir` out and set `POLIGN_URL`,
-`POLIGN_API_KEY`, and `POLIGN_COLLECTION` in the environment, or pass
-`env={...}` to Client. With neither, the client uses the connection
-`recall setup` saved, and without one connects to `http://localhost:23000`,
-where `polign-server -store fs:./recall-data` listens by default.
+`backend`, `backend_url` and `backend_key` name any database, the same three
+names as `recall -backend`, `-url` and `-key`: `backend` is `"local"`,
+`"polign"`, `"pgvector"`, `"mongodb"` or `"qdrant"`, the URL is in that
+backend's own form, and the key is the credential when the URL does not carry
+one. `local_dir=X` is the short spelling of `backend="local", backend_url=X`.
+
+```python
+Client(backend="polign", backend_url="http://memory.internal:23000", backend_key="plgn_...")
+Client(backend="pgvector", backend_url="postgres://recall:pw@db.internal/recall?schema=memory")
+Client(backend="qdrant", backend_url="https://x.cloud.qdrant.io:6333", backend_key="...")
+```
+
+Given any of the three, the client hands the binary exactly those and nothing
+the environment says about a database. Given none, the `recall` binary
+resolves it: `RECALL_BACKEND`, `RECALL_BACKEND_URL` and `RECALL_BACKEND_KEY`
+in the environment, then what `recall setup` saved, then a local database in
+`~/.local/share/recall` that it runs itself and that every agent on the
+machine shares. So a bare `Client()` works on a fresh machine with nothing
+configured. The names used before recall 0.23 (`POLIGN_URL` and the rest)
+still work in the environment, and a client given `backend=` against an older
+binary says the same thing in the names that binary knows.
 
 The client owns a long-lived `recall mcp -write -text` subprocess and shares
 the Go implementation's validation and fold. Use `write=False` for a read-only

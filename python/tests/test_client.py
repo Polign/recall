@@ -698,3 +698,144 @@ class AgentTransportTests(unittest.TestCase):
         agent = client.resume("coder-1")
         client.close()
         self.assertFalse(agent.release())
+
+
+FAKE_RECALL = r'''
+import json, os, sys
+if sys.argv[1:] == ["-version"]:
+    print(os.environ.get("FAKE_VERSION", "0.23.0"))
+    sys.exit(0)
+with open(os.environ["FAKE_ENV_FILE"], "w") as f:
+    json.dump({k: v for k, v in os.environ.items() if k.startswith(("RECALL_", "POLIGN_", "DATABASE_", "QDRANT_", "PG", "MONGODB_"))}, f)
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    result = {"tools": []} if request["method"] == "tools/list" else {}
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+'''
+
+
+class DatabaseEnvTests(unittest.TestCase):
+    """How the client names the database to the binary, new and old."""
+
+    serve, setup = ["recall", "mcp"], ["recall", "setup"]
+
+    def env(self, version, backend, url, key):
+        from polign_recall import client
+        with unittest.mock.patch.object(client, "_version", return_value=version):
+            return client._database_env(backend, url, key, self.serve, self.setup, 5)
+
+    def test_a_current_binary_gets_the_three_names(self):
+        self.assertEqual(self.env((0, 23, 0), "qdrant", "http://q:6333", "k"),
+                         {"RECALL_BACKEND": "qdrant", "RECALL_BACKEND_URL": "http://q:6333", "RECALL_BACKEND_KEY": "k"})
+        self.assertEqual(self.env((999,), "local", None, None), {"RECALL_BACKEND": "local"})
+        self.assertEqual(self.env((1, 0, 0), None, Path("./memory"), None), {"RECALL_BACKEND_URL": "memory"})
+
+    def test_an_older_binary_gets_the_names_it_knows(self):
+        self.assertEqual(self.env((0, 22, 1), "polign", "http://h:23000", "plgn_x"),
+                         {"RECALL_BACKEND": "polign", "POLIGN_URL": "http://h:23000", "POLIGN_API_KEY": "plgn_x"})
+        self.assertEqual(self.env((0, 22, 1), None, "http://h:23000", None),
+                         {"RECALL_BACKEND": "polign", "POLIGN_URL": "http://h:23000"})
+        self.assertEqual(self.env((0, 22, 1), "pgvector", "postgres://h/db?sslmode=require", "pw"),
+                         {"RECALL_BACKEND": "pgvector", "DATABASE_URL": "postgres://h/db?sslmode=require", "PGPASSWORD": "pw"})
+        self.assertEqual(self.env((0, 22, 1), "mongodb", "mongodb://h/db", None),
+                         {"RECALL_BACKEND": "mongodb", "MONGODB_URI": "mongodb://h/db"})
+        with self.assertRaises(RecallError) as caught:
+            self.env((0, 22, 1), "qdrant", "http://q:6333?distance=Dot", None)
+        self.assertEqual(caught.exception.code, "unsupported")
+        with self.assertRaises(RecallError):
+            self.env((0, 22, 1), "redis", "redis://h", None)
+
+    def test_an_older_binary_runs_setup_for_a_local_directory(self):
+        from polign_recall import client
+        with unittest.mock.patch.object(client, "_version", return_value=(0, 22, 1)), \
+                unittest.mock.patch.object(client, "_local_server", return_value={"POLIGN_URL": "http://127.0.0.1:1", "POLIGN_API_KEY": "k"}) as local:
+            self.assertEqual(client._database_env("local", "./memory", None, self.serve, self.setup, 5),
+                             {"POLIGN_URL": "http://127.0.0.1:1", "POLIGN_API_KEY": "k"})
+        local.assert_called_once_with(self.setup, "./memory", 5)
+
+    def test_version_parsing(self):
+        from polign_recall import client
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        for printed, want in [("0.23.0", (0, 23, 0)), ("v0.22.1", (0, 22, 1)), ("dev", (999,)), ("0.24.0-rc1", (0, 24, 0)), ("what", (0,))]:
+            script = Path(directory.name) / f"recall-{printed}"
+            script.write_text("#!" + sys.executable + "\n" + f"print({printed!r})\n")
+            script.chmod(0o700)
+            client._versions.clear()
+            self.assertEqual(client._version(str(script)), want, printed)
+        client._versions.clear()
+        self.assertEqual(client._version(os.path.join(directory.name, "missing")), (0,))
+        client._versions.clear()
+
+
+class ClientDatabaseTests(unittest.TestCase):
+    """The database arguments reach the binary, and only they do."""
+
+    def setUp(self):
+        from polign_recall import client
+        client._versions.clear()
+        self.addCleanup(client._versions.clear)
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        script = Path(self.directory.name) / "recall"
+        script.write_text("#!" + sys.executable + " -u\n" + FAKE_RECALL)
+        script.chmod(0o700)
+        self.env_file = Path(self.directory.name) / "env.json"
+        patch = unittest.mock.patch.dict(os.environ, {
+            "RECALL_BIN": str(script), "FAKE_ENV_FILE": str(self.env_file),
+            "POLIGN_URL": "http://stale:23000", "POLIGN_API_KEY": "stale", "RECALL_BACKEND": "mongodb",
+            "RECALL_COLLECTION": "team", "DATABASE_URL": "postgres://app/db"})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def seen(self):
+        return json.loads(self.env_file.read_text())
+
+    def test_a_named_database_replaces_what_the_environment_says(self):
+        with Client(backend="qdrant", backend_url="http://q:6333", backend_key="qk"):
+            pass
+        seen = self.seen()
+        self.assertEqual(seen["RECALL_BACKEND"], "qdrant")
+        self.assertEqual(seen["RECALL_BACKEND_URL"], "http://q:6333")
+        self.assertEqual(seen["RECALL_BACKEND_KEY"], "qk")
+        for stale in ("POLIGN_URL", "POLIGN_API_KEY", "DATABASE_URL"):
+            self.assertNotIn(stale, seen)
+        self.assertEqual(seen["RECALL_COLLECTION"], "team", "the collection is not about the database and is kept")
+
+    def test_local_dir_is_the_local_backend_and_keeps_no_foreign_collection(self):
+        with Client(local_dir=Path(self.directory.name) / "memory"):
+            pass
+        seen = self.seen()
+        self.assertEqual(seen["RECALL_BACKEND"], "local")
+        self.assertEqual(seen["RECALL_BACKEND_URL"], os.path.join(self.directory.name, "memory"))
+        self.assertNotIn("RECALL_COLLECTION", seen)
+        self.assertNotIn("POLIGN_URL", seen)
+
+    def test_nothing_named_leaves_the_environment_to_the_binary(self):
+        with Client():
+            pass
+        seen = self.seen()
+        self.assertEqual(seen["RECALL_BACKEND"], "mongodb")
+        self.assertEqual(seen["POLIGN_URL"], "http://stale:23000")
+
+    def test_an_older_binary_is_told_in_its_own_names(self):
+        os.environ["FAKE_VERSION"] = "0.22.1"
+        self.addCleanup(os.environ.pop, "FAKE_VERSION", None)
+        with Client(backend="polign", backend_url="http://h:23000", backend_key="plgn_x"):
+            pass
+        seen = self.seen()
+        self.assertEqual(seen["POLIGN_URL"], "http://h:23000")
+        self.assertEqual(seen["POLIGN_API_KEY"], "plgn_x")
+        self.assertNotIn("RECALL_BACKEND_URL", seen)
+
+    def test_the_arguments_exclude_each_other_where_they_must(self):
+        with self.assertRaises(ValueError):
+            Client(local_dir="./x", backend="qdrant")
+        with self.assertRaises(ValueError):
+            Client(local_dir="./x", backend_url="./y")
+        with self.assertRaises(ValueError):
+            Client(command=["x"], backend="local")
+        with self.assertRaises(ValueError):
+            Client(url="http://recall:8080", api_key="rcl_x", backend_url="./x")

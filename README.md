@@ -150,8 +150,9 @@ answer "what did the agent believe yesterday, and when did that change?"
 
 The first client to open `./recall-data` starts a local `polign-server` for it
 in the background, and later clients share it. The memories stay in that
-directory after your program exits. Managed local databases work on Linux and
-macOS.
+directory after your program exits. A bare `Client()` does the same in
+`~/.local/share/recall`, the memory every agent on the machine shares, the
+Claude plugin included. Managed local databases work on Linux and macOS.
 
 To share memory between machines, run `polign-server` yourself (requires
 [Polign v0.8.0 or later](https://github.com/Polign/polign#install)), leave
