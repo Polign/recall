@@ -42,7 +42,7 @@ jobs:
         run: |
           case "$RELEASE_TAG" in v*) ;; *) echo "::error::version must look like vX.Y.Z, got $RELEASE_TAG"; exit 1 ;; esac
           echo "IMAGE_VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install polign-server for the smoke test
