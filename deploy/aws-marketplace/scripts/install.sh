@@ -35,10 +35,18 @@ for b in polign polign-server polign-maintain polign-apikey polign-import; do
 done
 test "$(/usr/local/bin/polign-server -version)" = "${POLIGN_VERSION#v}"
 
-# Recall: the memory server in front of it.
-fetch "https://github.com/Polign/recall/releases/download/${RECALL_VERSION}" "recall_linux_${ARCH}.tar.gz"
+# Recall: the memory server in front of it. A binary dropped at
+# files/recall-local before the build (see the README, "Build from a local
+# binary") is installed instead of the release, for testing a build that has
+# no release yet; RECALL_VERSION then only names the image.
 mkdir -p "/opt/recall/${RECALL_VERSION}"
-tar -xzf "recall_linux_${ARCH}.tar.gz" -C "/opt/recall/${RECALL_VERSION}"
+if [ -f /tmp/recall-files/recall-local ]; then
+  install -m 0755 /tmp/recall-files/recall-local "/opt/recall/${RECALL_VERSION}/recall"
+  rm -f /tmp/recall-files/recall-local
+else
+  fetch "https://github.com/Polign/recall/releases/download/${RECALL_VERSION}" "recall_linux_${ARCH}.tar.gz"
+  tar -xzf "recall_linux_${ARCH}.tar.gz" -C "/opt/recall/${RECALL_VERSION}"
+fi
 install -m 0755 "/opt/recall/${RECALL_VERSION}/recall" /usr/local/bin/recall
 /usr/local/bin/recall --version | grep -q "${RECALL_VERSION#v}"
 

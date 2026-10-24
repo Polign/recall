@@ -55,6 +55,22 @@ Face, each checked against a pinned checksum. Nothing is downloaded at boot.
 The model revision and hashes in `scripts/install.sh` match
 `model/local.go`; change both together.
 
+### Build from a local binary
+
+To test a Recall build that has no release yet, put a Linux binary for the
+image's architecture at `files/recall-local` and name the image after it;
+the build installs that file instead of downloading a release and removes it
+from the image afterwards:
+
+```sh
+GOOS=linux GOARCH=arm64 go build -ldflags "-X main.version=0.23.0-dev" -o deploy/aws-marketplace/files/recall-local ./cmd/recall
+cd deploy/aws-marketplace
+AWS_PROFILE=polign packer build -var recall_version=v0.23.0-dev -var polign_version=v0.15.0 .
+```
+
+The file is ignored by git. An image built this way is for a launch test,
+not for the listing.
+
 ## Launch
 
 `cloudformation/recall.yaml` creates the bucket (or takes yours), an
