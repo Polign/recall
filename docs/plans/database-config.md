@@ -2,7 +2,7 @@
 
 Status: decided 2026-10-23 (see the end). Phases 1 and 2 built the same day
 on `at/database-config` in Polign/recall and Polign/polign, unreleased.
-Phase 3 (the site) waits for 0.23.0 on every channel. `Client.database`
+Phase 3 (the site) is prepared on polign_web branch `at/database-config` and merges once 0.23.0 is on every channel, since pushing main publishes the site. `Client.database`
 reads the `database` the binary reports in the MCP initialize reply;
 recall-vapi uses it, and falls back to `runtime.json` and `local-key` with an
 older binary.
