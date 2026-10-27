@@ -18,7 +18,7 @@ arguments, new fields, new backends. Removals and renames are not.
 | `recall serve` HTTP | `/mcp`, `/v1/remember`, `/v1/recall`, `/v1/forget`, `/v1/history`, `/v1/keys`, `/v1/auth/kubernetes`, and the response contract in the same document. |
 | Python client | The memory calls of `polign_recall.Client` (`remember`, `recall`, `forget`, `ask`, `history`, and the result types they return), as documented in [python/README.md](python/README.md). |
 | Go memory API | The memory methods of `recall.Client` and the types they take and return: remember, recall, forget, history, events, audit export, the registry. |
-| Configuration | The `recall` commands `mcp`, `serve`, `setup` and `doctor`, their documented flags, and the environment variables `RECALL_BACKEND`, `RECALL_BACKEND_URL`, `RECALL_BACKEND_KEY`, `RECALL_HOME`, `RECALL_COLLECTION`, `RECALL_PREDICATES`, `RECALL_EMBED_MODEL`, `RECALL_EMBED_URL`, `RECALL_EXTRACT_MODEL`. The names used before 0.23.0 are deprecated and still read: `POLIGN_URL`, `POLIGN_API_KEY`, `DATABASE_URL`, `PGPASSWORD`, `MONGODB_URI`, `MONGODB_PASSWORD`, `QDRANT_URL`, `QDRANT_API_KEY`, `POLIGN_COLLECTION`, `POLIGN_PREDICATES`, `POLIGN_EMBED_MODEL`, `POLIGN_EMBED_URL`, `POLIGN_EXTRACT_MODEL`, `POLIGN_RECALL_HOME`, and the use of a polign_db answering at `http://localhost:23000` when nothing names a backend. They are removed no earlier than 0.25.0, under a **Breaking** heading. |
+| Configuration | The `recall` commands `mcp`, `serve`, `setup` and `doctor`, their documented flags, and the three database settings every backend and every command share: `-backend` / `RECALL_BACKEND`, `-url` / `RECALL_BACKEND_URL` and `-key` / `RECALL_BACKEND_KEY`, with a backend's other options as query keys on the URL. Recall's own settings under the `RECALL_` prefix: `RECALL_HOME`, `RECALL_COLLECTION`, `RECALL_PREDICATES`, `RECALL_EMBED_MODEL`, `RECALL_EMBED_URL`, `RECALL_EXTRACT_MODEL`. The names each backend had before 0.23.0 are not part of this surface; they are listed under Deprecated below. |
 
 ## Beta
 
@@ -34,11 +34,42 @@ and the rest) are released alongside.
 | MongoDB backend | First released in 0.21.0. Its on-disk layout may change before 1.0, with a migration note if it does. |
 | Text extraction | Which facts the extractor draws from a passage, and the default model behind it, may change as the evaluations improve. What is stored, and how it is read back, does not. |
 
+## Deprecated
+
+These still work, and are going away. Each prints one line on stderr the
+first time it is read, naming what replaces it. None of them is carried
+into 1.0.
+
+They go because one set of names for every backend means a configuration
+written for one backend moves to another by changing one value, the
+documentation shows one example instead of one per backend, and a program
+opening Recall needs to know three names, not a dozen.
+
+| What | Deprecated in | Use instead | Removed |
+|---|---|---|---|
+| The URL variable each backend had: `POLIGN_URL`, `DATABASE_URL`, `MONGODB_URI`, `QDRANT_URL` | 0.23.0 | `RECALL_BACKEND_URL` (or `-url`), with `RECALL_BACKEND` naming the backend | No earlier than 0.25.0 |
+| The key variable each backend had: `POLIGN_API_KEY`, `PGPASSWORD`, `MONGODB_PASSWORD`, `QDRANT_API_KEY` | 0.23.0 | `RECALL_BACKEND_KEY` (or `-key`), or credentials in the URL where the backend's URL form carries them | No earlier than 0.25.0 |
+| The `POLIGN_` spelling of Recall's own settings: `POLIGN_COLLECTION`, `POLIGN_PREDICATES`, `POLIGN_EMBED_MODEL`, `POLIGN_EMBED_URL`, `POLIGN_EXTRACT_MODEL`, and `POLIGN_RECALL_HOME` | 0.23.0 | The same name under `RECALL_`; `RECALL_HOME` for the last | No earlier than 0.25.0 |
+| Using a polign_db that answers at `http://localhost:23000` when nothing names a backend | 0.23.0 | `RECALL_BACKEND=polign` to keep it, `RECALL_BACKEND=local` for the local database | No earlier than 0.25.0; after that, nothing named means local |
+
+Not on this list: a setup file saved by a release before 0.23.0 is still
+read as it is, and `~/.config/polign/recall` is still the home when it holds
+one. If either changes, it is listed here first.
+
+Removal happens in a minor release, under a **Breaking** heading in
+[CHANGELOG.md](CHANGELOG.md) with the one-line change to make. Until then,
+every release reads the old names and prints the line.
+
 ## How changes are made
 
 - A stable surface is deprecated for at least one minor release before it is
   removed, and never removed within 0.x once 1.0 is announced. After 1.0, a
   removal needs 2.0.
+- Deprecating something means: it is listed under Deprecated above in the
+  release that deprecates it, with its replacement and the earliest release
+  that removes it; it warns once per process on stderr for as long as it is
+  kept; and the release that removes it says so under a **Breaking**
+  heading. Nothing is removed in a patch release.
 - A beta surface may change in a minor release. Patch releases never change
   behavior on purpose; they fix bugs and ship security updates.
 - Security fixes to the binaries and their dependencies ship as a patch
@@ -58,5 +89,7 @@ and the rest) are released alongside.
 3. Agent resume and actions have either been stable for the same four weeks
    or are explicitly excluded from the 1.0 promise in this file.
 4. The release checks above have been blocking CI for the whole period.
+5. Everything under Deprecated above has been removed, so 1.0 ships one set
+   of names and no deprecation warnings.
 
 Until then, the version number says 0.x and this file says what that means.

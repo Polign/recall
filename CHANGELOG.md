@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `STABILITY.md` lists the names deprecated in 0.23.0 in their own section,
+  with what replaces each and the earliest release that removes it, and makes
+  their removal a condition of 1.0.
+
 ## [0.23.0] - 2026-10-24
 
 ### Added
