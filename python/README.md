@@ -1,6 +1,7 @@
 # polign-recall
 
-A Python client for Recall, correctable agent memory. Requires Python 3.10+.
+A Python client for Recall, memory and state for agents. Requires Python
+3.10+.
 
 ```sh
 pip install polign-recall
@@ -10,6 +11,14 @@ That is the whole install. pip also brings the
 [`polign_db`](https://pypi.org/project/polign-db/) package, which holds the
 `polign` CLI and `polign-server` binaries for Linux, macOS and Windows, so
 there is nothing else to download.
+
+The client has two halves, matching Recall's two contracts. [Memory](#memory)
+is what the agent knows: `remember`, `ask`, `forget_text` and the typed calls,
+the [Memory API](../docs/memory-api-v1.md). [State](#state) is where the agent
+is: `resume` and the `ResumedAgent` it returns, the
+[State API](../docs/state-api-v1.md).
+
+## Memory
 
 ```python
 from polign_recall import Client
@@ -165,7 +174,17 @@ program runs on a laptop and in a sandbox. Over HTTP the server decides
 whether it serves the text or the typed tools and whether the resume tools
 exist; the client finds out when it connects.
 
-## Resuming an agent
+## State
+
+Memory is what the agent knows. State is where the agent is: one set of
+records per agent id, holding its working state, its turns, large tool
+outputs, pointers to its work, and the tool calls it began. A lease on the id
+keeps one process acting for the agent at a time. The contract is
+[docs/state-api-v1.md](../docs/state-api-v1.md); it is a beta surface, so
+the calls here may change in a minor release with a note in the changelog,
+while the records they write are stable.
+
+### Resuming an agent
 
 An agent that crashes or moves to another machine can pick up from its own
 records instead of a snapshot of its process. Open the client with
@@ -246,3 +265,18 @@ an external one it asks the outside system whether it happened. It returns
 `ActionEnd("done")` or `ActionEnd("failed")`, or None when it cannot tell.
 Each settled outcome is written to the agent's history, so the model sees
 it, and `context` is rebuilt. Recall never runs a tool itself.
+
+### State over HTTP
+
+`resume` and everything on `ResumedAgent` work the same against a
+`recall serve`, through `Client(url=..., api_key=..., agent=True)`. The
+server holds the agent, and its lease, between requests; `agent.epoch` is the
+lease epoch it issued, and the client sends it as `If-Lease` on every call so
+that a client the server no longer holds the agent for is refused with
+`RecallError` code `"lease_lost"` rather than writing over its successor.
+After a server restart the held agents are gone: calls raise with the
+message `not resumed`, and `client.resume` starts over from the records.
+
+Other languages reach the same operations at `POST /v1/agent/<verb>` with
+the tool's arguments as the body and the epoch in `If-Lease` or an `epoch`
+field; see the [State API](../docs/state-api-v1.md#4-http-transport).

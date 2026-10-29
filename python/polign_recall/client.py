@@ -607,8 +607,9 @@ class _HTTPSession:
         self._expires_at: float | None = None
         self._ttl: float | None = None
 
-    def _post(self, path: str, body: bytes | None, bearer: str | None) -> tuple[int, Any]:
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    def _post(self, path: str, body: bytes | None, bearer: str | None,
+              extra: Mapping[str, str] | None = None) -> tuple[int, Any]:
+        headers = {"Content-Type": "application/json", "Accept": "application/json", **(extra or {})}
         if bearer:
             headers["Authorization"] = "Bearer " + bearer
         request = urllib.request.Request(self.url + path, data=body, headers=headers, method="POST")
@@ -676,10 +677,10 @@ class _HTTPSession:
             self._exchange()
             return True
 
-    def rpc(self, message: dict[str, Any]) -> Any:
+    def rpc(self, message: dict[str, Any], headers: Mapping[str, str] | None = None) -> Any:
         body = json.dumps(message, allow_nan=False).encode()
         for attempt in (0, 1):
-            status, data = self._post("/mcp", body, self.bearer())
+            status, data = self._post("/mcp", body, self.bearer(), headers)
             if status == 401 and attempt == 0 and self.refresh():
                 continue
             if status != 200:
@@ -959,13 +960,13 @@ class Client:
                 raise RecallError(str(exc), code="transport_error") from exc
             raise exc
 
-    def _rpc(self, method: str, params: dict[str, Any]) -> Any:
+    def _rpc(self, method: str, params: dict[str, Any], headers: Mapping[str, str] | None = None) -> Any:
         with self._lock:
             if self._closed:
                 raise RecallError("client is closed", code="closed")
             self._id += 1
             if self._http is not None:
-                response = self._http.rpc({"jsonrpc": "2.0", "id": self._id, "method": method, "params": params})
+                response = self._http.rpc({"jsonrpc": "2.0", "id": self._id, "method": method, "params": params}, headers)
                 if not isinstance(response, dict):
                     raise RecallError("malformed answer from the server", code="protocol_error")
                 if "error" in response:
@@ -993,8 +994,10 @@ class Client:
                 raise RecallError(response["error"]["message"], code="protocol_error")
             return response["result"]
 
-    def _tool(self, name: str, arguments: dict[str, Any]) -> Any:
-        result = self._rpc("tools/call", {"name": name, "arguments": arguments})
+    def _tool(self, name: str, arguments: dict[str, Any], headers: Mapping[str, str] | None = None) -> Any:
+        """Call one tool. `headers` go with the HTTP request when the client
+        speaks to a `recall serve`; a subprocess has no use for them."""
+        result = self._rpc("tools/call", {"name": name, "arguments": arguments}, headers)
         try:
             text = "\n".join(c["text"] for c in result["content"] if c["type"] == "text")
         except (KeyError, TypeError) as exc:
@@ -1312,11 +1315,20 @@ class ResumedAgent:
         self.agent_id = agent_id
         self.context = context
         self._lease_held = context.lease_held
+        self._epoch = context.epoch if context.lease_held else 0
 
     @property
     def lease_held(self) -> bool:
         """False after a deferred resume until `acquire` succeeds."""
         return self._lease_held
+
+    @property
+    def epoch(self) -> int:
+        """The lease epoch the server issued for this agent: the proof of
+        holding it that every write over HTTP carries (`If-Lease`). Zero
+        while no lease is held. A later resume of the same agent issues a
+        new one, and writes under this one then fail with "lease_lost"."""
+        return self._epoch
 
     def acquire(self) -> bool:
         """Take the lease after resume(defer_lease=True). Tries once: returns
@@ -1325,12 +1337,13 @@ class ResumedAgent:
         if self._lease_held:
             return True
         try:
-            self._call("agent_acquire")
+            data = self._call("agent_acquire")
         except RecallError as exc:
             if exc.code == "lease_held":
                 return False
             raise
         self._lease_held = True
+        self._epoch = int(data.get("epoch") or 0) if isinstance(data, dict) else 0
         # Acquiring settled what it could; the context it read before did not
         # see that, nor what the previous holder wrote after it.
         self.refresh()
@@ -1411,9 +1424,12 @@ class ResumedAgent:
         return ReconcileReport(closed=tuple(closed), open=tuple(still))
 
     def _call(self, tool: str, /, **args: Any) -> Any:
+        # Over HTTP the server holds the lease between requests, and the
+        # epoch says this client is still the holder it issued it to.
+        headers = {"If-Lease": f"{self.agent_id}:{self._epoch}"} if self._epoch else None
         try:
             return self.client._tool(tool, {"agent_id": self.agent_id,
-                                            **{k: v for k, v in args.items() if v is not None}})
+                                            **{k: v for k, v in args.items() if v is not None}}, headers)
         except RecallError as exc:
             raise _lease_error(exc) from None
 

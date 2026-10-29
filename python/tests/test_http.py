@@ -22,6 +22,7 @@ class StubServer(ThreadingHTTPServer):
         self.exchanges = 0
         self.renews = 0
         self.memory = {}
+        self.lease_headers = []
 
     @property
     def url(self):
@@ -74,7 +75,7 @@ class StubHandler(BaseHTTPRequestHandler):
         elif method == "tools/list":
             names = ["remember", "recall", "forget"] if self.server.text else ["list_predicates", "remember", "recall", "forget", "explain", "memory_history"]
             if self.server.agent:
-                names += ["agent_resume", "agent_release"]
+                names += ["agent_resume", "agent_release", "update_working_state"]
             result = {"tools": [{"name": n, "description": "", "inputSchema": {"type": "object"}} for n in names]}
         elif method == "tools/call":
             name, args = body["params"]["name"], body["params"]["arguments"]
@@ -88,6 +89,12 @@ class StubHandler(BaseHTTPRequestHandler):
                 with self.server.lock:
                     found = [b for (s, p), b in self.server.memory.items() if s == args.get("subject") and p == args.get("predicate")]
                 text = json.dumps(found)
+            elif name == "agent_resume":
+                text = json.dumps({"agent_id": args["agent_id"], "fresh": True, "briefing": "", "epoch": 7, "lease_held": True})
+            elif name in ("update_working_state", "agent_release"):
+                with self.server.lock:
+                    self.server.lease_headers.append(self.headers.get("If-Lease"))
+                text = json.dumps({"released": True} if name == "agent_release" else {"goal": args.get("goal", "")})
             else:
                 text = "[]"
             result = {"content": [{"type": "text", "text": text}], "isError": False}
@@ -114,6 +121,14 @@ class HTTPTransportTests(unittest.TestCase):
             beliefs = client.recall("user", "prefers_editor")
             self.assertEqual([b.value for b in beliefs], ["vim"])
             self.assertEqual(client.predicates(), [])
+
+    def test_a_resumed_agent_sends_its_lease_epoch(self):
+        server = self.start()
+        with Client(url=server.url, api_key="rcl_static_s", agent=True) as client:
+            with client.resume("run-1") as agent:
+                self.assertEqual(agent.epoch, 7)
+                agent.update_working_state(goal="ship")
+        self.assertEqual(server.lease_headers, ["run-1:7", "run-1:7"])
 
     def test_an_unknown_key_is_unauthenticated(self):
         server = self.start()
