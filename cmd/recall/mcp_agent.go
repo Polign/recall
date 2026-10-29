@@ -33,6 +33,11 @@ var agentTools = map[string]bool{
 type agentRuntime struct {
 	mu     sync.Mutex
 	agents map[string]*recall.Agent
+	// epochs is the lease epoch handed to the caller when each agent was
+	// resumed or acquired. A stateless HTTP caller presents it on every
+	// write (If-Lease), and one this server did not issue for the agent it
+	// holds is refused: a later resume issued a newer one.
+	epochs map[string]uint64
 	// sessions names the session that resumed each agent, when the caller's
 	// credential carries one. recall serve keeps one runtime per namespace
 	// for the life of the process, so the agent stays held after the pod
@@ -42,7 +47,7 @@ type agentRuntime struct {
 }
 
 func newAgentRuntime() *agentRuntime {
-	return &agentRuntime{agents: map[string]*recall.Agent{}, sessions: map[string]string{}}
+	return &agentRuntime{agents: map[string]*recall.Agent{}, sessions: map[string]string{}, epochs: map[string]uint64{}}
 }
 
 // sessionKey carries the caller's session from the HTTP front door to the
@@ -66,7 +71,7 @@ func (r *agentRuntime) held(ctx context.Context, id string) (*recall.Agent, erro
 	defer r.mu.Unlock()
 	a := r.agents[id]
 	if a == nil {
-		return nil, fmt.Errorf("agent %q is not resumed in this session; call agent_resume first", id)
+		return nil, &notResumedError{agent: id}
 	}
 	if owner, caller := r.sessions[id], sessionFrom(ctx); owner != "" && caller != "" && owner != caller {
 		return nil, &heldElsewhereError{agent: id, owner: owner, caller: caller}
@@ -79,6 +84,39 @@ type heldElsewhereError struct{ agent, owner, caller string }
 
 func (e *heldElsewhereError) Error() string {
 	return fmt.Sprintf("agent %q was resumed by session %q; this session (%q) holds nothing: call agent_resume", e.agent, e.owner, e.caller)
+}
+
+// notResumedError refuses a call on an agent this server does not hold.
+type notResumedError struct{ agent string }
+
+func (e *notResumedError) Error() string {
+	return fmt.Sprintf("agent %q is not resumed in this session; call agent_resume first", e.agent)
+}
+
+// alreadyResumedError refuses a second resume of an agent this session holds.
+type alreadyResumedError struct{ agent string }
+
+func (e *alreadyResumedError) Error() string {
+	return fmt.Sprintf("agent %q is already resumed in this session; call agent_release first to resume it again", e.agent)
+}
+
+// checkEpoch compares the epoch a caller presents with the one this server
+// issued for the agent it holds. It is how a request with no session of its
+// own proves it is still the holder.
+func (r *agentRuntime) checkEpoch(id string, epoch uint64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.agents[id] == nil {
+		return &notResumedError{agent: id}
+	}
+	issued := r.epochs[id]
+	if issued == 0 {
+		return recall.ErrLeaseNotHeld
+	}
+	if issued != epoch {
+		return fmt.Errorf("%w: epoch %d is not the one issued for agent %q; a later agent_resume replaced it", recall.ErrLeaseLost, epoch, id)
+	}
+	return nil
 }
 
 // takeOver releases an agent held for another session, so that session's
@@ -97,6 +135,7 @@ func (r *agentRuntime) takeOver(ctx context.Context, id string) (string, bool) {
 	}
 	delete(r.agents, id)
 	delete(r.sessions, id)
+	delete(r.epochs, id)
 	r.mu.Unlock()
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
@@ -110,6 +149,7 @@ func (r *agentRuntime) releaseAll() {
 	r.mu.Lock()
 	agents := r.agents
 	r.agents = map[string]*recall.Agent{}
+	r.epochs = map[string]uint64{}
 	r.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -315,7 +355,11 @@ func (s *mcpServer) runAgentTool(ctx context.Context, name string, args json.Raw
 		if err != nil {
 			return "", err
 		}
-		return marshal(map[string]any{"acquired": true, "epoch": a.Epoch(), "pending_actions": nonNil(rep.Open), "briefing": a.Resumed().Briefing})
+		epoch := a.Epoch()
+		s.agents.mu.Lock()
+		s.agents.epochs[base.AgentID] = epoch
+		s.agents.mu.Unlock()
+		return marshal(map[string]any{"acquired": true, "epoch": epoch, "pending_actions": nonNil(rep.Open), "briefing": a.Resumed().Briefing})
 	}
 	if name == "agent_release" {
 		// Releasing another session's agent would hand its lease away.
@@ -327,6 +371,7 @@ func (s *mcpServer) runAgentTool(ctx context.Context, name string, args json.Raw
 		a := s.agents.agents[base.AgentID]
 		delete(s.agents.agents, base.AgentID)
 		delete(s.agents.sessions, base.AgentID)
+		delete(s.agents.epochs, base.AgentID)
 		s.agents.mu.Unlock()
 		if a == nil {
 			return marshal(map[string]any{"released": false})
@@ -448,7 +493,7 @@ func (s *mcpServer) toolAgentResume(ctx context.Context, args json.RawMessage) (
 	_, already := s.agents.agents[in.AgentID]
 	s.agents.mu.Unlock()
 	if already {
-		return "", fmt.Errorf("agent %q is already resumed in this session; call agent_release first to resume it again", in.AgentID)
+		return "", &alreadyResumedError{agent: in.AgentID}
 	}
 	// The agent outlives this call: its lease keep-alive and later writes
 	// run on the session, not on the request that started it.
@@ -472,6 +517,13 @@ func (s *mcpServer) toolAgentResume(ctx context.Context, args json.RawMessage) (
 	s.agents.agents[in.AgentID] = a
 	if session := sessionFrom(ctx); session != "" {
 		s.agents.sessions[in.AgentID] = session
+	}
+	// The epoch in the answer is the caller's proof of holding on later
+	// stateless requests. A deferred resume holds none yet; agent_acquire
+	// issues it.
+	resumed := a.Resumed()
+	if resumed.LeaseHeld {
+		s.agents.epochs[in.AgentID] = resumed.Epoch
 	}
 	s.agents.mu.Unlock()
 	// Settle what can be settled without the outside world before the model

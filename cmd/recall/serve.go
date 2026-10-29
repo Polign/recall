@@ -13,8 +13,10 @@ package main
 // Two surfaces share one dispatcher. POST /mcp is MCP over streamable HTTP:
 // one JSON-RPC request per POST, one JSON response, notifications accepted
 // with 202. POST /v1/<verb> takes the tool's arguments as the body and answers
-// with the tool's result. Both check the credential first and refuse a request
-// that names a namespace, agent or session the credential does not carry.
+// with the tool's result; POST /v1/agent/<verb> does the same for the State
+// API, with the lease epoch carried on each write. Both check the credential
+// first and refuse a request that names a namespace, agent or session the
+// credential does not carry.
 
 import (
 	"context"
@@ -30,6 +32,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -389,6 +393,15 @@ func (f *frontDoor) handleMCP(w http.ResponseWriter, r *http.Request, p principa
 			return
 		}
 		args, herr := checkIdentity(p, call.Arguments)
+		if herr == nil && s.agents != nil && agentTools[call.Name] {
+			// A State API call may carry the lease epoch here too; when it
+			// does, it is checked. The MCP contract does not require it.
+			var epoch uint64
+			var present bool
+			if args, epoch, present, herr = leaseEpoch(r, args); herr == nil && present {
+				herr = checkLease(s, p, call.Name, args, epoch, present, false)
+			}
+		}
 		if herr != nil {
 			// A refused identity is a tool result, as every tool failure is,
 			// so the model reads the reason.
@@ -414,6 +427,197 @@ var restTools = map[string]string{
 	"timeline":   "timeline",
 }
 
+// restAgentVerbs maps POST /v1/agent/<verb> to the State API tools behind
+// them. The tools keep their MCP names; the verbs drop the agent_ prefix
+// where there is one.
+var restAgentVerbs = map[string]string{
+	"resume":                "agent_resume",
+	"acquire":               "agent_acquire",
+	"release":               "agent_release",
+	"context":               "agent_context",
+	"milestone":             "agent_milestone",
+	"update_working_state":  "update_working_state",
+	"working_state_history": "working_state_history",
+	"record_turn":           "record_turn",
+	"recent_turns":          "recent_turns",
+	"store_output":          "store_output",
+	"fetch_output":          "fetch_output",
+	"set_pointer":           "set_pointer",
+	"remove_pointer":        "remove_pointer",
+	"list_pointers":         "list_pointers",
+	"begin_action":          "begin_action",
+	"end_action":            "end_action",
+	"pending_actions":       "pending_actions",
+}
+
+// stateWrite says whether a State API tool needs the lease: everything but
+// the reads and the two calls that take it.
+func stateWrite(tool string) bool {
+	switch tool {
+	case "agent_resume", "agent_acquire", "recent_turns", "fetch_output", "list_pointers", "working_state_history", "pending_actions", "agent_context":
+		return false
+	}
+	return agentTools[tool]
+}
+
+// leaseEpoch reads the lease epoch a State API request presents: the If-Lease
+// header as <agent_id>:<epoch>, or an epoch field in the body, which is
+// removed before the tool sees the arguments. It reports whether one was
+// given.
+func leaseEpoch(r *http.Request, args json.RawMessage) (json.RawMessage, uint64, bool, *httpError) {
+	if len(strings.TrimSpace(string(args))) == 0 || string(args) == "null" {
+		args = json.RawMessage("{}")
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(args, &m); err != nil {
+		return nil, 0, false, &httpError{http.StatusBadRequest, "invalid_argument", "arguments must be a JSON object"}
+	}
+	var agentID string
+	if raw, ok := m["agent_id"]; ok {
+		_ = json.Unmarshal(raw, &agentID)
+	}
+	var epoch uint64
+	present := false
+	if raw, ok := m["epoch"]; ok {
+		if err := json.Unmarshal(raw, &epoch); err != nil || epoch == 0 {
+			return nil, 0, false, &httpError{http.StatusBadRequest, "invalid_argument", "epoch must be the positive integer agent_resume returned"}
+		}
+		present = true
+		delete(m, "epoch")
+	}
+	if h := strings.TrimSpace(r.Header.Get("If-Lease")); h != "" {
+		name, ep, ok := strings.Cut(h, ":")
+		n, err := strconv.ParseUint(strings.TrimSpace(ep), 10, 64)
+		if !ok || err != nil || n == 0 {
+			return nil, 0, false, &httpError{http.StatusBadRequest, "invalid_argument", "If-Lease must be <agent_id>:<epoch>, with the epoch agent_resume returned"}
+		}
+		if name = strings.TrimSpace(name); name != agentID {
+			return nil, 0, false, &httpError{http.StatusBadRequest, "invalid_argument", fmt.Sprintf("If-Lease names agent %q but the call is for %q", name, agentID)}
+		}
+		if present && n != epoch {
+			return nil, 0, false, &httpError{http.StatusBadRequest, "invalid_argument", "If-Lease and the epoch field disagree"}
+		}
+		epoch, present = n, true
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return nil, 0, false, &httpError{http.StatusBadRequest, "invalid_argument", err.Error()}
+	}
+	return out, epoch, present, nil
+}
+
+// checkLease enforces the lease epoch on a State API call. With require, a
+// write must carry one unless the credential is bound to the agent, in which
+// case the server holds the lease for the key. An epoch that is carried, on
+// any call, must be the one issued for the agent this server holds.
+func checkLease(s *mcpServer, p principal, tool string, args json.RawMessage, epoch uint64, present, require bool) *httpError {
+	if !present {
+		if require && stateWrite(tool) && p.Agent == "" {
+			return &httpError{http.StatusBadRequest, "invalid_argument", "a State API write carries the lease epoch agent_resume returned: If-Lease: <agent_id>:<epoch>, or \"epoch\" in the body"}
+		}
+		return nil
+	}
+	var in struct {
+		AgentID string `json:"agent_id"`
+	}
+	_ = json.Unmarshal(args, &in)
+	if err := s.agents.checkEpoch(in.AgentID, epoch); err != nil {
+		status, code := stateError(err)
+		return &httpError{status, code, err.Error()}
+	}
+	return nil
+}
+
+// stateError maps a State API failure to an HTTP status and error code.
+func stateError(err error) (int, string) {
+	var notResumed *notResumedError
+	var already *alreadyResumedError
+	var elsewhere *heldElsewhereError
+	switch {
+	case errors.Is(err, recall.ErrLeaseHeld):
+		return http.StatusConflict, "lease_held"
+	case errors.Is(err, recall.ErrLeaseLost), errors.As(err, &elsewhere):
+		return http.StatusConflict, "lease_lost"
+	case errors.Is(err, recall.ErrLeaseNotHeld):
+		return http.StatusConflict, "lease_not_held"
+	case errors.As(err, &notResumed), errors.Is(err, recall.ErrAgentClosed):
+		return http.StatusConflict, "not_resumed"
+	case errors.As(err, &already):
+		return http.StatusConflict, "already_resumed"
+	case errors.Is(err, recall.ErrLeaseUnsupported):
+		return http.StatusNotImplemented, "unsupported"
+	case strings.HasPrefix(err.Error(), "arguments:"):
+		return http.StatusBadRequest, "invalid_argument"
+	}
+	return http.StatusBadRequest, "tool_error"
+}
+
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// handleAgentREST serves the State API at POST /v1/agent/<verb>. The server
+// holds the agent, and its lease, between requests; a caller proves it is
+// still the holder with the epoch agent_resume returned.
+func (f *frontDoor) handleAgentREST(w http.ResponseWriter, r *http.Request, p principal, verb string) {
+	tool, ok := restAgentVerbs[verb]
+	if !ok {
+		writeError(w, http.StatusNotFound, "not_found", "unknown State API operation; want one of "+strings.Join(sortedKeys(restAgentVerbs), ", "))
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST the operation's arguments as JSON")
+		return
+	}
+	s, ok := f.tenant(w, p)
+	if !ok {
+		return
+	}
+	if s.agents == nil {
+		writeError(w, http.StatusNotImplemented, "unsupported", "this server does not serve the State API: its backend has no leases, or it was started with -agent=false")
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusRequestEntityTooLarge, "invalid_argument", err.Error())
+		return
+	}
+	if len(strings.TrimSpace(string(body))) == 0 {
+		body = []byte("{}")
+	}
+	args, herr := checkIdentity(p, body)
+	if herr != nil {
+		writeError(w, herr.status, herr.code, herr.message)
+		return
+	}
+	args, epoch, present, herr := leaseEpoch(r, args)
+	if herr == nil {
+		herr = checkLease(s, p, tool, args, epoch, present, true)
+	}
+	if herr != nil {
+		writeError(w, herr.status, herr.code, herr.message)
+		return
+	}
+	out, err := s.runTool(withSession(r.Context(), p.Session), tool, args)
+	if err != nil {
+		status, code := stateError(err)
+		writeError(w, status, code, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if json.Valid([]byte(out)) {
+		_, _ = io.WriteString(w, out)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]string{"text": out})
+}
+
 // handleREST serves POST /v1/<verb> with the tool's arguments as the body.
 // The answer is the tool's result: JSON when the tool returned JSON, which
 // the memory tools do, and {"text": ...} otherwise.
@@ -423,9 +627,13 @@ func (f *frontDoor) handleREST(w http.ResponseWriter, r *http.Request, p princip
 		f.handleKeys(w, r, p, strings.TrimPrefix(verb, "keys"))
 		return
 	}
+	if strings.HasPrefix(verb, "agent/") {
+		f.handleAgentREST(w, r, p, strings.TrimPrefix(verb, "agent/"))
+		return
+	}
 	tool, ok := restTools[verb]
 	if !ok {
-		writeError(w, http.StatusNotFound, "not_found", "unknown operation; want one of remember, recall, forget, history, timeline, diff, predicates, explain")
+		writeError(w, http.StatusNotFound, "not_found", "unknown operation; want one of remember, recall, forget, history, timeline, diff, predicates, explain, or agent/<verb> for the State API")
 		return
 	}
 	if r.Method != http.MethodPost {
