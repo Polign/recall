@@ -1,8 +1,12 @@
 # Polign Recall
 
-Recall is a memory for agents. The memory that avoids hallucinations, proposes facts and does not do guesswork. The recall functionality builds the current belief of the system based on how a user corrects their facts, backtracks or changes their understandings. Recall
-replaces the old fact and informs the agent what it replaced. It keeps the old
-value in a history for auditing and replaying.
+Recall is memory and state for agents. Memory is what the agent knows, kept
+as a correctable record: when a user corrects a fact, backtracks or changes
+their mind, Recall replaces the old belief, tells the agent what it replaced,
+and keeps the old value in a history for auditing and replaying. State is
+where the agent is: its working state, turns, outputs, pointers and the tool
+calls it began, under one lease per agent, so a run resumes after a crash or
+a move from its own records.
 
 ![Recall, mem0 and Zep answering questions about a user whose facts changed over nine months](docs/demo.gif)
 
@@ -73,7 +77,7 @@ Changed between 2026-09-15 00:00 and 2026-10-31 00:00:
 - **Every answer has a source.** `recall explain` shows the message a fact came
   from, the rule that decided it, and its history.
 - **Shared and resumable.** Agents in different processes read and correct the
-  same memory, and a crashed agent [resumes from its records](#resuming-an-agent).
+  same memory, and a crashed agent [resumes from its records](#state-resuming-an-agent).
 - **Your storage.** polign_db, PostgreSQL with pgvector, MongoDB, or Qdrant.
   Apache 2.0.
 
@@ -289,11 +293,13 @@ record through the `history` and `diff` MCP tools (`timeline` and `diff` with
 `/v1/timeline` and `/v1/diff`, and the Python client has `history_text`,
 `timeline` and `diff`.
 
-## Resuming an agent
+## State: resuming an agent
 
-`Resume` gives an agent back the context it should start from, built from what
-it wrote down while it worked. The new process resumes from records, not from a
-process or container snapshot:
+State is the second half of Recall, with its own contract,
+[docs/state-api-v1.md](docs/state-api-v1.md). `Resume` gives an agent back
+the context it should start from, built from what it wrote down while it
+worked. The new process resumes from records, not from a process or container
+snapshot:
 
 - **Working state**: its goal, plan, progress, focus, and open questions.
 - **Pointers** to where its work lives, such as a git branch or an object key.
@@ -314,7 +320,14 @@ defer agent.Release(context.Background())
 briefing := agent.Resumed().Briefing // hand this to the model
 ```
 
-Resume and actions are a beta surface: the calls around the records may still
+Over `recall serve` the same operations are HTTP routes: `POST
+/v1/agent/resume` returns the briefing and the lease epoch, and every write
+(`/v1/agent/update_working_state`, `/v1/agent/record_turn`,
+`/v1/agent/begin_action`, ...) carries that epoch as `If-Lease:
+<agent_id>:<epoch>` or an `epoch` field, so a stale process cannot write over
+its successor. MCP clients use the same tools over `/mcp`.
+
+The State API is a beta surface: the calls around the records may still
 change in a minor release, with the change and what to do about it in the
 changelog. The records themselves are stable. See [STABILITY.md](STABILITY.md).
 
@@ -345,7 +358,8 @@ another namespace's records. Keys are stored hashed, expire if asked, renew at
 `POST /v1/keys/renew`, and are revoked by a tombstone that nothing can
 overwrite. `POST /mcp` is MCP over streamable HTTP; `POST /v1/<tool>`
 (`remember`, `recall`, `forget`, `history`, `explain`, `diff`, `timeline`,
-`predicates`) takes that tool's arguments as the body. Any MCP client that
+`predicates`) takes that tool's arguments as the body, and `POST
+/v1/agent/<verb>` does the same for the State API. Any MCP client that
 speaks stdio reaches the server through
 `recall connect`, with `RECALL_URL` and `RECALL_API_KEY` set.
 
@@ -355,8 +369,9 @@ short-lived key for `<tenant>:<pod name>`, fixed to that agent, which `recall
 connect` and the Python client obtain and renew by themselves from
 `RECALL_TOKEN_FILE`. The Helm chart is `charts/recall` in
 [Polign/polign](https://github.com/Polign/polign); the
-[agent-sandbox demo](deploy/agent-sandbox) runs it on kind. The contract every
-client is written against is [docs/memory-api-v1.md](docs/memory-api-v1.md).
+[agent-sandbox demo](deploy/agent-sandbox) runs it on kind. The contracts
+every client is written against are [docs/memory-api-v1.md](docs/memory-api-v1.md)
+and [docs/state-api-v1.md](docs/state-api-v1.md).
 
 ## Storage and search
 
@@ -520,6 +535,8 @@ test commands.
 ## Documentation
 
 [What is stable and what is beta](STABILITY.md) ·
+[Memory API contract](docs/memory-api-v1.md) ·
+[State API contract](docs/state-api-v1.md) ·
 [Developer reference](docs/reference.md) ·
 [Resuming an agent](docs/reference.md#resuming-an-agent) ·
 [Connecting through MCP](docs/mcp.md) ·

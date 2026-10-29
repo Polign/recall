@@ -379,8 +379,9 @@ predates that support.
 
 ## Resuming an agent
 
-Beta surface: the calls in this section may change in a minor release, with a
-migration note in the changelog. The records they write are stable. See
+This is the Go form of the [State API](state-api-v1.md). Beta surface: the
+calls in this section may change in a minor release, with a migration note in
+the changelog. The records they write are stable. See
 [STABILITY.md](../STABILITY.md).
 
 An agent can resume from what it wrote down instead of from a container

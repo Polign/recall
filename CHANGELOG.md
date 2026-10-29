@@ -4,6 +4,21 @@
 
 ### Added
 
+- The State API, the second half of Recall beside the Memory API. It is the
+  agent tools as they were (`agent_resume`, `update_working_state`,
+  `record_turn`, `begin_action`, ... ; nothing is renamed), now with their
+  own contract in `docs/state-api-v1.md`, which takes over section 6 of the
+  Memory API document and the Kubernetes workload identity section, and
+  served over HTTP by `recall serve` at `POST /v1/agent/<verb>` (`resume`,
+  `acquire`, `release`, `context`, `milestone`, and the other tools under
+  their own names). The server holds the resumed agent between requests;
+  `agent_resume` returns the lease `epoch`, and every write carries it as
+  `If-Lease: <agent_id>:<epoch>` or an `epoch` body field. An epoch the
+  server did not issue for the agent it holds is `409 lease_lost`; a key
+  bound to the agent, as Kubernetes mode mints, may omit it. The same header
+  is checked on `/mcp` when given. Without a lease-capable backend the routes
+  answer `501 unsupported`. Python: `ResumedAgent.epoch`, sent as `If-Lease`
+  on every call over HTTP. `STABILITY.md` names the beta row "State API".
 - `examples/vercel-ai-sdk`: a Next.js chat on the Vercel AI SDK whose memory is
   a self-hosted `recall serve`, reached as an MCP client over streamable HTTP.
   Claude gets the five memory tools; a correction comes back with what it

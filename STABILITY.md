@@ -14,8 +14,8 @@ arguments, new fields, new backends. Removals and renames are not.
 |---|---|
 | Stored records | The event format (`recall-event-v3`), the fold rules (`recall-fold-v4`), and the agent records (working state, turns, pointers, outputs, actions). A store written by any 0.x release is read by every later release. New fields may appear; existing fields keep their meaning. |
 | Audit bundles | The bundle format and `recall-audit`, which replays a bundle offline. A bundle exported today verifies with every later verifier. |
-| MCP tool contract | The tool names, required arguments and read-only marks in [docs/memory-api-v1.md](docs/memory-api-v1.md). A test in the server fails when a served tool and the document disagree. |
-| `recall serve` HTTP | `/mcp`, `/v1/remember`, `/v1/recall`, `/v1/forget`, `/v1/history`, `/v1/keys`, `/v1/auth/kubernetes`, and the response contract in the same document. |
+| MCP tool contract | The tool names, required arguments and read-only marks of the memory tools in [docs/memory-api-v1.md](docs/memory-api-v1.md). A test in the server fails when a served tool and the document disagree. The State API's tools are beta (below). |
+| `recall serve` HTTP | `/mcp`, `/v1/remember`, `/v1/recall`, `/v1/forget`, `/v1/history`, `/v1/keys`, `/v1/auth/kubernetes`, and the response contract in the same document and in [docs/state-api-v1.md](docs/state-api-v1.md). The State API routes under `/v1/agent/` are beta (below). |
 | Python client | The memory calls of `polign_recall.Client` (`remember`, `recall`, `forget`, `ask`, `history`, and the result types they return), as documented in [python/README.md](python/README.md). |
 | Go memory API | The memory methods of `recall.Client` and the types they take and return: remember, recall, forget, history, events, audit export, the registry. |
 | Configuration | The `recall` commands `mcp`, `serve`, `setup` and `doctor`, their documented flags, and the three database settings every backend and every command share: `-backend` / `RECALL_BACKEND`, `-url` / `RECALL_BACKEND_URL` and `-key` / `RECALL_BACKEND_KEY`, with a backend's other options as query keys on the URL. Recall's own settings under the `RECALL_` prefix: `RECALL_HOME`, `RECALL_COLLECTION`, `RECALL_PREDICATES`, `RECALL_EMBED_MODEL`, `RECALL_EMBED_URL`, `RECALL_EXTRACT_MODEL`. The names each backend had before 0.23.0 are not part of this surface; they are listed under Deprecated below. |
@@ -29,7 +29,7 @@ and the rest) are released alongside.
 
 | Surface | Why it is still moving |
 |---|---|
-| Agent resume and actions | `Client.Resume`, the `Agent` methods, the `agent_*`, `begin_action`, `end_action` and `pending_actions` MCP tools, `ResumedAgent` in Python, `RecallResume.durable` in recall-langgraph, and the wording of the briefing. Actions shipped in 0.21.0 and changed twice in their first week from what a real model did with them. The stored agent records are stable (above); the calls around them are not yet. |
+| State API | The contract in [docs/state-api-v1.md](docs/state-api-v1.md): `Client.Resume`, the `Agent` methods, the `agent_*`, `begin_action`, `end_action` and `pending_actions` MCP tools, the HTTP routes under `/v1/agent/` and the `If-Lease` epoch they carry, `ResumedAgent` in Python, `RecallResume.durable` in recall-langgraph, and the wording of the briefing. Actions shipped in 0.21.0 and changed twice in their first week from what a real model did with them. The stored agent records are stable (above); the calls around them are not yet. |
 | Backend interfaces for implementors | `recall.Backend` (Put, List, Search) is stable. The optional capability interfaces (`GetBackend`, `TextSearchBackend`, `WatermarkBackend`, `LeaseBackend`, `FencedBackend`) may gain methods, new ones may appear, and the conformance suite in `backendtest` may add checks a backend has to pass. Using a backend is stable; writing one is not yet. |
 | MongoDB backend | First released in 0.21.0. Its on-disk layout may change before 1.0, with a migration note if it does. |
 | Text extraction | Which facts the extractor draws from a passage, and the default model behind it, may change as the evaluations improve. What is stored, and how it is read back, does not. |
@@ -86,8 +86,8 @@ every release reads the old names and prints the line.
 1. Four weeks with no breaking change to a stable surface above.
 2. At least one team outside Polign running Recall for real work has upgraded
    across a release on the stable surfaces without changing their code.
-3. Agent resume and actions have either been stable for the same four weeks
-   or are explicitly excluded from the 1.0 promise in this file.
+3. The State API has either been stable for the same four weeks or is
+   explicitly excluded from the 1.0 promise in this file.
 4. The release checks above have been blocking CI for the whole period.
 5. Everything under Deprecated above has been removed, so 1.0 ships one set
    of names and no deprecation warnings.
