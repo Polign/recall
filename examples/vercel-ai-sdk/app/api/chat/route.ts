@@ -78,7 +78,7 @@ export async function POST(req: Request) {
       // A string model id goes through the Vercel AI Gateway: on Vercel the
       // deployment authenticates as itself, locally AI_GATEWAY_API_KEY does.
       // No provider key is needed anywhere.
-      model: 'anthropic/claude-opus-5.5',
+      model: 'anthropic/claude-sonnet-5.5',
       system,
       tools,
       stopWhen: stepCountIs(8),
