@@ -62,6 +62,13 @@ written and says so in its tool result.
 - [app/page.tsx](app/page.tsx) is `useChat`; tool calls show as a trace line
   under the message so you can see what was remembered and recalled.
 
+## Limits
+
+The chat route caps each visitor at 20 requests per ten minutes, 40 messages
+per conversation and 4,000 characters per message. The request cap is held
+in memory per function instance, so it bounds a burst, not a determined
+visitor; put a shared limiter in front for a deployment that draws traffic.
+
 ## Memory per user
 
 The key names the namespace, so this example is one memory for the whole

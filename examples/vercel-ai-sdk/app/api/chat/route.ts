@@ -6,6 +6,33 @@ export const maxDuration = 60;
 
 const memoryTools = ['remember', 'recall', 'forget', 'history', 'diff'];
 
+// A public deployment pays for every turn. These caps are per warm function
+// instance, so they bound a burst rather than a determined visitor; a shared
+// limiter (Vercel KV, Upstash) is the step up if the demo draws real traffic.
+const WINDOW_MS = 10 * 60_000;
+const MAX_REQUESTS_PER_WINDOW = 20;
+const MAX_MESSAGES = 40;
+const MAX_MESSAGE_CHARS = 4_000;
+const windows = new Map<string, { count: number; resetAt: number }>();
+
+function overLimit(ip: string) {
+  const now = Date.now();
+  const w = windows.get(ip);
+  if (!w || w.resetAt <= now) {
+    windows.set(ip, { count: 1, resetAt: now + WINDOW_MS });
+    return false;
+  }
+  w.count += 1;
+  return w.count > MAX_REQUESTS_PER_WINDOW;
+}
+
+function textLength(message: UIMessage | undefined) {
+  return (message?.parts ?? []).reduce(
+    (n, part) => n + (part.type === 'text' ? part.text.length : 0),
+    0,
+  );
+}
+
 const system = `You are an assistant with long-term memory kept in Recall.
 
 Before you answer anything about the user, their preferences, or their past
@@ -19,6 +46,17 @@ when they change your answer.`;
 
 export async function POST(req: Request) {
   const { messages }: { messages: UIMessage[] } = await req.json();
+
+  const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+  if (overLimit(ip)) {
+    return new Response('Too many requests; try again in a few minutes.', { status: 429 });
+  }
+  if (messages.length > MAX_MESSAGES) {
+    return new Response('This conversation is long enough; start a new one.', { status: 413 });
+  }
+  if (textLength(messages.at(-1)) > MAX_MESSAGE_CHARS) {
+    return new Response('Message too long.', { status: 413 });
+  }
 
   // One MCP client per request: Vercel functions do not keep connections
   // between invocations, and the connect costs one initialize round trip.
