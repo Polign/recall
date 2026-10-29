@@ -1,4 +1,3 @@
-import { anthropic } from '@ai-sdk/anthropic';
 import { convertToModelMessages, stepCountIs, streamText, type UIMessage } from 'ai';
 import { connectRecall } from '@/lib/recall';
 
@@ -76,7 +75,10 @@ export async function POST(req: Request) {
       memoryTools.filter((name) => name in served).map((name) => [name, served[name]]),
     );
     const result = streamText({
-      model: anthropic('claude-opus-5-5'),
+      // A string model id goes through the Vercel AI Gateway: on Vercel the
+      // deployment authenticates as itself, locally AI_GATEWAY_API_KEY does.
+      // No provider key is needed anywhere.
+      model: 'anthropic/claude-opus-5.5',
       system,
       tools,
       stopWhen: stepCountIs(8),

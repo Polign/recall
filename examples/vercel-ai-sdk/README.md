@@ -7,7 +7,7 @@ and `diff` as tools and no Recall client library is needed on the TypeScript
 side. Tell it something, correct yourself, open a new tab, and ask what it
 knows: the answer comes with what the correction replaced.
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FPolign%2Frecall%2Ftree%2Fmain%2Fexamples%2Fvercel-ai-sdk&project-name=recall-memory-chat&repository-name=recall-memory-chat&env=RECALL_URL,RECALL_API_KEY,ANTHROPIC_API_KEY&envDescription=RECALL_URL%20and%20RECALL_API_KEY%20point%20at%20your%20recall%20serve.%20ANTHROPIC_API_KEY%20calls%20Claude.&envLink=https%3A%2F%2Fgithub.com%2FPolign%2Frecall%2Ftree%2Fmain%2Fexamples%2Fvercel-ai-sdk%23environment)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FPolign%2Frecall%2Ftree%2Fmain%2Fexamples%2Fvercel-ai-sdk&project-name=recall-memory-chat&repository-name=recall-memory-chat&env=RECALL_URL,RECALL_API_KEY&envDescription=RECALL_URL%20and%20RECALL_API_KEY%20point%20at%20your%20recall%20serve.%20Claude%20is%20called%20through%20the%20Vercel%20AI%20Gateway%2C%20no%20provider%20key%20needed.&envLink=https%3A%2F%2Fgithub.com%2FPolign%2Frecall%2Ftree%2Fmain%2Fexamples%2Fvercel-ai-sdk%23environment)
 
 Memory stays in the store behind your `recall serve`; nothing about the user is
 kept on Vercel. The deployment needs to reach the server over HTTPS, so for a
@@ -30,7 +30,7 @@ echo "rcl_dev_example_key demo" > keys.txt
 recall -backend polign -url http://127.0.0.1:23000 serve -keys-file keys.txt
 
 # 3. The app.
-cp .env.example .env.local        # set ANTHROPIC_API_KEY
+cp .env.example .env.local        # set AI_GATEWAY_API_KEY for local runs
 npm install
 npm run dev                       # http://localhost:3000
 ```
@@ -49,7 +49,7 @@ written and says so in its tool result.
 | --- | --- |
 | `RECALL_URL` | Where `recall serve` listens. The app posts to `$RECALL_URL/mcp`. |
 | `RECALL_API_KEY` | A Recall key. Its namespace is the memory this deployment reads and writes. Create one with `recall key create -namespace <name>` against a server with a key store, or list it in `-keys-file`. |
-| `ANTHROPIC_API_KEY` | Calls Claude through `@ai-sdk/anthropic`. |
+| `AI_GATEWAY_API_KEY` | Local runs only. Claude is called through the [Vercel AI Gateway](https://vercel.com/docs/ai-gateway); a deployment on Vercel authenticates as itself, so the project needs no model key at all. Usage is billed to the Vercel account. |
 
 ## How it works
 

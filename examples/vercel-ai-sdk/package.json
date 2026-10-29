@@ -10,7 +10,6 @@
     "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "4.0.91",
     "@ai-sdk/mcp": "2.0.86",
     "@ai-sdk/react": "4.0.160",
     "ai": "7.0.156",
