@@ -111,6 +111,7 @@ question, against about 44k for BM25 and 168k for the full history.
 | **LiveKit** | `pip install recall-livekit` for [caller memory in voice agents](https://github.com/Polign/polign/tree/main/python/recall-livekit). |
 | **Vapi** | `pip install recall-vapi` for [caller memory in Vapi assistants](https://github.com/Polign/polign/tree/main/python/recall-vapi). |
 | **Pydantic AI** | `pip install recall-pydantic-ai` for [memory tools in Pydantic AI agents](https://github.com/Polign/polign/tree/main/python/recall-pydantic-ai). |
+| **Vercel AI SDK** | Deploy the [Next.js chat example](examples/vercel-ai-sdk) that reaches `recall serve` over MCP; one click on Vercel. |
 
 The [Claude Code plugin](https://github.com/Polign/polign/tree/main/plugins/recall)
 is a ready-made MCP integration for memory across coding sessions, and the

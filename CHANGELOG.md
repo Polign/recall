@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- `examples/vercel-ai-sdk`: a Next.js chat on the Vercel AI SDK whose memory is
+  a self-hosted `recall serve`, reached as an MCP client over streamable HTTP.
+  Claude gets the five memory tools; a correction comes back with what it
+  replaced. Deploys to Vercel with one click.
+
 ### Changed
 
 - `STABILITY.md` lists the names deprecated in 0.23.0 in their own section,

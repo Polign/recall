@@ -10,3 +10,6 @@ __pycache__/
 /python/build/
 /python/dist/
 .venv/
+
+# macOS
+.DS_Store

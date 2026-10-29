@@ -1,0 +1,31 @@
+:root {
+  --bg: #ffffff;
+  --fg: #111111;
+  --muted: #666666;
+  --line: #e4e4e4;
+  --me: #f1f1f1;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101010;
+    --fg: #ededed;
+    --muted: #9a9a9a;
+    --line: #2a2a2a;
+    --me: #1c1c1c;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
+main { max-width: 680px; margin: 0 auto; padding: 24px 16px 120px; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+p.lede { color: var(--muted); margin: 0 0 24px; }
+.msg { margin: 0 0 16px; }
+.msg.user .bubble { background: var(--me); border-radius: 12px; padding: 10px 14px; display: inline-block; }
+.msg .role { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+.tool { font-size: 13px; color: var(--muted); border-left: 2px solid var(--line); padding: 2px 10px; margin: 6px 0; white-space: pre-wrap; }
+form { position: fixed; left: 0; right: 0; bottom: 0; background: var(--bg); border-top: 1px solid var(--line); padding: 12px 16px; }
+form div { max-width: 680px; margin: 0 auto; display: flex; gap: 8px; }
+input { flex: 1; font: inherit; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); }
+button { font: inherit; padding: 10px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--me); color: var(--fg); cursor: pointer; }
+button:disabled { opacity: 0.5; cursor: default; }
