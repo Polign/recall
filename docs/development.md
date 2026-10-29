@@ -63,7 +63,10 @@ python3 -m venv .venv
 ```
 
 The default suites need no running database. The Go adapter tests start local
-HTTP servers. Python's optional live integration test requires
+HTTP servers. The local backend's download of `polign-server` is tested
+against a fake release; nothing is fetched. When polign_db releases, bump
+`ServerVersion` and the six checksums in `backend/local/fetch.go` from that
+release's `checksums.txt` (`dl.polign.com/<version>/checksums.txt`). Python's optional live integration test requires
 `RECALL_TEST_POLIGN` (the CLI executable) and `POLIGN_URL`.
 
 The Qdrant backend runs the shared conformance suite when `RECALL_QDRANT_URL`

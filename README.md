@@ -38,15 +38,16 @@ claude mcp add recall -- recall mcp -write      # Claude Code
 [Add to VS Code](https://vscode.dev/redirect/mcp/install?name=recall&config=%7B%22command%22%3A%22recall%22%2C%22args%22%3A%5B%22mcp%22%2C%22-write%22%5D%7D) ·
 any other host: command `recall`, arguments `mcp -write` ([details](docs/mcp.md)).
 
-Today that local database is polign_db, so `recall` needs the `polign-server`
-binary next to it. pip and Homebrew install both. `go get` and
+Today that local database is polign_db, run as a `polign-server` process
+beside `recall`. pip and Homebrew install both. `go get` and
 `go install github.com/Polign/recall/cmd/recall` give you the library and the
-binary but not the database: name one with `-backend` and `-url`, or install
-polign_db (`pip install polign-db` or `brew install polign/tap/polign`). In
-0.23.0 a `recall mcp` with nothing configured and no `polign-server` exits
-before the MCP handshake; the next release serves the tools and reports the
-missing database on the first memory call instead. A local database that needs
-no second binary is being built.
+binary but not the database: the first time `recall` needs a local database
+and finds no `polign-server` beside it or on `PATH`, it downloads the
+polign_db release it was tested with (about 80 MB, verified against a
+checksum built into `recall`), keeps `polign-server` and its license under
+`~/.local/share/recall/bin`, and starts it. That happens once per machine.
+Set `RECALL_NO_DOWNLOAD=1` to refuse the download; `recall` then says how to
+install polign_db by hand, or name a database with `-backend` and `-url`.
 
 ## What a correction looks like
 
@@ -141,7 +142,8 @@ pip install polign-recall
 ```
 
 pip also brings the `polign_db` package, which holds the `polign` and
-`polign-server` binaries, so there is nothing else to download or start. This
+`polign-server` binaries, so there is nothing else to download or start (a
+`recall` installed another way downloads `polign-server` on first use). This
 example needs no model or embedding API key.
 
 One process saves an editor preference and then changes it:
@@ -425,7 +427,7 @@ does not add transaction isolation or replication.
 | `RECALL_BACKEND_URL` | a directory (default `~/.local/share/recall`) | `http://host:23000` | `postgres://user:pw@host:5432/db` | `mongodb://user:pw@host:27017/db` | `http://host:6333` |
 | `RECALL_BACKEND_KEY` | not used; a key is generated in the directory | the polign_db API key | the password, when the URL has none | the password, when the URL has none | the Qdrant API key |
 | Options on the URL | `?server=/path/to/polign-server` | none | `?schema=recall&text_search=english` | `?database=recall` | `?distance=Cosine` |
-| Server version | the `polign-server` beside `recall`, which pip and Homebrew install; started on a loopback port and left running | 0.8.0 or later | PostgreSQL 13 or later with pgvector 0.6.0 or later; 0.8.0 or later recommended | 6.0 or later, Atlas or self-hosted | 1.10 or later |
+| Server version | the `polign-server` beside `recall` or on `PATH`, which pip and Homebrew install, else polign_db v0.15.0 downloaded once into `~/.local/share/recall/bin`; started on a loopback port and left running | 0.8.0 or later | PostgreSQL 13 or later with pgvector 0.6.0 or later; 0.8.0 or later recommended | 6.0 or later, Atlas or self-hosted | 1.10 or later |
 | Remember, recall, forget, history, as-of | yes | yes | yes | yes | yes |
 | Evidence links, audit export | yes | yes | yes | yes | yes |
 | Keyword search | as polign_db | yes, BM25 | yes, PostgreSQL full-text search | yes, MongoDB text search | no, vector search only |

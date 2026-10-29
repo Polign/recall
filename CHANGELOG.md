@@ -23,6 +23,20 @@
   a self-hosted `recall serve`, reached as an MCP client over streamable HTTP.
   Claude gets the five memory tools; a correction comes back with what it
   replaced. Deploys to Vercel with one click.
+- The local database no longer needs `polign-server` installed first. When
+  `recall` finds none beside itself or on `PATH`, it downloads the polign_db
+  release it was tested with (v0.15.0, about 80 MB) from dl.polign.com,
+  checks the archive against a SHA-256 built into the binary, keeps
+  `polign-server` and its license in `bin/` under Recall's home
+  (`~/.local/share/recall`), and starts it. Once per machine; the download is
+  reported on stderr. `RECALL_NO_DOWNLOAD=1` refuses it, and the error then
+  says how to install polign_db by hand. In 0.23.0 a `recall mcp` with
+  nothing configured and no `polign-server` exited before the MCP handshake.
+- The files the MCP registry needs: `server.json` at the repository root, the
+  `io.modelcontextprotocol.server.name` label on the container image, and the
+  `mcp-name` marker in the Python package's README. The README gains
+  one-click install links for Cursor and VS Code and the `claude mcp add`
+  line for Claude Code.
 
 ### Changed
 

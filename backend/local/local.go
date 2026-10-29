@@ -4,9 +4,10 @@
 // The first process to open a directory starts a polign-server for it on a
 // free loopback port, with a generated key only this directory knows, and
 // leaves it running; later processes find it through the runtime file the
-// server writes. Nothing listens beyond this host. The server needs
+// server writes. Nothing listens beyond this host. The server is the
 // polign-server beside the recall binary or on PATH, which pip and Homebrew
-// install with recall.
+// install with recall; when there is none, the backend downloads the release
+// it was tested with, once, into bin/ under Recall's home (see fetch.go).
 //
 // Importing this package registers it as the "local" backend:
 //
@@ -24,11 +25,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -66,8 +67,12 @@ type Options struct {
 	// home directory.
 	Dir string
 	// Server is the polign-server executable. Empty means the one beside
-	// the running binary, then the first on PATH.
+	// the running binary, then the first on PATH, then the one downloaded
+	// earlier; with none of those, it is downloaded.
 	Server string
+	// Progress hears about a download of polign-server. Nil means stderr,
+	// which MCP clients log and recall setup shows.
+	Progress io.Writer
 }
 
 // Connection is where the running server listens and the key it accepts.
@@ -131,6 +136,13 @@ func Ensure(ctx context.Context, o Options) (Connection, error) {
 		return conn, nil
 	}
 	server, err := ServerPath(o.Server)
+	if errors.Is(err, errServerMissing) {
+		progress := o.Progress
+		if progress == nil {
+			progress = os.Stderr
+		}
+		server, err = fetchServer(ctx, progress)
+	}
 	if err != nil {
 		return Connection{}, err
 	}
@@ -263,7 +275,9 @@ func start(dir, server, key string) error {
 
 // ServerPath finds the polign-server to run: explicit when given, else the
 // one beside the running binary (a pip environment, Homebrew, a release
-// archive), else the first on PATH. polign_db ships it; Recall does not.
+// archive), else the first on PATH, else the one a previous run downloaded
+// into DownloadedServerDir. With none, the error wraps errServerMissing and
+// Ensure downloads one.
 func ServerPath(explicit string) (string, error) {
 	if explicit != "" {
 		abs, err := filepath.Abs(explicit)
@@ -272,10 +286,7 @@ func ServerPath(explicit string) (string, error) {
 		}
 		return abs, nil
 	}
-	name := "polign-server"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
+	name := serverBinaryName()
 	if exe, err := os.Executable(); err == nil {
 		beside := filepath.Join(filepath.Dir(exe), name)
 		if _, err := os.Stat(beside); err == nil {
@@ -287,7 +298,13 @@ func ServerPath(explicit string) (string, error) {
 			return abs, nil
 		}
 	}
-	return "", errors.New("local: polign-server is not installed, so Recall cannot run a local database. Install it with `pip install polign-db` or `brew install polign/tap/polign`, or name a database with -backend and -url")
+	if dir := DownloadedServerDir(); dir != "" {
+		downloaded := filepath.Join(dir, name)
+		if _, err := os.Stat(downloaded); err == nil {
+			return downloaded, nil
+		}
+	}
+	return "", fmt.Errorf("%w, so Recall cannot run a local database; %s", errServerMissing, installHint)
 }
 
 // checkServer makes sure the executable is a polign-server new enough to
