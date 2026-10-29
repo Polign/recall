@@ -2,6 +2,8 @@
 
 This is the contract an agent, a runtime or a platform can build against. It names the operations, what every call carries, what every answer carries, and what a storage backend has to provide for each part to work. It changes only with a version bump; additions within version 1 are marked by the Recall release that introduced them.
 
+Memory is what the agent knows. Where the agent is, its working state, turns, outputs, pointers and actions under one lease-fenced `agent_id`, is the other half of Recall and has its own contract: the [State API](state-api-v1.md).
+
 The MCP tool definitions served by `recall mcp` are the authoritative form. The tables in this document are checked against them by a test in `cmd/recall`, so a tool cannot change without this document changing.
 
 Status words used below:
@@ -76,7 +78,7 @@ Every call is made within an identity. Four fields describe it.
 | --- | --- | --- | --- |
 | namespace | Who may read and write these records. Enforced by the credential, never by the caller. | The server, from the key or the token exchange. | 0.16 (`recall serve`). Today a polign_db key bound to a namespace gives the same guarantee one layer down. |
 | subject | Who or what the statement is about. | The caller. Default `user`. | 0.15 |
-| agent | Which agent made or holds the statement. The same value names the agent for the Resume API. | The caller, or the server in Kubernetes mode. | 0.16 |
+| agent | Which agent made or holds the statement. The same value names the agent for the [State API](state-api-v1.md). | The caller, or the server in Kubernetes mode. | 0.16 |
 | session | Which run produced the statement. In Kubernetes mode, the Sandbox name. | The caller, or the server in Kubernetes mode. | 0.16 |
 
 Rules:
@@ -110,35 +112,9 @@ A remember answer carries `replaced` for what the write superseded, `related` fo
 - Registry changes are events in the same log: define, redefine, merge, split. A read as of an earlier instant uses the registry as it was then.
 - Open mode (`-open`, and text mode unless `-predicates` is given) lets a write define a predicate by first use. The definition is still a logged event.
 
-## 6. Resume API, version 1
+## 6. State API
 
-Separate from the memory verbs, and gated: it needs a backend with leases (section 7). A client checks `agent_enabled` before relying on it.
-
-Beta. The tools and arguments here may change in a minor release, listed in the changelog as a breaking change with a migration note; the agent records they write are stable. See [STABILITY.md](../STABILITY.md).
-
-| Tool | Required arguments | Read-only |
-| --- | --- | --- |
-| agent_resume | agent_id | no |
-| agent_acquire | agent_id | no |
-| agent_release | agent_id | no |
-| update_working_state | agent_id | no |
-| agent_milestone | agent_id, name | no |
-| record_turn | agent_id, role, content | no |
-| recent_turns | agent_id | yes |
-| store_output | agent_id, content | no |
-| fetch_output | agent_id, ref | yes |
-| set_pointer | agent_id, name, type, fields | no |
-| remove_pointer | agent_id, name | no |
-| list_pointers | agent_id | yes |
-| working_state_history | agent_id | yes |
-| begin_action | agent_id, tool, class | no |
-| end_action | agent_id, seq, status | no |
-| pending_actions | agent_id | yes |
-| agent_context | agent_id | yes |
-
-Semantics: `agent_resume` takes the agent's lease and rebuilds its context (working state, pointers, relevant memories, recent turns, unfinished actions) within a token budget. Writes fail while the lease is not held. The lease epoch is a fencing token: a process that lost its lease cannot overwrite the holder's writes. On a backend with the Fence capability (section 7) the server checks it on every agent write, so a process that stalled past its lease is refused even when its own clock says the lease is fresh; elsewhere the client checks it before each write.
-
-Actions: a harness calls `begin_action` before each tool call that touches the world and `end_action` after it. `class` is `pure` (reads only), `idempotent` (repeating with the returned `key` does nothing more) or `external` (could happen twice). A crash between the two leaves the action open. On resume, open pure actions are closed as `abandoned`, open external actions are marked `unknown`, and open idempotent actions wait to be run again with the same key; every action still open is listed in `pending_actions` and at the top of the briefing until `end_action` closes it. `agent_context` rebuilds the briefing after a harness has settled them. Recall never runs a tool itself. `agent_id` is 1 to 128 characters from letters, digits, `.`, `_`, `-`. In Kubernetes mode the server fixes `agent_id` to the pod's sandbox name, so a sandbox can only resume itself.
+Where the agent is, as opposed to what it knows, is a separate contract: [docs/state-api-v1.md](state-api-v1.md). It covers the `agent_*` tools, working state, turns, outputs, pointers and actions, the lease and its epoch, the HTTP transport at `POST /v1/agent/<verb>`, and Kubernetes workload identity. Before 0.24.0 this section held that contract under the name Resume API; the tools and records are unchanged.
 
 ## 7. Backend capability matrix
 
@@ -150,7 +126,7 @@ Recall runs on a vector store that implements a small interface. The core needs 
 | Get by id | evidence links, explain | yes | yes | yes | yes |
 | Lexical search | hybrid ranking (vector + BM25), lexical-only servers | yes | no | yes | yes (MongoDB text search) |
 | Watermark | materialized (cached) reads; without it every read refolds the log | yes | no | yes | yes |
-| Leases | the Resume API | yes | no | yes | yes |
+| Leases | the [State API](state-api-v1.md) | yes | no | yes | yes |
 | Fence | server-side check of the lease epoch on agent writes | yes (polign_db with lease fence headers) | no | yes (checked in the write's transaction) | yes (in the write's transaction on a replica set; checked just before the write on a standalone server) |
 | Front door (`recall serve` key store) | namespace-scoped keys, Kubernetes token exchange. Needs Get only; keys are write-once with permanent tombstones, so no compare-and-swap is required. | yes (0.16) | yes (0.16) | yes | yes |
 | Cost | bytes per idle namespace, cost per thousand cold tenants, scale to zero, warm RSS | measured on polign.com | from vendor sizing guidance | measured when the backend ships | not measured |
@@ -178,7 +154,7 @@ Import rules: a server whose embedding model differs from `embedding_model` reco
 | Go (`github.com/Polign/recall`) | 0.15 | `Client.Remember`, `Recall`, `Forget`, `History`, `Explain`, `Ask`, `Resume`, `ExportEvents`, `ExportAudit`. |
 | Python (`polign-recall`) | 0.15 | `Client.remember`, `recall`, `forget`, `history`, `predicates`, `ask`, `resume`. Speaks the MCP protocol to a `recall` process. |
 | MCP over streamable HTTP (`recall serve`, `/mcp`) | 0.16 | Same tools, same dispatch, behind a Recall key. |
-| HTTP (`recall serve`, `/v1/remember`, `/v1/recall`, `/v1/forget`, `/v1/history`, `/v1/predicates`, `/v1/explain`) | 0.16 | JSON bodies with the tool arguments; JSON answers with the tool results. |
+| HTTP (`recall serve`, `/v1/remember`, `/v1/recall`, `/v1/forget`, `/v1/history`, `/v1/predicates`, `/v1/explain`) | 0.16 | JSON bodies with the tool arguments; JSON answers with the tool results. The State API is at `/v1/agent/<verb>` (0.24), see [state-api-v1.md](state-api-v1.md#4-http-transport). |
 | Python over HTTP | 0.16 | `Client(url=..., api_key=...)` or `Client.from_env()`. Same decoders. |
 
 ## 10. Credentials and environment
@@ -189,11 +165,11 @@ A client needs a URL and one credential. Nothing else is configuration: the serv
 | --- | --- | --- |
 | RECALL_URL | The `recall serve` endpoint. | 0.16 |
 | RECALL_API_KEY | A Recall key, `rcl_<id>_<secret>`. | 0.16 |
-| RECALL_TOKEN_FILE | Path to a projected Kubernetes service account token with audience `recall`, exchanged for a key at `POST /v1/auth/kubernetes` (body `{"token": ...}`) and renewed at `POST /v1/keys/renew`. The server derives the tenant from the service account's namespace or a label on it, and the agent and session from the pod the token is bound to. | 0.16 |
+| RECALL_TOKEN_FILE | Path to a projected Kubernetes service account token with audience `recall`, exchanged for a key at `POST /v1/auth/kubernetes`. The exchange, and what the server derives from the token, are in the State API document, [Kubernetes workload identity](state-api-v1.md#5-kubernetes-workload-identity). | 0.16 |
 | RECALL_AGENT, RECALL_SESSION | Informational in Kubernetes mode (the server derives them); authoritative otherwise. | 0.16 |
 | RECALL_BACKEND, RECALL_BACKEND_URL, RECALL_BACKEND_KEY, RECALL_COLLECTION, RECALL_PREDICATES, RECALL_EMBED_URL, RECALL_EXTRACT_MODEL | Direct-to-backend configuration for `recall mcp` without a server; see [mcp.md](mcp.md). The POLIGN_ spellings and each backend's own URL variable are read as aliases until 0.25. | 0.23 |
 
-Keys: `rcl_<id>_<secret>`. The store holds the SHA-256 of the key, the namespace, the optional agent and session, and an optional expiry, as write-once records in a control collection beside the memory. Renewal rewrites the expiry. Revocation writes a tombstone that is never overwritten and that every check reads, so a late renewal cannot resurrect a revoked key. A revoked or expired key is refused within the server's auth cache TTL (`-auth-cache-ttl`, default 30 seconds), which the server prints at start. Kubernetes-mode keys default to a 15 minute TTL and are never renewed: `POST /v1/keys/renew` answers `409 renew_with_token`, and the workload exchanges its projected token again, so a key copied out of a pod dies at its TTL and a deleted pod's key cannot be extended.
+Keys: `rcl_<id>_<secret>`. The store holds the SHA-256 of the key, the namespace, the optional agent and session, and an optional expiry, as write-once records in a control collection beside the memory. Renewal rewrites the expiry. Revocation writes a tombstone that is never overwritten and that every check reads, so a late renewal cannot resurrect a revoked key. A revoked or expired key is refused within the server's auth cache TTL (`-auth-cache-ttl`, default 30 seconds), which the server prints at start. Keys minted from Kubernetes workload tokens are never renewed; see the [State API](state-api-v1.md#5-kubernetes-workload-identity).
 
 Key management (0.16): `recall key create | list | revoke` against the backend, or over HTTP with an admin key: `POST /v1/keys` (body: `namespace`, `agent`, `session`, `note`, `expires_in`, `admin`), `GET /v1/keys`, `DELETE /v1/keys/<id>`. Any key renews itself with `POST /v1/keys/renew`. An admin key reaches no namespace. `-bootstrap-key-file` registers one admin key at start if the store does not know it, and never rebinds a key already on record.
 
@@ -207,9 +183,7 @@ Key management (0.16): `recall key create | list | revoke` against the backend, 
 | invalid_argument | 400 | Unknown field, wrong type, bad instant. |
 | tool_error | 400 | The operation refused the request for a reason in its message. |
 | forbidden | 403 | A non-admin key called key management. |
-| lease_held | 409 | Another process holds the agent. Retry or `defer_lease`. |
-| lease_lost | 409 | This process lost the lease; its write was refused. |
 | renew_with_token | 409 | The key was minted from a workload token and is not renewed; exchange the token again. |
-| unsupported | 501 | The backend lacks the capability (for example the Resume API without leases). |
+| unsupported | 501 | The backend lacks the capability (for example the State API without leases). |
 
-MCP carries the same codes in the tool error text.
+The State API's own codes (`lease_held`, `lease_lost`, `lease_not_held`, `not_resumed`, `already_resumed`) are in [state-api-v1.md](state-api-v1.md#8-errors). MCP carries the same codes in the tool error text.
