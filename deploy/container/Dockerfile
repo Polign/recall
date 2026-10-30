@@ -28,7 +28,7 @@ LABEL org.opencontainers.image.title="Recall" \
       org.opencontainers.image.source="https://github.com/Polign/recall" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.version="${VERSION}" \
-      io.modelcontextprotocol.server.name="io.github.polign/recall"
+      io.modelcontextprotocol.server.name="io.github.Polign/recall"
 COPY --from=build --chown=65532:65532 /out/recall /usr/local/bin/recall
 COPY LICENSE /LICENSE
 USER 65532:65532

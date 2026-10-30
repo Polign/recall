@@ -1,6 +1,6 @@
 # polign-recall
 
-<!-- mcp-name: io.github.polign/recall -->
+<!-- mcp-name: io.github.Polign/recall -->
 
 A Python client for Recall, memory and state for agents. Requires Python
 3.10+.

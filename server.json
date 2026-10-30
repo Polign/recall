@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.polign/recall",
+  "name": "io.github.Polign/recall",
   "title": "Recall",
   "description": "Agent memory that keeps every correction, with history and as-of reads. Runs on your database.",
   "repository": {
