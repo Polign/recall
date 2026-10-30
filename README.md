@@ -1,34 +1,32 @@
 # Polign Recall
 
-Recall is memory and state for agents. Memory is what the agent knows, kept
-as a correctable record: when a user corrects a fact, backtracks or changes
-their mind, Recall replaces the old belief, tells the agent what it replaced,
-and keeps the old value in a history for auditing and replaying. State is
-where the agent is: its working state, turns, outputs, pointers and the tool
-calls it began, under one lease per agent, so a run resumes after a crash or
-a move from its own records.
+Recall gives an agent memory and state that survive the conversation and the
+process. Memory is what the agent knows: facts a user stated, with every
+correction kept, so the agent can say what it believes now, what it believed
+before, and why. State is where the agent is: its progress, its notes to its
+next instance, and the tool calls it had in flight, so a run that crashes or
+moves machines resumes from its own records.
+
+Recall is a Go library, a `recall` binary that serves the same operations as
+MCP tools and as HTTP, and a Python client. It stores everything in a
+database you run: polign_db, PostgreSQL, MongoDB or Qdrant. Apache 2.0.
 
 ![Recall, mem0 and Zep answering questions about a user whose facts changed over nine months](docs/demo.gif)
 
-The demo is a real run with one user over nine months. User chaned three homes, three
-employers, and three work emails. The demo queries six questions about her with current understanding. It is using Opus 5.5 to extract facts, answer, and judge for
-all three systems. The answers are at Recall 18/18, mem0 18/18,
-Zep 12/18. Tokens to save one message: Recall 3.0k, mem0 12.7k, Zep 14.7k.
+One user over nine months, three homes, three employers, three work emails,
+six questions, Claude Opus 5.5 extracting, answering and judging for all three
+systems: Recall 18/18, mem0 18/18, Zep 12/18. Tokens to save one message:
+Recall 3.0k, mem0 12.7k, Zep 14.7k.
 
 ## Install
 
 ```sh
-pip install polign-recall          # Python client, the recall binary, and the database it runs
+pip install polign-recall          # the Python client, the recall binary, and the database it runs
 brew install polign/tap/recall     # the same for Homebrew
-recall mcp -write                  # MCP over stdio: remember(text), recall(question), forget(text)
+go install github.com/Polign/recall/cmd/recall@latest   # the binary alone; it fetches the database on first use
 ```
 
-Without a named database, `recall` keeps memory in a
-local database in `~/.local/share/recall`, started on first use and shared by
-every agent on the machine. The [Quickstart](#quickstart) runs without a model
-or an API key. see [Backends](#backends) to keep the memory in the currently integrated locations.
-
-Add it to the agent you use:
+Then give it to the agent you use:
 
 ```sh
 claude mcp add recall -- recall mcp -write      # Claude Code
@@ -36,22 +34,16 @@ claude mcp add recall -- recall mcp -write      # Claude Code
 
 [Add to Cursor](https://cursor.com/en/install-mcp?name=recall&config=eyJjb21tYW5kIjoicmVjYWxsIiwiYXJncyI6WyJtY3AiLCItd3JpdGUiXX0%3D) ·
 [Add to VS Code](https://vscode.dev/redirect/mcp/install?name=recall&config=%7B%22command%22%3A%22recall%22%2C%22args%22%3A%5B%22mcp%22%2C%22-write%22%5D%7D) ·
-any other host: command `recall`, arguments `mcp -write` ([details](docs/mcp.md)).
+any other MCP host: command `recall`, arguments `mcp -write` ([details](docs/mcp.md)).
 
-Today that local database is polign_db, run as a `polign-server` process
-beside `recall`. pip and Homebrew install both. `go get` and
-`go install github.com/Polign/recall/cmd/recall` give you the library and the
-binary but not the database: the first time `recall` needs a local database
-and finds no `polign-server` beside it or on `PATH`, it downloads the
-polign_db release it was tested with (about 80 MB, verified against a
-checksum built into `recall`), keeps `polign-server` and its license under
-`~/.local/share/recall/bin`, and starts it. That happens once per machine.
-Set `RECALL_NO_DOWNLOAD=1` to refuse the download; `recall` then says how to
-install polign_db by hand, or name a database with `-backend` and `-url`.
+With nothing configured, memory lives in a local database in
+`~/.local/share/recall`, started on first use and shared by every agent on the
+machine. No model and no API key are needed to start. To keep memory in a
+database you already run, see [Backends](#backends).
 
 ## What a correction looks like
 
-Every change is kept. Three commands read that record:
+Every change is kept. Three commands read the record:
 
 ```text
 $ recall history "which editor do I use"
@@ -81,74 +73,23 @@ Changed between 2026-09-15 00:00 and 2026-10-31 00:00:
 
 ## Why Recall
 
-- **Corrections are records.** A new value replaces the old one by a rule you
-  can read, and the answer arrives with what it replaced.
-- **Ask about any moment.** `as_of`, `history`, and `diff` answer what the
-  agent believed then, and when that changed.
+- **Corrections are records, not overwrites.** A new value replaces the old
+  one by a rule you can read, and every answer arrives with what it replaced.
+- **Any moment is readable.** `as_of`, `history` and `diff` say what the agent
+  believed then and when that changed.
 - **Every answer has a source.** `recall explain` shows the message a fact came
   from, the rule that decided it, and its history.
-- **Shared and resumable.** Agents in different processes read and correct the
-  same memory, and a crashed agent [resumes from its records](#state-resuming-an-agent).
-- **Your storage.** polign_db, PostgreSQL with pgvector, MongoDB, or Qdrant.
-  Apache 2.0.
-
-## Benchmark
-
-LongMemEval user-facts subset (267 questions about a user's own facts,
-preferences, updates, and dates), Recall 0.19.0, Sonnet 5.5 as reader and
-judge, upstream prompts:
-
-| What the reader is given | Score |
-| --- | --- |
-| Nothing | 6.0 |
-| The full chat history | 88.0 |
-| BM25 over sessions, top 10 | 89.9 |
-| Recall, built-in word search | 88.8 |
-| Recall with a model embedder (OpenAI text-embedding-3-small, 512 dims) | 92.9 |
-| Only the sessions that hold the answer | 96.6 |
-
-With its built-in word search, Recall is about even with BM25 overall and
-behind it on preference questions (70.0 against 83.3). A model embedder puts it
-ahead. Since 0.20.0 one follows the extraction model: OpenAI's
-text-embedding-3-small with an OpenAI extractor, Ollama's nomic-embed-text
-with an Ollama one, and the all-MiniLM model built into the binary with an
-Anthropic one. With word search, Recall handed the reader about 28k tokens per
-question, against about 44k for BM25 and 168k for the full history.
-
-## Choose an integration
-
-| Integration | Get started |
-| --- | --- |
-| **Python** | Follow the quickstart below, then see the [client guide](python/README.md). |
-| **Go** | Run `go get github.com/Polign/recall` and follow the [Go client guide](docs/reference.md#context-aware-client). |
-| **MCP** | [Connect an agent](docs/mcp.md) to tools for remembering, recalling, and forgetting facts. |
-| **LangGraph** | `pip install recall-langgraph` to [resume LangGraph agents](https://github.com/Polign/polign/tree/main/python/recall-langgraph) from their own records. |
-| **LiveKit** | `pip install recall-livekit` for [caller memory in voice agents](https://github.com/Polign/polign/tree/main/python/recall-livekit). |
-| **Vapi** | `pip install recall-vapi` for [caller memory in Vapi assistants](https://github.com/Polign/polign/tree/main/python/recall-vapi). |
-| **Pydantic AI** | `pip install recall-pydantic-ai` for [memory tools in Pydantic AI agents](https://github.com/Polign/polign/tree/main/python/recall-pydantic-ai). |
-| **Vercel AI SDK** | Deploy the [Next.js chat example](examples/vercel-ai-sdk) that reaches `recall serve` over MCP; one click on Vercel. |
-
-The [Claude Code plugin](https://github.com/Polign/polign/tree/main/plugins/recall)
-is a ready-made MCP integration for memory across coding sessions, and the
-[OpenClaw plugin](https://github.com/Polign/polign/tree/main/plugins/openclaw)
-(`@polign/openclaw-recall` on npm) gives OpenClaw agents the same memory.
+- **Agents resume from records.** A crashed or moved agent gets its working
+  state, recent turns and unfinished tool calls back, not a snapshot.
+- **Your storage, your rules.** Memory lives in a database you already run, and
+  the vocabulary of what gets remembered is yours to define or leave open.
 
 ## Quickstart
 
-You'll need Python 3.10+. Install the client:
+Python 3.10 or later. Save a preference, then correct it:
 
 ```sh
 pip install polign-recall
-```
-
-pip also brings the `polign_db` package, which holds the `polign` and
-`polign-server` binaries, so there is nothing else to download or start (a
-`recall` installed another way downloads `polign-server` on first use). This
-example needs no model or embedding API key.
-
-One process saves an editor preference and then changes it:
-
-```sh
 python - <<'PY'
 from polign_recall import Client
 
@@ -158,169 +99,85 @@ with Client(local_dir="./recall-data") as memory:
 PY
 ```
 
-Run a second process in the same terminal. It reads the current preference,
-the full history, and what was believed before the correction:
+A second process reads the current value, the history, and what was believed
+before the correction:
 
 ```sh
 python - <<'PY'
 from polign_recall import Client
 
 with Client(local_dir="./recall-data") as memory:
-    print(memory.recall("user", "prefers_editor")[0].value)  # neovim
+    print(memory.recall("user", "prefers_editor")[0].value)   # neovim
 
     events = memory.history("user", "prefers_editor")
-    print([event.value for event in events])  # ['vim', 'neovim'] in a fresh directory
+    print([e.value for e in events])                           # ['vim', 'neovim']
 
-    # Ask what was believed at the moment of the first statement.
     before = memory.recall("user", "prefers_editor", as_of=events[0].observed_at)
-    print(before[0].value)  # vim
+    print(before[0].value)                                      # vim
 PY
 ```
 
-The correction did not erase `vim`. It is still there to read, which is how you
-answer "what did the agent believe yesterday, and when did that change?"
-
-The first client to open `./recall-data` starts a local `polign-server` for it
-in the background, and later clients share it. The memories stay in that
-directory after your program exits. A bare `Client()` does the same in
-`~/.local/share/recall`, the memory every agent on the machine shares, the
-Claude plugin included. Managed local databases work on Linux and macOS.
-
-To share memory between machines, run `polign-server` yourself (requires
-[Polign v0.8.0 or later](https://github.com/Polign/polign#install)) or any
-other [backend](#backends), leave `local_dir` out, and name the database with
-`Client(backend=, backend_url=, backend_key=)` or with `RECALL_BACKEND`,
-`RECALL_BACKEND_URL` and `RECALL_BACKEND_KEY` in the environment.
-`RECALL_COLLECTION` names the collection. `Client.database` says which
-database the binary resolved.
-
-For examples covering forgetting as well, see the
-[Python session example](examples/python/sessions.py) or
-[Go session example](examples/sessions).
+The first client to open `./recall-data` starts a local database for it and
+later clients share it; the memories stay there after the program exits. A
+bare `Client()` uses `~/.local/share/recall`, the memory every agent on the
+machine shares. The [Python client guide](python/README.md) covers the rest:
+plain-text memory with a model, forgetting, history, and resuming an agent.
 
 ## How memory works
 
-A memory has a **subject**, a **predicate**, and a **typed value**:
+A memory is a **subject**, a **predicate** and a **typed value**: `user`,
+`prefers_editor`, `neovim`. Predicates live in a registry that says what type
+a value has, whether the predicate holds one value or many, and which
+predicates it contradicts: `dislikes` excludes `likes`, `gave_away` excludes
+`owns`. A single-valued predicate replaces its value on a new statement; a
+multi-valued one accumulates. Forgetting records a withdrawal; nothing is
+deleted. Recall ships [starter registries](docs/reference.md#starter-registries)
+for coding, personal assistant, support, sales and voice agents, and you can
+[change a registry later](docs/reference.md#changing-the-registry) without
+touching what was already remembered.
 
-| Subject | Predicate | Value |
-| --- | --- | --- |
-| `user` | `prefers_editor` | `neovim` |
-| `recall-demo` | `prefers_test_framework` | `pytest` |
-| `recall-demo` | `uses_technology` | `Go` |
-
-Predicates live in a registry that declares each one's value type, whether it
-holds one value or several, and which predicates it contradicts (`dislikes`
-excludes `likes`, `gave_away` excludes `owns`). Recall includes
-[starter registries](docs/reference.md#starter-registries) for coding, personal
-assistant, support, sales, and voice agents. Add your own predicates
-([the registry](docs/reference.md#the-registry)), and the extractor files
-statements under them; you can
-[change the registry later](docs/reference.md#changing-the-registry) without
-changing what the agent remembered before. A value can be text, a number, a boolean, an enum,
-a date, or a [reference to another subject](docs/reference.md#references-between-subjects).
-
-For a single-valued predicate such as `prefers_editor`, a new assertion replaces
-the current value. A multi-valued predicate such as `uses_technology` can hold
-both Python and Go. Corrections preserve earlier statements, so you can read
-current values, inspect their history, or query what was known at an earlier time.
-
-Forgetting records a withdrawal and removes the affected fact from current
-answers. **It does not permanently delete the record.**
-
-An agent can also [propose facts from text](docs/reference.md#free-text-without-a-second-model).
-Recall validates those proposals against the registry before writing them. A
-statement that fits no predicate is kept as a [note](docs/reference.md#notes)
-instead of being dropped. Once you add a predicate for that kind of fact,
-`Promote` files each note under it and keeps the note in history.
-
-### Without a registry
-
-You don't have to define predicates at all. With an
-[open vocabulary](docs/reference.md#open-vocabulary), a write may name any
-predicate and its first use defines it, starting from the coding and personal
-starters. `recall explain "<question>"` shows, for each answer, the text it
-came from, the predicate it was filed under, the rules that decide it, and its
-history.
-
-With a model configured, the MCP server goes one step further and takes plain
-text, with no predicates in any tool or answer:
+You do not have to define predicates. With an
+[open vocabulary](docs/reference.md#open-vocabulary) the first use of a
+predicate defines it, and with a model configured the MCP tools take plain
+text and no predicates appear anywhere:
 
 ```sh
 recall setup -extract-model anthropic:claude-haiku-4-5-20251001
 ```
 
-```
+```text
 remember("I switched from helix to zed last week")
 recall("which editor do I use?")  ->  "user prefers editor: zed" (before: helix)
 forget("my editor")
 ```
 
-The model decides how each statement is filed: which predicate, and whether a
-new value replaces the old one or adds to it. Once filed, replacement follows
-the predicate's rule as before, every filing is recorded, and a wrong one is
-corrected with one event (`Redefine`, `Merge`, `Split`) that every answer
-follows. The model is called on every `remember` and `forget`, and the text is
-sent to its provider. See [text-only tools](docs/mcp.md#text-only-tools).
+The model decides how each statement is filed. Once filed, replacement follows
+the predicate's rule, every filing is recorded, and a wrong filing is corrected
+with one event that every later answer follows. No model reconciles memory on
+its own: Recall applies the registry's rules, shows what may conflict, and
+lets the agent confirm the rest, so every correction reads back to the rule or
+statement that made it. `recall mcp -typed` serves the typed tools
+(`remember(subject, predicate, value)`) instead. The
+[developer reference](docs/reference.md) has the details and the
+[Memory API](docs/memory-api-v1.md) is the contract.
 
-The [benchmark](#benchmark) above uses these text tools with an open
-vocabulary seeded from the personal starter.
+## State
 
-### Typed tools
-
-`recall mcp -write -typed` serves tools over a fixed vocabulary instead, such
-as `remember(subject, predicate, value)`. A session with the personal starter
-registry:
-
-```text
-remember(user, likes, mangoes)
-remember(user, dislikes, mangoes)
-  -> superseded: [likes: mangoes]          # the registry says dislikes excludes likes
-
-recall(user, dislikes)
-  -> mangoes   replaced: [likes: mangoes]  # the correction arrives with the answer
-
-remember(user, goal, "run a marathon")
-remember(user, did,  "run a marathon")
-recall(user, goal)
-  -> run a marathon   elsewhere: [did: run a marathon]   # no rule joins goal and did,
-                                                         # so the read shows both
-
-remember(user, did, "run a marathon",
-         replaces=[goal: "run a marathon", goal: "learn piano"])
-  -> replaced:   [goal: run a marathon]
-  -> unreplaced: [goal: learn piano]       # never believed, so reported, not dropped
-```
-
-No model reconciles memory on its own. Recall applies the rules the registry
-declares, shows the candidates that may conflict, and lets your agent confirm
-the rest, so every correction can be read back to the rule or the statement
-that made it.
-
-### Reading the record
-
-Each step of a history is the log folded just before and just after that
-statement, so it agrees with a read at that instant. Agents get the same
-record through the `history` and `diff` MCP tools (`timeline` and `diff` with
-`-typed`), `recall serve` answers them over HTTP at `/v1/history`,
-`/v1/timeline` and `/v1/diff`, and the Python client has `history_text`,
-`timeline` and `diff`.
-
-## State: resuming an agent
-
-State is the second half of Recall, with its own contract,
-[docs/state-api-v1.md](docs/state-api-v1.md). `Resume` gives an agent back
-the context it should start from, built from what it wrote down while it
-worked. The new process resumes from records, not from a process or container
+The second half of Recall, with its own contract,
+[docs/state-api-v1.md](docs/state-api-v1.md). An agent writes down where it is
+as it works, and a new process resumes from those records instead of from a
 snapshot:
 
-- **Working state**: its goal, plan, progress, focus, and open questions.
-- **Pointers** to where its work lives, such as a git branch or an object key.
+- **Working state**: goal, plan, progress, focus, decisions, open questions.
 - **Turns**, verbatim, and large tool **outputs** stored by reference.
+- **Pointers** to where the work lives: a branch, an object key, a process.
+- **Actions**: each tool call that touches the world, recorded before it runs
+  and closed with its result, so a crash between the two is visible and the
+  next resume lists the call as unconfirmed instead of repeating it.
 
-The next process gets those records, plus memories that match its focus, sized
-to a token budget and rendered as one briefing for the model. A lease keeps one
-process per agent, so a second copy cannot write over the first. Leases need
-Polign v0.8.0 or later.
+`Resume` takes a lease on the agent id, so one process acts for an agent at a
+time, rebuilds the context within a token budget, and renders it as one
+briefing for the model:
 
 ```go
 agent, err := client.Resume(ctx, recall.ResumeRequest{AgentID: "coder-1", TokenBudget: 8000})
@@ -332,233 +189,109 @@ defer agent.Release(context.Background())
 briefing := agent.Resumed().Briefing // hand this to the model
 ```
 
-Over `recall serve` the same operations are HTTP routes: `POST
-/v1/agent/resume` returns the briefing and the lease epoch, and every write
-(`/v1/agent/update_working_state`, `/v1/agent/record_turn`,
-`/v1/agent/begin_action`, ...) carries that epoch as `If-Lease:
-<agent_id>:<epoch>` or an `epoch` field, so a stale process cannot write over
-its successor. MCP clients use the same tools over `/mcp`.
-
-The State API is a beta surface: the calls around the records may still
-change in a minor release, with the change and what to do about it in the
-changelog. The records themselves are stable. See [STABILITY.md](STABILITY.md).
-
-The [resume example](examples/resume) crashes an agent partway through a task
-and continues it in a new process. See [Resuming an agent](docs/reference.md#resuming-an-agent)
-for the full API, and the [Python client guide](python/README.md) for `resume`
-in Python.
+The same operations are MCP tools (`agent_resume`, `update_working_state`,
+`record_turn`, `begin_action`, ...) and, on `recall serve`, HTTP routes at
+`POST /v1/agent/<verb>`. Over HTTP the server holds the lease between
+requests: `resume` returns an epoch and every write carries it, so a stale
+process cannot write over its successor. The State API is beta; the records it
+writes are stable ([STABILITY.md](STABILITY.md)). The
+[resume example](examples/resume) kills an agent mid-task and continues it in
+a new process.
 
 ## Serving many agents
 
-`recall mcp` is one agent, one process, one store. `recall serve` is the same
-memory for many agents at once, over HTTP, each inside the namespace its key
-names. The server holds the store's credentials; agents hold Recall keys.
+`recall mcp` is one agent, one process. `recall serve` is the same memory and
+state for many agents over HTTP, each inside the namespace its key names. The
+server holds the database credentials; agents hold Recall keys.
 
 ```sh
-recall serve -backend polign -url http://polign:23000 -bootstrap-key-file admin.key   # admin.key holds one rcl_... line
+recall serve -backend polign -url http://polign:23000 -bootstrap-key-file admin.key
 recall key create -backend polign -url http://polign:23000 -namespace acme:agent-7 -expires 168h
 ```
 
-With no database named, `recall serve` runs on the local database like every
-other command, and `recall key create -namespace team:agent-1` against the
-same default mints a key for it: a shared memory server for several agents on
-one machine, with nothing configured. Its first log line says where memory
-is, so a container that meant to name a database and did not is told at once.
-
 Each namespace gets its own collection, so nothing a caller sends can reach
-another namespace's records. Keys are stored hashed, expire if asked, renew at
-`POST /v1/keys/renew`, and are revoked by a tombstone that nothing can
-overwrite. `POST /mcp` is MCP over streamable HTTP; `POST /v1/<tool>`
-(`remember`, `recall`, `forget`, `history`, `explain`, `diff`, `timeline`,
-`predicates`) takes that tool's arguments as the body, and `POST
-/v1/agent/<verb>` does the same for the State API. Any MCP client that
-speaks stdio reaches the server through
-`recall connect`, with `RECALL_URL` and `RECALL_API_KEY` set.
+another namespace's records. `POST /mcp` is MCP over streamable HTTP;
+`POST /v1/<tool>` takes a memory tool's arguments as the body, and
+`POST /v1/agent/<verb>` a state tool's. Any stdio MCP client reaches the
+server through `recall connect` with `RECALL_URL` and `RECALL_API_KEY` set.
 
 On Kubernetes a pod needs no key at all. With `recall serve -kubernetes`, it
-posts its projected service account token (audience `recall`) and gets a
-short-lived key for `<tenant>:<pod name>`, fixed to that agent, which `recall
-connect` and the Python client obtain and renew by themselves from
-`RECALL_TOKEN_FILE`. The Helm chart is `charts/recall` in
+posts its projected service account token and gets a short-lived key fixed to
+its own agent id, which `recall connect` and the Python client obtain and
+renew by themselves. The Helm chart is `charts/recall` in
 [Polign/polign](https://github.com/Polign/polign); the
-[agent-sandbox demo](deploy/agent-sandbox) runs it on kind. The contracts
-every client is written against are [docs/memory-api-v1.md](docs/memory-api-v1.md)
-and [docs/state-api-v1.md](docs/state-api-v1.md).
+[agent-sandbox demo](deploy/agent-sandbox) runs it on kind.
 
-## Storage and search
-
-Three things say where memory lives, the same three for every backend and
-every command:
-
-| Flag | Variable | What it is |
-| --- | --- | --- |
-| `-backend` | `RECALL_BACKEND` | `local` (the default), `polign`, `pgvector`, `mongodb` or `qdrant` |
-| `-url` | `RECALL_BACKEND_URL` | Where the database is, in the backend's own form: a directory, `http://host:23000`, `postgres://user@host/db`, `mongodb://host/db`, `http://host:6333` |
-| `-key` | `RECALL_BACKEND_KEY` | The credential, when the backend takes one and the URL does not carry it: the API key of polign and qdrant, the password of pgvector and mongodb |
-
-Each resolves in the same order: the flag, the variable, the setup `recall
-setup` saved, the default. The flags go before the command or after it. A
-backend's other options are query keys on the URL, listed in the table below;
-anything else in the query goes to the driver as it is
-(`postgres://host/db?schema=memory&sslmode=require`).
-
-Nothing else about the database has a variable. The names each backend had
-before 0.23.0 (`POLIGN_URL`, `POLIGN_API_KEY`, `DATABASE_URL`, `PGPASSWORD`,
-`MONGODB_URI`, `MONGODB_PASSWORD`, `QDRANT_URL`, `QDRANT_API_KEY`) keep
-working as aliases, with one line on stderr naming the new one, and so does a
-polign_db already answering at `http://localhost:23000` when nothing names a
-backend, which is where 0.22 looked. See [STABILITY.md](STABILITY.md) for
-when they go away.
-
-Recall provides memory rules, validation, and history; the backend provides
-persistence and access to the data. Agents share memory by using the same
-backend, collection, and namespace, with compatible Recall versions and memory
-definitions. Search also requires compatible embedding methods.
-
-Concurrent reads and writes follow the backend's consistency guarantees. Recall
-does not add transaction isolation or replication.
-
-### Backends
+## Backends
 
 | | local (default) | polign_db | PostgreSQL + pgvector | MongoDB | Qdrant |
 | --- | --- | --- | --- | --- | --- |
-| Package | [`backend/local/`](backend/local) | [`polign/`](polign) | [`backend/pgvector/`](backend/pgvector) | [`backend/mongodb/`](backend/mongodb) | [`backend/qdrant/`](backend/qdrant) |
 | `RECALL_BACKEND` | `local` | `polign` | `pgvector` | `mongodb` | `qdrant` |
-| `RECALL_BACKEND_URL` | a directory (default `~/.local/share/recall`) | `http://host:23000` | `postgres://user:pw@host:5432/db` | `mongodb://user:pw@host:27017/db` | `http://host:6333` |
-| `RECALL_BACKEND_KEY` | not used; a key is generated in the directory | the polign_db API key | the password, when the URL has none | the password, when the URL has none | the Qdrant API key |
-| Options on the URL | `?server=/path/to/polign-server` | none | `?schema=recall&text_search=english` | `?database=recall` | `?distance=Cosine` |
-| Server version | the `polign-server` beside `recall` or on `PATH`, which pip and Homebrew install, else polign_db v0.15.0 downloaded once into `~/.local/share/recall/bin`; started on a loopback port and left running | 0.8.0 or later | PostgreSQL 13 or later with pgvector 0.6.0 or later; 0.8.0 or later recommended | 6.0 or later, Atlas or self-hosted | 1.10 or later |
-| Remember, recall, forget, history, as-of | yes | yes | yes | yes | yes |
-| Evidence links, audit export | yes | yes | yes | yes | yes |
-| Keyword search | as polign_db | yes, BM25 | yes, PostgreSQL full-text search | yes, MongoDB text search | no, vector search only |
-| Cached reads | yes | yes | yes | yes | no, every read refolds the history |
-| Agent leases (`recall mcp -agent`) | yes | yes | yes | yes | no; Go `Resume` with `Unleased: true` only |
-| Agent writes fenced on the server | yes | yes | yes, in the write's transaction | yes on a replica set or Atlas, in the write's transaction; checked just before the write on a standalone server | no |
-| `recall setup` and the Claude plugin | yes | yes | yes | yes | yes |
-
-To run Recall on a PostgreSQL database:
+| `RECALL_BACKEND_URL` | a directory | `http://host:23000` | `postgres://user:pw@host/db` | `mongodb://user:pw@host/db` | `http://host:6333` |
+| Memory, history, as-of | yes | yes | yes | yes | yes |
+| Keyword search | yes | yes | yes | yes | no |
+| Cached reads | yes | yes | yes | yes | no |
+| State API (leases) | yes | yes | yes | yes | no |
 
 ```sh
 export RECALL_BACKEND=pgvector RECALL_BACKEND_URL=postgres://user:password@localhost:5432/mydb
 recall mcp -write
 ```
 
-The first write creates a `recall` schema with one table per collection and
-two bookkeeping tables. The role needs `CREATE` on the database, and the
-`vector` extension must be installed or creatable by that role.
+Three settings name the database for every command: `-backend`, `-url` and
+`-key`, or the variables above. Everything else, including what each backend
+needs and how to add one, is in [docs/backends.md](docs/backends.md).
 
-Pitfalls on PostgreSQL:
+## Benchmark
 
-- A collection takes its vector size from the first write. Changing embedders
-  needs a new collection.
-- Every write to a collection takes a row lock on that collection's revision,
-  so writes to one collection are serialized. That is fine at conversation
-  pace but slows a bulk import.
-- Keyword search uses the `english` text search configuration unless
-  `?text_search=` on the URL (Go: `Config.TextSearchConfig`) says otherwise.
-  It is fixed when a collection is created.
-- On pgvector older than 0.8.0, a filtered vector search can return fewer
-  hits than asked for, because the index stops scanning at `ef_search`
-  candidates before the filter applies.
+LongMemEval user-facts subset, 267 questions about a user's own facts,
+preferences, updates and dates, with Claude Sonnet 5.5 as reader and judge
+and the upstream prompts:
 
-To run Recall on MongoDB:
-
-```sh
-export RECALL_BACKEND=mongodb RECALL_BACKEND_URL=mongodb://user:password@localhost:27017/recall
-recall mcp -write
-```
-
-The database is the connection string's path, `recall` when it has none. The
-first write to a collection creates a MongoDB collection named `rc_` and the
-collection's name, and two bookkeeping collections, `recall_collections` and
-`recall_leases`. The user needs `readWrite` on the database.
-
-Pitfalls on MongoDB:
-
-- Vector search is exact: the similarity is computed in the server over the
-  events a filter keeps. No Atlas Search index is needed and the answer is
-  the true nearest events, but each search reads the whole filtered
-  collection. Agent memory collections hold thousands of events, which is
-  fast; a collection of millions is not what this backend is for.
-- Run a replica set (Atlas always is) for agents. On a standalone server
-  there are no transactions, so a fenced agent write is checked just before
-  it lands rather than with it, and listings are not read from one snapshot.
-  A single-node replica set is enough.
-- A collection takes its vector size from the first write. Changing embedders
-  needs a new collection.
-- Keyword search uses MongoDB's `english` text index, fixed when a collection
-  is created.
-
-Pitfalls on Qdrant:
-
-- Use a collection only Recall writes to. A point without the `_recall_id`
-  payload field makes reads fail.
-- A collection takes its vector size from the first write. Changing embedders
-  needs a new collection.
-- `Unleased: true` is safe only when something else keeps one process per
-  agent. Without a lease, a crashed process that comes back can overwrite its
-  replacement.
-- With the built-in lexical embedder, exact-word queries rank worse than on
-  polign_db. A model embedder (`-embed-model`) helps paraphrases, not keywords.
-
-To add a backend, implement `Put`, `List` and `Search`
-([contract](docs/reference.md#complete-histories)), register it with
-`recall.RegisterBackend` in `init`, pass [`backendtest`](backendtest), and import
-it in [`cmd/recall/backends.go`](cmd/recall/backends.go).
-
-The core package, `github.com/Polign/recall`, imports nothing outside the
-standard library. The pgvector backend uses [pgx](https://github.com/jackc/pgx),
-the MongoDB backend the
-[official MongoDB driver](https://github.com/mongodb/mongo-go-driver), and the
-`model` package the Anthropic SDK and [hugot](https://github.com/knights-analytics/hugot)
-for the embedding model that runs inside the binary. A program pulls each in
-only by importing that package.
-
-Two embedders ship with Recall: lexical word search, which needs nothing, and
-`local:all-minilm-l6-v2`, a model that runs in the binary with no key and no
-service. `-embed-model` names an OpenAI, Ollama or Voyage model instead. See
-the [embedding guide](docs/reference.md#embeddings).
-
-## Repository layout
-
-| Path | Contents |
+| What the reader is given | Score |
 | --- | --- |
-| [`recall.go`](recall.go), [`doc.go`](doc.go) | Public Go API at `github.com/Polign/recall` |
-| [`internal/engine/`](internal/engine) | Memory implementation and unit tests |
-| [`backend/local/`](backend/local) | The default backend: a polign_db recall runs itself |
-| [`polign/`](polign) | polign_db backend |
-| [`backend/pgvector/`](backend/pgvector) | PostgreSQL + pgvector backend |
-| [`backend/mongodb/`](backend/mongodb) | MongoDB backend |
-| [`backend/qdrant/`](backend/qdrant) | Qdrant backend |
-| [`backendtest/`](backendtest) | Conformance suite for backends |
-| [`python/`](python) | Python package and tests |
-| [`model/`](model) | Extraction models and embedders, including the one built into the binary |
-| [`registries/`](registries) | Starter predicate registries |
-| [`cmd/`](cmd) | The `recall` and `recall-audit` commands |
-| [`examples/`](examples) | Runnable Go and Python examples, including a crash-and-resume demo |
-| [`deploy/`](deploy) | Container image and the agent-sandbox demo |
-| [`eval/`](eval) | Evaluation harnesses: LongMemEval, corrections, predicate matching |
-| [`docs/`](docs) | Guides and API reference |
-| [`testdata/`](testdata) | Shared audit fixtures |
+| Nothing | 6.0 |
+| The full chat history | 88.0 |
+| BM25 over sessions, top 10 | 89.9 |
+| Recall, built-in word search | 88.8 |
+| Recall with a model embedder (OpenAI text-embedding-3-small, 512 dims) | 92.9 |
+| Only the sessions that hold the answer | 96.6 |
 
-See the [development guide](docs/development.md) for the implementation map and
-test commands.
+With word search Recall is even with BM25 overall and behind it on preference
+questions (70.0 against 83.3); a model embedder puts it ahead. Recall handed
+the reader about 28k tokens per question, against 44k for BM25 and 168k for
+the full history. The harness is in [`eval/longmemeval`](eval/longmemeval).
+
+## Integrations
+
+| | |
+| --- | --- |
+| **Python** | `pip install polign-recall`, then the [client guide](python/README.md). |
+| **Go** | `go get github.com/Polign/recall`, then the [Go library guide](docs/reference.md#go-library). |
+| **MCP** | [Connect any agent](docs/mcp.md) to remember, recall and forget. |
+| **Claude Code** | The [Recall plugin](https://github.com/Polign/polign/tree/main/plugins/recall): memory across coding sessions. |
+| **LangGraph** | `pip install recall-langgraph` to [resume LangGraph agents](https://github.com/Polign/polign/tree/main/python/recall-langgraph). |
+| **LiveKit**, **Vapi** | `recall-livekit` and `recall-vapi` for [caller memory in voice agents](https://github.com/Polign/polign/tree/main/python). |
+| **Pydantic AI** | `pip install recall-pydantic-ai` for [memory tools in Pydantic AI agents](https://github.com/Polign/polign/tree/main/python/recall-pydantic-ai). |
+| **Vercel AI SDK** | The [Next.js chat example](examples/vercel-ai-sdk), one click to deploy. |
+| **OpenClaw** | `@polign/openclaw-recall` on npm, the [OpenClaw plugin](https://github.com/Polign/polign/tree/main/plugins/openclaw). |
 
 ## Documentation
 
-[What is stable and what is beta](STABILITY.md) ·
+[Developer reference](docs/reference.md) ·
 [Memory API contract](docs/memory-api-v1.md) ·
 [State API contract](docs/state-api-v1.md) ·
-[Developer reference](docs/reference.md) ·
-[Resuming an agent](docs/reference.md#resuming-an-agent) ·
+[Backends](docs/backends.md) ·
 [Connecting through MCP](docs/mcp.md) ·
 [Caching memory reads](docs/materialization.md) ·
-[Exporting and replaying history](docs/audit.md)
+[Exporting and replaying history](docs/audit.md) ·
+[What is stable and what is beta](STABILITY.md) ·
+[Development guide](docs/development.md)
 
 ## Support the project
 
 If Recall kept your agent from acting on a stale fact, a star on this
-repository helps other people find it. Bugs, questions, and ideas go in
+repository helps other people find it. Bugs, questions and ideas go in
 [issues](https://github.com/Polign/recall/issues).
 
 ## License
