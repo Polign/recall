@@ -93,7 +93,7 @@ pip install polign-recall
 python - <<'PY'
 from polign_recall import Client
 
-with Client(local_dir="./recall-data") as memory:
+with Client(local_dir="./recall-data", typed=True) as memory:
     memory.remember("user", "prefers_editor", "vim")
     memory.remember("user", "prefers_editor", "neovim")
 PY
@@ -106,7 +106,7 @@ before the correction:
 python - <<'PY'
 from polign_recall import Client
 
-with Client(local_dir="./recall-data") as memory:
+with Client(local_dir="./recall-data", typed=True) as memory:
     print(memory.recall("user", "prefers_editor")[0].value)   # neovim
 
     events = memory.history("user", "prefers_editor")
@@ -188,6 +188,38 @@ defer agent.Release(context.Background())
 
 briefing := agent.Resumed().Briefing // hand this to the model
 ```
+
+In Python, an agent remembers a fact and records where it is, the process is
+killed, and a new process resumes from the records:
+
+```python
+import os, signal
+from polign_recall import Client
+
+with Client(local_dir="./recall-data", agent=True, typed=True) as client:
+    client.remember("user", "project_constraint", "deploy only on weekdays after 18:00 UTC")
+    with client.resume("coder-1") as agent:
+        agent.update_working_state(goal="Move billing to the v2 API",
+                                   plan=["find call sites", "migrate them", "run the tests"])
+        agent.record_turn("user", "Start with the charge endpoint.")
+        agent.milestone("call sites found", progress="12 call sites listed")
+        os.kill(os.getpid(), signal.SIGKILL)   # dies here, lease unreleased
+```
+
+```python
+import time
+from polign_recall import Client
+
+with Client(local_dir="./recall-data", agent=True, typed=True) as client:
+    agent = client.resume("coder-1", token_budget=8000, defer_lease=True)
+    print(agent.context.briefing)   # at once: the goal, plan, milestone, turn, and constraint
+    while not agent.acquire():      # False until the dead process's lease expires
+        time.sleep(1)
+    agent.record_turn("assistant", "Picking up at the charge endpoint.")
+```
+
+Without `defer_lease=True`, `resume` raises `lease_held` until the crashed
+process's lease expires ([Python client guide](python/README.md#resuming-an-agent)).
 
 The same operations are MCP tools (`agent_resume`, `update_working_state`,
 `record_turn`, `begin_action`, ...) and, on `recall serve`, HTTP routes at
