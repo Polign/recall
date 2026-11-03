@@ -1,0 +1,4 @@
+{
+  "plan_tier":  { "cardinality": "single", "value_type": "string", "description": "The customer's subscription plan" },
+  "open_issue": { "cardinality": "multi",  "value_type": "string", "description": "A problem the customer reported that is not resolved yet" }
+}
