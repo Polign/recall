@@ -18,6 +18,11 @@ six questions, Claude Opus 5.5 extracting, answering and judging for all three
 systems: Recall 18/18, mem0 18/18, Zep 12/18. Tokens to save one message:
 Recall 3.0k, mem0 12.7k, Zep 14.7k.
 
+The code to the Recall repository.
+
+<img src="docs/qr-code.png" alt="QR code for https://github.com/Polign/recall" width="160">
+
+
 ## Install
 
 ```sh
