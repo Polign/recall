@@ -1,0 +1,16 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "Recall by Polign",
+  "description": "Recall is typed, durable memory and state for AI agents. It stores corrections, decisions and task state as append-only records in your own object store (S3 or GCS), so an agent can be corrected without retraining and resumed after a crash, restart or pod replacement without snapshotting the process. Go library, recall binary (MCP and HTTP), Python client polign-recall.",
+  "branch": "main",
+  "folders": ["docs", "python", "examples"],
+  "excludeFolders": ["eval", "testdata", "dist", "build", "internal", "backendtest"],
+  "excludeFiles": ["CHANGELOG.md", "THIRD_PARTY_NOTICES.md"],
+  "rules": [
+    "Install the Python client with pip install polign-recall; it brings the recall binary and a local polign_db database, so no separate server is needed to start.",
+    "Use remember(text=...) and ask(question) for text memory; a newer fact replaces an older one and the old value stays under before and in history.",
+    "Use Client(agent=True).resume(agent_id) for agent state: working state, turns, outputs, pointers and actions, fenced by a lease.",
+    "For LangGraph use recall-langgraph (RecallResume, RecallSaver, RecallStore); for the OpenAI Agents SDK use recall-openai-agents (RecallSession); for Pydantic AI use recall-pydantic-ai (RecallMemory)."
+  ],
+  "previousVersions": [{"tag": "v0.24.0"}, {"tag": "v0.23.0"}]
+}
