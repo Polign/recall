@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Python: `Client(inherit_env=False)` starts the `recall` process, and the
+  `recall setup -local` it may run for an older binary, with only what the
+  binary needs from the calling process: `PATH`, the home and temporary
+  directories, the `RECALL_*` and `POLIGN_*` variables, and whatever `env=`
+  passes. Nothing else in the host's environment, such as another service's
+  API key or a bot token, reaches the binary. The default is unchanged: the
+  process inherits the whole environment. `inherit_env` goes with a local
+  process and is refused with `url=`.
+
 ## [0.24.0] - 2026-10-29
 
 ### Added

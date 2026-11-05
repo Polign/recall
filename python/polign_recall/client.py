@@ -483,6 +483,27 @@ _DATABASE_VARS = ("RECALL_BACKEND", "RECALL_BACKEND_URL", "RECALL_BACKEND_KEY",
 # database must not inherit them, from the caller or from the environment.
 _CONNECTION = _DATABASE_VARS + ("RECALL_COLLECTION", "RECALL_PREDICATES", "POLIGN_COLLECTION", "POLIGN_PREDICATES")
 
+# What the binary needs from the environment when it inherits nothing else:
+# how to find programs and files, where its home and temporary files are, and
+# the variables that are Recall's own (RECALL_* and POLIGN_*). The Windows
+# names are what a Go program needs there to resolve paths and use the network.
+_MINIMAL_NAMES = ("PATH", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "TMPDIR", "TEMP", "TMP",
+                  "SYSTEMROOT", "SystemRoot", "SYSTEMDRIVE", "SystemDrive", "PATHEXT",
+                  "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LANG", "LC_ALL",
+                  "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+                  "SSL_CERT_FILE", "SSL_CERT_DIR")
+_MINIMAL_PREFIXES = ("RECALL_", "POLIGN_")
+
+
+def _base_env(inherit_env: bool) -> dict[str, str]:
+    """The environment a recall process starts from: the whole of this
+    process's, or with `inherit_env=False` only what the binary needs
+    (PATH, the home and temporary directories, and RECALL_* / POLIGN_*),
+    so that no other credential in this process reaches it."""
+    if inherit_env:
+        return dict(os.environ)
+    return {k: v for k, v in os.environ.items() if k in _MINIMAL_NAMES or k.startswith(_MINIMAL_PREFIXES)}
+
 _versions: dict[str, tuple[int, ...]] = {}
 
 
@@ -507,7 +528,8 @@ def _version(binary: str) -> tuple[int, ...]:
 
 
 def _database_env(backend: str | None, url: str | os.PathLike[str] | None, key: str | None,
-                  serve: Sequence[str], setup: Sequence[str], timeout: float) -> dict[str, str]:
+                  serve: Sequence[str], setup: Sequence[str], timeout: float,
+                  inherit_env: bool = True) -> dict[str, str]:
     """The environment that names the database to the binary.
 
     recall 0.23 and later read RECALL_BACKEND, RECALL_BACKEND_URL and
@@ -536,7 +558,7 @@ def _database_env(backend: str | None, url: str | os.PathLike[str] | None, key: 
     if backend == "local":
         directory = url or os.environ.get("RECALL_HOME") or os.environ.get("POLIGN_RECALL_HOME") \
             or os.path.join(os.path.expanduser("~"), ".config", "polign", "recall")
-        return _local_server(setup, directory, timeout)
+        return _local_server(setup, directory, timeout, inherit_env)
     names = {"polign": ("POLIGN_URL", "POLIGN_API_KEY"), "pgvector": ("DATABASE_URL", "PGPASSWORD"),
              "mongodb": ("MONGODB_URI", "MONGODB_PASSWORD"), "qdrant": ("QDRANT_URL", "QDRANT_API_KEY")}
     if backend not in names:
@@ -551,7 +573,8 @@ def _database_env(backend: str | None, url: str | os.PathLike[str] | None, key: 
     return env
 
 
-def _local_server(setup: Sequence[str], directory: str | os.PathLike[str], timeout: float) -> dict[str, str]:
+def _local_server(setup: Sequence[str], directory: str | os.PathLike[str], timeout: float,
+                  inherit_env: bool = True) -> dict[str, str]:
     """Start (or find) the managed local database kept in `directory` and
     return the POLIGN_URL and POLIGN_API_KEY that reach it.
 
@@ -560,7 +583,7 @@ def _local_server(setup: Sequence[str], directory: str | os.PathLike[str], timeo
     run again while that server is up.
     """
     directory = os.path.abspath(directory)
-    env = {k: v for k, v in os.environ.items() if k not in _CONNECTION}
+    env = {k: v for k, v in _base_env(inherit_env).items() if k not in _CONNECTION}
     argv = [*setup, "-local", "-no-plugin", "-config-dir", directory]
     try:
         done = subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, capture_output=True,
@@ -729,7 +752,12 @@ class Client:
     `Client.from_env()`, which reads RECALL_URL and the credential variables.
 
     Environment overrides extend the inherited environment. Credentials belong
-    in POLIGN_API_KEY, not command-line arguments. The default enables memory
+    in POLIGN_API_KEY, not command-line arguments. `inherit_env=False` hands
+    the process only what it needs from this one (PATH, the home and
+    temporary directories, and the RECALL_* and POLIGN_* variables) plus
+    `env`, so that no other key or token in this process reaches it; use it
+    from a host that holds credentials for many services and pass the
+    extraction key in `env`. The default enables memory
     writes; pass write=False to expose only read operations.
 
     The `recall` binary comes in this package's platform wheel, and
@@ -776,7 +804,8 @@ class Client:
                  agent: bool = False, extract_model: str | None = None, text: bool | None = None,
                  typed: bool = False, url: str | None = None, api_key: str | None = None,
                  token_file: str | None = None, backend: str | None = None,
-                 backend_url: str | os.PathLike[str] | None = None, backend_key: str | None = None):
+                 backend_url: str | os.PathLike[str] | None = None, backend_key: str | None = None,
+                 inherit_env: bool = True):
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be finite and positive")
         if agent and not write:
@@ -795,8 +824,8 @@ class Client:
             backend, backend_url = "local", local_dir
         names_database = backend is not None or backend_url is not None or backend_key is not None
         if url is not None:
-            if command is not None or names_database or extract_model is not None or env is not None:
-                raise ValueError("url connects to a recall serve; command, backend, backend_url, backend_key, local_dir, env and extract_model configure a local process and cannot be combined with it")
+            if command is not None or names_database or extract_model is not None or env is not None or not inherit_env:
+                raise ValueError("url connects to a recall serve; command, backend, backend_url, backend_key, local_dir, env, extract_model and inherit_env configure a local process and cannot be combined with it")
             self.timeout = timeout
             self._lock = threading.RLock()
             self._id = 0
@@ -834,7 +863,7 @@ class Client:
         argv = list(command) if command is not None else (
             serve + (["-write"] if write else []) + (["-agent"] if agent else []) + surface
             + (["-extract-model", extract_model] if extract_model else []))
-        inherited = dict(os.environ)
+        inherited = _base_env(inherit_env)
         if names_database:
             # The binary resolves exactly what was given: nothing the
             # environment says about a database may fill in or override it.
@@ -842,7 +871,7 @@ class Client:
             # for some other server.
             strip = _CONNECTION if backend == "local" else _DATABASE_VARS
             inherited = {k: v for k, v in inherited.items() if k not in strip}
-            env = {**(env or {}), **_database_env(backend, backend_url, backend_key, serve, setup, timeout)}
+            env = {**(env or {}), **_database_env(backend, backend_url, backend_key, serve, setup, timeout, inherit_env)}
         try:
             self._process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                              stderr=None, env={**inherited, **(env or {})})

@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -706,7 +707,7 @@ if sys.argv[1:] == ["-version"]:
     print(os.environ.get("FAKE_VERSION", "0.23.0"))
     sys.exit(0)
 with open(os.environ["FAKE_ENV_FILE"], "w") as f:
-    json.dump({k: v for k, v in os.environ.items() if k.startswith(("RECALL_", "POLIGN_", "DATABASE_", "QDRANT_", "PG", "MONGODB_"))}, f)
+    json.dump({k: v for k, v in os.environ.items() if k.startswith(("RECALL_", "POLIGN_", "DATABASE_", "QDRANT_", "PG", "MONGODB_", "ANTHROPIC_", "TELEGRAM_", "PATH", "HOME"))}, f)
 for line in sys.stdin:
     request = json.loads(line)
     if "id" not in request:
@@ -755,7 +756,28 @@ class DatabaseEnvTests(unittest.TestCase):
                 unittest.mock.patch.object(client, "_local_server", return_value={"POLIGN_URL": "http://127.0.0.1:1", "POLIGN_API_KEY": "k"}) as local:
             self.assertEqual(client._database_env("local", "./memory", None, self.serve, self.setup, 5),
                              {"POLIGN_URL": "http://127.0.0.1:1", "POLIGN_API_KEY": "k"})
-        local.assert_called_once_with(self.setup, "./memory", 5)
+        local.assert_called_once_with(self.setup, "./memory", 5, True)
+
+    def test_setup_for_a_local_directory_gets_the_same_minimal_environment(self):
+        from polign_recall import client
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        (Path(directory.name) / "runtime.json").write_text('{"url": "http://127.0.0.1:1"}')
+        (Path(directory.name) / "local-key").write_text("k\n")
+        seen = {}
+
+        def run(argv, **kwargs):
+            seen.update(kwargs["env"])
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        with unittest.mock.patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "t", "ANTHROPIC_API_KEY": "a",
+                                                   "POLIGN_URL": "http://stale:23000", "RECALL_COLLECTION": "team"}), \
+                unittest.mock.patch.object(client.subprocess, "run", side_effect=run):
+            self.assertEqual(client._local_server(self.setup, directory.name, 5, inherit_env=False),
+                             {"POLIGN_URL": "http://127.0.0.1:1", "POLIGN_API_KEY": "k"})
+        self.assertIn("PATH", seen)
+        for absent in ("TELEGRAM_BOT_TOKEN", "ANTHROPIC_API_KEY", "POLIGN_URL", "RECALL_COLLECTION"):
+            self.assertNotIn(absent, seen)
 
     def test_version_parsing(self):
         from polign_recall import client
@@ -814,6 +836,30 @@ class ClientDatabaseTests(unittest.TestCase):
         self.assertEqual(seen["RECALL_BACKEND_URL"], os.path.join(self.directory.name, "memory"))
         self.assertNotIn("RECALL_COLLECTION", seen)
         self.assertNotIn("POLIGN_URL", seen)
+
+    def test_inherit_env_false_hands_the_binary_only_what_it_needs(self):
+        with unittest.mock.patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "t", "ANTHROPIC_API_KEY": "from-the-host"}):
+            # The fake binary finds its report file in the environment, so the test passes that through.
+            with Client(inherit_env=False, env={"ANTHROPIC_API_KEY": "given", "FAKE_ENV_FILE": str(self.env_file)}):
+                pass
+        seen = self.seen()
+        self.assertNotIn("TELEGRAM_BOT_TOKEN", seen)
+        self.assertEqual(seen["ANTHROPIC_API_KEY"], "given", "only what env= passes reaches the binary")
+        self.assertIn("PATH", seen)
+        self.assertEqual(seen["RECALL_BACKEND"], "mongodb", "Recall's own variables are kept")
+        self.assertEqual(seen["RECALL_COLLECTION"], "team")
+        with unittest.mock.patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "t"}):
+            with Client(inherit_env=False, local_dir=Path(self.directory.name) / "memory",
+                        env={"FAKE_ENV_FILE": str(self.env_file)}):
+                pass
+        seen = self.seen()
+        self.assertNotIn("TELEGRAM_BOT_TOKEN", seen)
+        self.assertEqual(seen["RECALL_BACKEND"], "local")
+        self.assertNotIn("RECALL_COLLECTION", seen)
+
+    def test_inherit_env_false_needs_a_local_process(self):
+        with self.assertRaises(ValueError):
+            Client(url="http://s", api_key="rcl", inherit_env=False)
 
     def test_nothing_named_leaves_the_environment_to_the_binary(self):
         from polign_recall import Database

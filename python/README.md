@@ -103,6 +103,17 @@ The model is `provider:model`: `anthropic:<model>`, `openai:<model>`, or
 `ollama:<model>`, with keys from `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
 `POLIGN_EXTRACT_MODEL` in the environment does the same.
 
+The `recall` process inherits this process's environment, plus whatever
+`env=` passes. A host that holds keys for many services can keep them from
+the binary with `inherit_env=False`: the process then gets only `PATH`, the
+home and temporary directories, the `RECALL_*` and `POLIGN_*` variables and
+`env=`, so pass the extraction key there:
+
+```python
+Client(extract_model="anthropic:claude-haiku-5-5", inherit_env=False,
+       env={"ANTHROPIC_API_KEY": key})
+```
+
 ### Typed memory
 
 With `typed=True`, the client uses the typed tools (`recall mcp -typed`,
