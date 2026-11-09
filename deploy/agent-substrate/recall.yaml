@@ -1,0 +1,63 @@
+# recall serve, accepting Agent Substrate actor JWTs.
+#
+# The server trusts one issuer, the install's ate-idp-server, and reaches it
+# over TLS with the CA that signs in-cluster Service certificates.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: recall-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recall
+  namespace: recall-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: recall}
+  template:
+    metadata:
+      labels: {app: recall}
+    spec:
+      containers:
+      - name: recall
+        image: RECALL_IMAGE
+        args:
+        - serve
+        - -substrate-issuer=https://idp.ate-system.svc
+        - -substrate-audience=recall
+        - -substrate-ca-file=/run/servicedns-ca/trust-bundle.pem
+        env:
+        # The demo keeps memory in a local database inside the pod. A real
+        # install names a backend with RECALL_BACKEND and RECALL_BACKEND_URL.
+        - name: RECALL_HOME
+          value: /data
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - {name: data, mountPath: /data}
+        - {name: servicedns-ca, mountPath: /run/servicedns-ca, readOnly: true}
+      volumes:
+      - name: data
+        emptyDir: {}
+      - name: servicedns-ca
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: recall
+  namespace: recall-system
+spec:
+  selector: {app: recall}
+  ports:
+  - port: 80
+    targetPort: 8080

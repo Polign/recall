@@ -1,0 +1,24 @@
+# The demo ActorTemplate, for `kubectl ate create actor-template -f`.
+# The actor is given Recall's URL and nothing else: no key, no token file.
+metadata:
+  atespace: recall-demo
+  name: agent
+workerSelector:
+  matchLabels:
+    workload: recall-demo
+containers:
+- name: agent
+  image: ACTOR_IMAGE
+  env:
+  - name: RECALL_URL
+    value: http://recall.recall-system.svc.cluster.local
+  wakeupProbe:
+    httpGet:
+      path: /readyz
+      port: 80
+resources:
+  limits:
+    cpuMillicores: 500
+    memoryBytes: 268435456 # 256Mi
+snapshotConfig:
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY

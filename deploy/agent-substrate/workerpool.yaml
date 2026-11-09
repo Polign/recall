@@ -1,0 +1,18 @@
+# The workers the demo actors run on.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: recall-demo
+---
+apiVersion: ate.dev/v1
+kind: WorkerPool
+metadata:
+  name: recall-demo
+  namespace: recall-demo
+  labels:
+    workload: recall-demo
+spec:
+  replicas: 2
+  workerImage: WORKER_IMAGE
+  sandboxClasses:
+  - name: gvisor
