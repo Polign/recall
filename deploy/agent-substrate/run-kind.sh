@@ -19,7 +19,13 @@ RECALL_HOST=recall.recall-system.svc.cluster.local
 
 k() { kubectl --context "$CONTEXT" "$@"; }
 # kubectl-ate warns on every call that it acts as the shared identity.
-ate() { "$ATE" --context "$CONTEXT" "$@" 2> >(grep -v '^Warning: no --token-file' >&2); }
+ERR="$(mktemp)"
+ate() {
+  local rc=0
+  "$ATE" --context "$CONTEXT" "$@" 2>"$ERR" || rc=$?
+  grep -v '^Warning: no --token-file' "$ERR" >&2 || true
+  return "$rc"
+}
 say() { printf '\n== %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
@@ -31,7 +37,7 @@ stop_proxies() {
   done
   PIDS=()
 }
-trap stop_proxies EXIT
+trap 'stop_proxies; rm -f "$ERR"' EXIT
 
 clean() {
   for a in agent-1 agent-2; do ate delete actor "$a" -a "$ATESPACE" >/dev/null 2>&1 || true; done
@@ -47,7 +53,7 @@ fi
 # proxy <actor> <local port>: a local port that reaches the actor through the
 # router, resuming the actor when it is suspended.
 proxy() {
-  ate proxy actor "$1" "$2:80" -a "$ATESPACE" >/dev/null 2>&1 &
+  "$ATE" --context "$CONTEXT" proxy actor "$1" "$2:80" -a "$ATESPACE" >/dev/null 2>&1 &
   PIDS+=("$!")
   for _ in $(seq 1 60); do
     curl -s -o /dev/null -m 2 "localhost:$2/readyz" && return 0
@@ -166,5 +172,34 @@ for _ in $(seq 1 15); do
 done
 echo "new agent-1 recalls: $out"
 [[ "$out" == *"Tuesday 14:00"* ]] || fail "the recreated actor did not reach the old actor's memory"
+
+say "6. The State API: an actor resumes only itself, and picks up where the deleted actor stopped"
+proxy agent-2 8102
+# A run before this one may have left the agent resumed.
+call 8101 /v1/agent/release '{"agent_id":"agent-1"}' >/dev/null
+out="$(call 8101 /v1/agent/resume '{"agent_id":"agent-1"}')"
+[[ "$out" == *'"lease_held":true'* ]] || fail "agent-1 did not resume itself: $out"
+out="$(call 8101 /v1/agent/update_working_state '{"agent_id":"agent-1","goal":"move billing to the v2 API"}')"
+[[ "$out" != *'"error"'* ]] || fail "agent-1 could not write its working state: $out"
+out="$(call 8102 /v1/agent/resume '{"agent_id":"agent-1"}')"
+echo "agent-2 resuming agent-1: $out"
+[[ "$out" == *"namespace_mismatch"* ]] || fail "agent-2 was not refused agent-1's state"
+stop_proxies
+ate delete actor agent-1 -a "$ATESPACE" >/dev/null
+new_actor agent-1
+proxy agent-1 8101
+for _ in $(seq 1 15); do
+  out="$(call 8101 /v1/agent/resume '{"agent_id":"agent-1"}')"
+  [[ "$out" == *"already_resumed"* || "$out" == *"briefing"* ]] && break
+  sleep 2
+done
+# The server still holds the agent for the actor that was deleted. The new
+# actor releases it and resumes.
+if [[ "$out" == *"already_resumed"* ]]; then
+  call 8101 /v1/agent/release '{"agent_id":"agent-1"}' >/dev/null
+  out="$(call 8101 /v1/agent/resume '{"agent_id":"agent-1"}')"
+fi
+echo "new agent-1 resumes: $out"
+[[ "$out" == *"move billing to the v2 API"* ]] || fail "the recreated actor did not get the working state back"
 
 say "All checks passed"

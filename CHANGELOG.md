@@ -16,8 +16,11 @@
   actor deleted and created again under the same name reaches the same
   memory. `-substrate-scope atespace` gives the actors of one atespace one
   shared namespace instead. `-substrate-ca-file` names the CA bundle for the
-  issuer's certificate. The token is not bound to a session, so State API
-  writes carry the lease epoch as they do with an ordinary key.
+  issuer's certificate. For the State API the token fixes the agent to the
+  actor's name: an actor resumes only itself, and its writes need no lease
+  epoch. The token carries no session, so an actor created again under a
+  deleted actor's name gets `409 already_resumed` on `agent_resume`, calls
+  `agent_release`, and resumes with the working state the old actor left.
 - Python: `Client(inherit_env=False)` starts the `recall` process, and the
   `recall setup -local` it may run for an older binary, with only what the
   binary needs from the calling process: `PATH`, the home and temporary

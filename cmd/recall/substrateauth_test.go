@@ -29,6 +29,8 @@ type fakeIssuer struct {
 	fetches atomic.Int32
 	// claimIssuer overrides the issuer the discovery document names.
 	claimIssuer string
+	// down makes the key set answer 503.
+	down atomic.Bool
 }
 
 func newFakeIssuer(t *testing.T) *fakeIssuer {
@@ -44,6 +46,10 @@ func newFakeIssuer(t *testing.T) *fakeIssuer {
 	})
 	mux.HandleFunc("/openid/v1/jwks", func(w http.ResponseWriter, _ *http.Request) {
 		f.fetches.Add(1)
+		if f.down.Load() {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"keys": f.keys})
 	})
 	f.srv = httptest.NewTLSServer(mux)
@@ -235,6 +241,44 @@ func TestSubstrateAuthKeyRefetch(t *testing.T) {
 	}
 	if got := f.fetches.Load(); got != 2 {
 		t.Fatalf("key set fetched %d times, want 2", got)
+	}
+}
+
+// An issuer that is down is asked again after the retry wait, and the keys the
+// server already holds stay in use meanwhile.
+func TestSubstrateAuthIssuerDown(t *testing.T) {
+	f := newFakeIssuer(t)
+	ec := f.addEC(t, "ec-1")
+	s := newTestSubstrateAuth(t, f, "")
+	clock := time.Now()
+	s.now = func() time.Time { return clock }
+	ctx := context.Background()
+	token := signJWT(t, ec, "ES256", "ec-1", actorToken(f.srv.URL, clock))
+
+	f.down.Store(true)
+	if _, err := s.Authenticate(ctx, token); !errors.Is(err, errUnauthenticated) {
+		t.Fatalf("issuer down = %v, want errUnauthenticated", err)
+	}
+	f.down.Store(false)
+	if _, err := s.Authenticate(ctx, token); !errors.Is(err, errUnauthenticated) {
+		t.Fatalf("inside the retry wait = %v, want errUnauthenticated", err)
+	}
+	if got := f.fetches.Load(); got != 1 {
+		t.Fatalf("key set fetched %d times, want 1", got)
+	}
+	clock = clock.Add(substrateKeyRetry + time.Second)
+	if _, err := s.Authenticate(ctx, token); err != nil {
+		t.Fatalf("after the retry wait: %v", err)
+	}
+
+	// Down again: a token naming an unknown key fails, the known key works.
+	f.down.Store(true)
+	clock = clock.Add(substrateKeyRefetch + time.Second)
+	if _, err := s.Authenticate(ctx, signJWT(t, ec, "ES256", "ec-9", actorToken(f.srv.URL, clock))); !errors.Is(err, errUnauthenticated) {
+		t.Fatalf("unknown key with the issuer down = %v, want errUnauthenticated", err)
+	}
+	if _, err := s.Authenticate(ctx, signJWT(t, ec, "ES256", "ec-1", actorToken(f.srv.URL, clock))); err != nil {
+		t.Fatalf("known key with the issuer down: %v", err)
 	}
 }
 

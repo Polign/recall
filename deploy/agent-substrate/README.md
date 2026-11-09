@@ -36,7 +36,7 @@ including the counter demo, and put `kubectl-ate` on your `PATH`. Then:
 ```
 
 The script builds the `recall` image and a small demo actor from this
-repository, deploys them, and checks five things:
+repository, deploys them, and checks six things:
 
 1. An actor remembers a fact and recalls it, holding no key.
 2. A second actor asks the same question and gets nothing.
@@ -45,6 +45,8 @@ repository, deploys them, and checks five things:
    and Recall answers on the first call after the resume.
 5. After the actor is deleted and created again, the counter starts over and
    the memory is still there.
+6. Through the State API, an actor is refused another actor's state, and an
+   actor created again resumes with the working state the deleted one left.
 
 `./run-kind.sh clean` removes what the script created.
 
@@ -68,7 +70,11 @@ repository, deploys them, and checks five things:
 - **The demo keeps memory in a local database inside the Recall pod**, which is
   lost when that pod is replaced. A real install names a backend with
   `RECALL_BACKEND` and `RECALL_BACKEND_URL`.
-- **The State API works as it does with an ordinary key.** The token is not
-  bound to a session, so writes carry the lease epoch.
+- **For the State API, the agent is the actor.** An actor may resume only the
+  agent with its own name, and its writes need no lease epoch. An actor
+  created again under a deleted actor's name gets `409 already_resumed` on
+  `agent_resume`, because the server still holds the agent for the old actor.
+  It calls `agent_release` and resumes, and gets the old actor's working
+  state back.
 
 Tested on kind with Substrate v1.0.0 and gVisor workers.

@@ -59,6 +59,10 @@ const (
 	// set, so tokens naming unknown keys cannot make the server hammer the
 	// issuer. A new key is published before it signs, so one refetch finds it.
 	substrateKeyRefetch = 30 * time.Second
+	// substrateKeyRetry is the wait after a fetch that failed. It is shorter,
+	// so a server started before the issuer is reachable accepts tokens soon
+	// after the issuer comes up.
+	substrateKeyRetry = 5 * time.Second
 	// maxActorJWT bounds a presented token. A Substrate token with 16
 	// audiences of 512 bytes is under 12 KiB.
 	maxActorJWT = 16 << 10
@@ -76,9 +80,14 @@ type substrateAuth struct {
 	caFile string
 	now    func() time.Time
 
+	// fetchMu lets one request fetch the key set at a time. mu guards the
+	// fields below and is never held across a fetch, so a slow issuer does not
+	// hold up tokens signed by a key the server already has.
+	fetchMu sync.Mutex
 	mu      sync.Mutex
 	keys    map[string]crypto.PublicKey
-	fetched time.Time
+	// nextFetch is the earliest time the key set is fetched again.
+	nextFetch time.Time
 }
 
 type substrateAuthConfig struct {
@@ -245,23 +254,40 @@ func verifyJWTSignature(key crypto.PublicKey, alg, signed string, sig []byte) bo
 // none. An unknown id refetches the key set, at most once per
 // substrateKeyRefetch.
 func (s *substrateAuth) key(ctx context.Context, kid string) (crypto.PublicKey, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if k, ok := s.keys[kid]; ok {
+	if k, wait := s.cached(kid); k != nil || wait {
 		return k, nil
 	}
-	if !s.fetched.IsZero() && s.now().Sub(s.fetched) < substrateKeyRefetch {
-		return nil, nil
+	s.fetchMu.Lock()
+	defer s.fetchMu.Unlock()
+	// Another request may have fetched while this one waited its turn.
+	if k, wait := s.cached(kid); k != nil || wait {
+		return k, nil
 	}
-	keys, err := s.fetchKeys(ctx)
-	// A failed fetch counts too: an issuer that is down is not asked again on
-	// every request.
-	s.fetched = s.now()
+	// The fetch does not end with the request that started it: the keys are
+	// for every later request too.
+	keys, err := s.fetchKeys(context.WithoutCancel(ctx))
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err != nil {
+		// The keys already held stay in use. An issuer that is down is not
+		// asked again on every request.
+		s.nextFetch = s.now().Add(substrateKeyRetry)
 		return nil, err
 	}
 	s.keys = keys
+	s.nextFetch = s.now().Add(substrateKeyRefetch)
 	return keys[kid], nil
+}
+
+// cached returns the key with this id when the server holds it, and whether an
+// unknown id must wait before the key set is fetched again.
+func (s *substrateAuth) cached(kid string) (crypto.PublicKey, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if k, ok := s.keys[kid]; ok {
+		return k, false
+	}
+	return nil, s.now().Before(s.nextFetch)
 }
 
 // fetchKeys reads the discovery document and then the key set it names.
