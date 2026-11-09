@@ -56,7 +56,9 @@ proxy() {
   fail "no proxy to $1 on port $2"
 }
 
-call() { curl -s -m 60 -X POST "localhost:$1$2" -d "${3:-}"; }
+# A failed call prints nothing, so the check after it fails with a message
+# instead of the script stopping silently.
+call() { curl -s -m 60 -X POST "localhost:$1$2" -d "${3:-}" || true; }
 
 new_actor() {
   ate create actor "$1" -a "$ATESPACE" --template agent >/dev/null
@@ -124,8 +126,13 @@ echo "agent-2 recalls: $out"
 say "3. A caller with no actor JWT is refused"
 k -n recall-system port-forward svc/recall 8180:80 >/dev/null 2>&1 &
 PIDS+=("$!")
-sleep 2
-code="$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST localhost:8180/v1/recall -H 'Authorization: Bearer placeholder' -d '{"question":"billing"}')"
+# curl prints 000 until the port-forward is listening.
+code=000
+for _ in $(seq 1 30); do
+  code="$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST localhost:8180/v1/recall -H 'Authorization: Bearer placeholder' -d '{"question":"billing"}' || true)"
+  [[ "$code" != "000" ]] && break
+  sleep 1
+done
 echo "direct call with the placeholder: HTTP $code"
 [[ "$code" == "401" ]] || fail "a call without an actor JWT got HTTP $code, want 401"
 
