@@ -4,6 +4,20 @@
 
 ### Added
 
+- `recall serve -substrate-issuer https://idp.ate-system.svc`
+  (`RECALL_SUBSTRATE_ISSUER`): accepts an Agent Substrate actor JWT as the
+  bearer on every request. The actor's egress policy has the gateway put the
+  token in the `Authorization` header, so the actor holds no Recall key and
+  none is written into its snapshots. The server checks the token against the
+  issuer's discovery document and key set (ES256 or RS256), its audience
+  (`-substrate-audience`, default `recall`), its expiry, and that the subject
+  is `actor/<atespace>/<name>`; `worker-for-actor` tokens are refused. The
+  namespace is `<atespace>:<name>` and the agent is the actor's name, so an
+  actor deleted and created again under the same name reaches the same
+  memory. `-substrate-scope atespace` gives the actors of one atespace one
+  shared namespace instead. `-substrate-ca-file` names the CA bundle for the
+  issuer's certificate. The token is not bound to a session, so State API
+  writes carry the lease epoch as they do with an ordinary key.
 - Python: `Client(inherit_env=False)` starts the `recall` process, and the
   `recall setup -local` it may run for an older binary, with only what the
   binary needs from the calling process: `PATH`, the home and temporary

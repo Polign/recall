@@ -815,6 +815,10 @@ func cmdServe(global *dbFlags, args []string) error {
 	kubeKeyTTL := fs.Duration("kubernetes-key-ttl", defaultKubeKeyTTL, "lifetime of a key minted for a pod; the pod renews it")
 	kubeSandboxClaims := fs.Bool("kubernetes-sandbox-claims", os.Getenv("RECALL_KUBERNETES_SANDBOX_CLAIMS") == "1", "with agent-sandbox, the agent is the name of the SandboxClaim that owns the pod's Sandbox (pod -> Sandbox -> SandboxClaim); a Sandbox with no claim falls back to -kubernetes-agent-label, then the pod's name. Needs get on pods, sandboxes and sandboxclaims (default on when $RECALL_KUBERNETES_SANDBOX_CLAIMS is 1)")
 	kubeAgentLabel := fs.String("kubernetes-agent-label", os.Getenv("RECALL_KUBERNETES_AGENT_LABEL"), "label on the pod that names the agent, for pods handed out by a pool under generated names; empty uses the pod's name. The namespace stays <tenant>:<agent>")
+	substrateIssuer := fs.String("substrate-issuer", os.Getenv("RECALL_SUBSTRATE_ISSUER"), "accept Agent Substrate actor JWTs from this issuer as the bearer, e.g. https://idp.ate-system.svc; the actor's egress policy injects the token, so the actor holds no key (default $RECALL_SUBSTRATE_ISSUER)")
+	substrateAudience := fs.String("substrate-audience", envOr("RECALL_SUBSTRATE_AUDIENCE", defaultSubstrateAudience), "audience an actor JWT must carry")
+	substrateCA := fs.String("substrate-ca-file", os.Getenv("RECALL_SUBSTRATE_CA_FILE"), "CA bundle for the issuer's certificate; empty uses the system roots (default $RECALL_SUBSTRATE_CA_FILE)")
+	substrateScope := fs.String("substrate-scope", envOr("RECALL_SUBSTRATE_SCOPE", substrateScopeActor), "what an actor reaches: actor gives each actor its own namespace <atespace>:<name>; atespace gives the actors of one atespace one shared namespace")
 	collection := fs.String("collection", settingOr("COLLECTION", "recall_lexical_v1"), "collection name prefix; each namespace gets its own collection under it")
 	predicates := fs.String("predicates", setting("PREDICATES"), "predicate registry JSON file; omitted uses the starter registry")
 	embedURL := fs.String("embed-url", setting("EMBED_URL"), "embedding service that answers POST /embed {text} with {values}")
@@ -911,8 +915,16 @@ func cmdServe(global *dbFlags, args []string) error {
 	} else if *bootstrapKey != "" {
 		return fmt.Errorf("serve: the %s backend cannot read records by id, so it keeps no key store", name)
 	}
+	var substrate *substrateAuth
+	if *substrateIssuer != "" {
+		substrate, err = newSubstrateAuth(substrateAuthConfig{issuer: *substrateIssuer, audience: *substrateAudience, caFile: *substrateCA, scope: *substrateScope})
+		if err != nil {
+			return fmt.Errorf("serve: -substrate-issuer: %w", err)
+		}
+		auth = append(auth, substrate)
+	}
 	if len(auth) == 0 {
-		return errors.New("serve: no way to authenticate callers; the backend keeps no key store, so give -keys-file")
+		return errors.New("serve: no way to authenticate callers; the backend keeps no key store, so give -keys-file or -substrate-issuer")
 	}
 	var kubeExchange *kubeAuth
 	if *kube {
@@ -949,6 +961,14 @@ func cmdServe(global *dbFlags, args []string) error {
 			agentFrom = "the SandboxClaim that owns the pod's Sandbox, else " + agentFrom
 		}
 		log.Printf("serve: kubernetes workload tokens with audience %q exchanged for %s keys; tenant from %s; agent from %s", *kubeAudience, *kubeKeyTTL, tenantFrom, agentFrom)
+	}
+
+	if substrate != nil {
+		reach := "its own namespace <atespace>:<name>"
+		if substrate.shared {
+			reach = "the namespace its atespace shares"
+		}
+		log.Printf("serve: Agent Substrate actor JWTs from %s with audience %q accepted as the bearer; an actor reaches %s", substrate.issuer, substrate.audience, reach)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
