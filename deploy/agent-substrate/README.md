@@ -50,9 +50,11 @@ repository, deploys them, and checks five things:
 
 ## What to know
 
-- **Use the full Service name.** An actor's DNS only answers names its egress
-  policy lists, and it does not apply the cluster's search domains. The policy
-  and `RECALL_URL` both name `recall.recall-system.svc.cluster.local`.
+- **Use the full Service name in the egress policy.** An actor's DNS only
+  answers names its egress policy lists, and it matches the name as it is
+  looked up, which for a Service is the fully qualified one. A policy that
+  lists `recall.recall-system.svc` gets `no such host`. The policy and
+  `RECALL_URL` both name `recall.recall-system.svc.cluster.local`.
 - **Every actor needs its own egress policy.** A policy belongs to one actor.
   Without one the actor reaches nothing, Recall included.
 - **Connections do not survive a suspend.** Substrate does not keep open
