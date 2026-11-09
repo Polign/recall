@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "polign-recall"
-version = "0.24.0"
+version = "0.25.0"
 description = "Memory and state for AI agents: corrections kept with history, and agents that resume from their own records"
 readme = "README.md"
 requires-python = ">=3.10"

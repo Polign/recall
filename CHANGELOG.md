@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.25.0] - 2026-11-09
 
 ### Added
 
@@ -29,6 +29,15 @@
   API key or a bot token, reaches the binary. The default is unchanged: the
   process inherits the whole environment. `inherit_env` goes with a local
   process and is refused with `url=`.
+- `deploy/agent-substrate`: Recall beside an Agent Substrate install, with a
+  demo actor and a script that runs it on kind and checks that an actor
+  reaches only its own memory and state, and that both outlive a suspend and
+  a deleted actor.
+
+### Changed
+
+- Dependencies: the Anthropic SDK 1.78.0 to 1.84.0, pgx 5.11.0 to 5.12.0,
+  hugot 0.8.3 to 0.8.5, and the MongoDB driver 2.4.2 to 2.9.3.
 
 ## [0.24.0] - 2026-10-29
 
