@@ -259,6 +259,12 @@ renew by themselves. The Helm chart is `charts/recall` in
 [Polign/polign](https://github.com/Polign/polign); the
 [agent-sandbox demo](deploy/agent-sandbox) runs it on kind.
 
+On [Agent Substrate](https://github.com/agent-substrate/substrate) an actor
+needs no key either. With `recall serve -substrate-issuer`, the actor's egress
+policy has Substrate's gateway put a short-lived token for that actor in the
+`Authorization` header, and the server gives each actor its own memory. The
+[agent-substrate example](deploy/agent-substrate) runs it on kind.
+
 ## Backends
 
 | | local (default) | polign_db | PostgreSQL + pgvector | MongoDB | Qdrant |

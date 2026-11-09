@@ -88,6 +88,10 @@ Kubernetes-mode keys default to a 15 minute TTL (`-kubernetes-key-ttl`) and are 
 
 Clients: `RECALL_TOKEN_FILE` names the projected token (audience `recall`); `recall connect` and the Python client (`Client(url=..., token_file=...)` or `Client.from_env()`, which defaults to `/var/run/secrets/recall/token` when it exists) exchange and re-exchange it by themselves. `RECALL_AGENT` and `RECALL_SESSION` are informational in this mode; the server derives both.
 
+### Agent Substrate actor identity
+
+On Agent Substrate an actor holds no credential at all. With `recall serve -substrate-issuer <issuer>`, the server accepts an actor JWT as the bearer on every request; the actor's egress policy has Substrate's gateway put the token in the `Authorization` header (`actorJwt` with the audience `recall`, or the one `-substrate-audience` names). There is no exchange and no Recall key. The server checks the token against the issuer's discovery document and key set, and refuses `worker-for-actor` tokens. The subject `actor/<atespace>/<name>` gives the namespace `<atespace>:<name>`, or the atespace alone with `-substrate-scope atespace`, and the `agent` is the actor's name: a request that names another `agent_id` is refused with `403 namespace_mismatch`, and a write need not carry the epoch. The token carries no session. An actor created again under a deleted actor's name gets `409 already_resumed` from `agent_resume`, because the server still holds the agent for the old actor; it calls `agent_release` and resumes. Added in 0.25.
+
 ## 6. Backend requirements
 
 The State API needs two capabilities beyond the Memory API's core, from the [backend capability matrix](memory-api-v1.md#7-backend-capability-matrix):
