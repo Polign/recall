@@ -165,7 +165,7 @@ jobs:
         run: |
           python -m pip install --upgrade polign_db
           echo "POLIGN_SERVER_BIN=$(python -c 'import polign_db; print(polign_db.find_bin("polign-server"))')" >> "$GITHUB_ENV"
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build the image
         run: docker buildx build --load --platform linux/amd64 -f deploy/container/Dockerfile -t recall:ci .
       - name: Smoke test
