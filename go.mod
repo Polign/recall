@@ -8,9 +8,9 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.84.0
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/knights-analytics/hugot v0.8.5
-	go.mongodb.org/mongo-driver/v2 v2.9.3
-	golang.org/x/sys v0.49.0
-	golang.org/x/term v0.47.0
+	go.mongodb.org/mongo-driver/v2 v2.10.0
+	golang.org/x/sys v0.50.0
+	golang.org/x/term v0.48.0
 )
 
 require (
@@ -42,8 +42,7 @@ require (
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
-	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
-	github.com/xdg-go/scram v1.2.0 // indirect
+	github.com/xdg-go/scram v1.4.0 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
