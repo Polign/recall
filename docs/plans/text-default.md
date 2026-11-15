@@ -1,5 +1,7 @@
 # Text tools by default, predicates as the option
 
+Released: recall 0.18.0, 2026-10-13 (`recall mcp` and `recall serve` serve the text tools by default). The status below is as written before the build.
+
 Status: decided 2026-10-13. Nothing built.
 
 ## Decision

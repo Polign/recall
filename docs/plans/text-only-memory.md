@@ -1,5 +1,7 @@
 # Text-only memory: predicates become internal
 
+Released: the text tools shipped in the 0.16 to 0.18 releases, October 2026; see CHANGELOG. The status below is as written before release.
+
 Status: phases 1 to 6 built on branch `at/text-only-memory` (2026-10-09).
 
 ## Goal

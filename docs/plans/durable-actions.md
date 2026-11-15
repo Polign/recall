@@ -1,5 +1,7 @@
 # Durable actions: intents, reconcile, fencing
 
+Released: recall 0.21.0 and polign_db 0.15.0, 2026-10-18. The status below is as written before release.
+
 Status: built 2026-10-17 on branch `at/durable-actions` (polign_db, recall,
 polign). Not released. Differences from the design below: the fence is three
 headers (`Polign-Lease-Name`, `-Holder`, `-Epoch`), because holder strings

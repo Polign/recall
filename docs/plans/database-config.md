@@ -1,5 +1,7 @@
 # One way to say where memory lives
 
+Released: recall 0.23.0, 2026-10-24. The status below is as written before release.
+
 Status: decided 2026-10-23 (see the end). Phases 1 and 2 built the same day
 on `at/database-config` in Polign/recall and Polign/polign, unreleased.
 Phase 3 (the site) is prepared on polign_web branch `at/database-config` and merges once 0.23.0 is on every channel, since pushing main publishes the site. `Client.database`
