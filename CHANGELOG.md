@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Anonymous usage statistics, on by default in release builds. `recall mcp`
+  and `recall serve` send a heartbeat a few seconds after they start, every
+  hour, and as they exit; `recall setup` sends one when it finishes. A
+  heartbeat holds the version, the platform, a random install ID, the
+  backend's name, the embedding and extraction providers, the MCP client's
+  name, and counts of successful tool calls. It never holds memory text,
+  subjects, predicates, collection names, addresses, keys or model names.
+  `recall telemetry` prints exactly what is sent. Turn it off with
+  `recall telemetry off`, `RECALL_TELEMETRY=0` or `DO_NOT_TRACK=1`; it is
+  also off in CI and in builds from source. See [TELEMETRY.md](TELEMETRY.md).
+
 ## [0.25.0] - 2026-11-09
 
 ### Added
