@@ -192,7 +192,9 @@ func cmdMCP(global *dbFlags, args []string) error {
 		}
 		s.agents = newAgentRuntime()
 	}
+	startUsage("mcp", d.Backend, emb.spec, extract, serveText)
 	err = s.serve(context.Background(), os.Stdin)
+	usage.Close()
 	if s.agents != nil {
 		s.agents.releaseAll()
 	}
@@ -309,8 +311,12 @@ func (s *mcpServer) dispatch(ctx context.Context, method string, params json.Raw
 func (s *mcpServer) initialize(params json.RawMessage) any {
 	var p struct {
 		ProtocolVersion string `json:"protocolVersion"`
+		ClientInfo      struct {
+			Name string `json:"name"`
+		} `json:"clientInfo"`
 	}
 	_ = json.Unmarshal(params, &p)
+	usage.SetClient(p.ClientInfo.Name)
 	negotiated := mcpVersions[0]
 	if slices.Contains(mcpVersions, p.ProtocolVersion) {
 		negotiated = p.ProtocolVersion
@@ -375,6 +381,9 @@ func (s *mcpServer) callTool(ctx context.Context, params json.RawMessage) (any, 
 
 func (s *mcpServer) runTool(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	if out, handled, err := s.runMemoryTool(ctx, name, args); handled {
+		if err == nil {
+			countTool(name, out)
+		}
 		return out, err
 	}
 	return "", fmt.Errorf("unknown memory tool %q", name)

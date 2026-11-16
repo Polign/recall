@@ -11,6 +11,7 @@
 //	recall diff -from T [-to T]          show what changed between two instants
 //	recall reembed -embed-model <spec>   copy memory into a collection searched by meaning
 //	recall doctor                        check a configured Recall end to end
+//	recall telemetry [on|off]            show the anonymous usage statistics sent, or turn them off
 //	recall skill                         print the agent guide
 package main
 
@@ -36,7 +37,7 @@ func main() {
 	global := addDatabaseFlags(flag.CommandLine)
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Usage = func() {
-		fmt.Fprintln(flag.CommandLine.Output(), "Usage: recall [flags] <command> [options]\n\nCommands: mcp, connect, serve, key, explain, history, ask, diff, reembed, setup, doctor, skill\nAgent guide: recall skill (offline)\n\nThe database flags below go before the command or after it:")
+		fmt.Fprintln(flag.CommandLine.Output(), "Usage: recall [flags] <command> [options]\n\nCommands: mcp, connect, serve, key, explain, history, ask, diff, reembed, setup, doctor, telemetry, skill\nAgent guide: recall skill (offline)\n\nThe database flags below go before the command or after it:")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -71,10 +72,12 @@ func main() {
 		err = cmdReembed(global, args, os.Stdout)
 	case "setup", "doctor":
 		err = cmdRecall(global, append([]string{cmd}, args...), os.Stdout)
+	case "telemetry":
+		err = cmdTelemetry(args, os.Stdout)
 	case "skill":
 		err = cmdSkill(args, os.Stdout)
 	default:
-		err = fmt.Errorf("unknown command %q (want mcp, connect, serve, key, explain, history, ask, diff, reembed, setup, doctor, skill)", cmd)
+		err = fmt.Errorf("unknown command %q (want mcp, connect, serve, key, explain, history, ask, diff, reembed, setup, doctor, telemetry, skill)", cmd)
 	}
 	if err != nil {
 		log.Fatal(err)

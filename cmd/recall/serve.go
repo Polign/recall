@@ -973,6 +973,8 @@ func cmdServe(global *dbFlags, args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	startUsage("serve", name, emb.spec, *extractModel, serveText)
+	defer usage.Close()
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
 	select {

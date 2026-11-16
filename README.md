@@ -329,7 +329,16 @@ the full history. The harness is in [`eval/longmemeval`](eval/longmemeval).
 [Caching memory reads](docs/materialization.md) ·
 [Exporting and replaying history](docs/audit.md) ·
 [What is stable and what is beta](STABILITY.md) ·
-[Development guide](docs/development.md)
+[Development guide](docs/development.md) ·
+[Usage statistics](TELEMETRY.md)
+
+## Usage statistics
+
+Release builds send an anonymous heartbeat: version, platform, a random
+install ID, and counts of memory operations. Nothing that is remembered is
+ever sent. `recall telemetry` prints exactly what is sent, and
+`recall telemetry off`, `RECALL_TELEMETRY=0` or `DO_NOT_TRACK=1` turns it
+off. [TELEMETRY.md](TELEMETRY.md) lists every field.
 
 ## Support the project
 

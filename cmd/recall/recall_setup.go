@@ -22,6 +22,7 @@ import (
 	"github.com/Polign/recall"
 	"github.com/Polign/recall/backend/local"
 	"github.com/Polign/recall/internal/recallsetup"
+	"github.com/Polign/recall/internal/telemetry"
 	"golang.org/x/term"
 )
 
@@ -279,6 +280,9 @@ func cmdRecall(global *dbFlags, args []string, out io.Writer) error {
 			return err
 		}
 	}
+	telemetry.Once(usageConfig("setup", cfg.BackendName(), cfg.EmbedModel, cfg.ExtractModel, cfg.ExtractModel != "" && !cfg.Typed), func(notice string) {
+		fmt.Fprintln(out, notice)
+	})
 	fmt.Fprintln(out, "Ready. Restart Claude Code, then ask:\n/recall:recall-memory Remember that I prefer concise answers.")
 	return nil
 }
@@ -419,7 +423,9 @@ func serveSetup(dir string, agent bool) error {
 		}
 		s.agents = newAgentRuntime()
 	}
+	startUsage("mcp", cfg.BackendName(), emb.spec, spec, text)
 	err = s.serve(context.Background(), os.Stdin)
+	usage.Close()
 	if s.agents != nil {
 		s.agents.releaseAll()
 	}
