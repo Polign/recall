@@ -48,6 +48,24 @@ repository, deploys them, and checks six things:
 6. Through the State API, an actor is refused another actor's state, and an
    actor created again resumes with the working state the deleted one left.
 
+Checks 7 to 10 test Recall state when the runtime puts a process back to an
+earlier point. The demo actor runs a small harness whose progress lives in
+process memory, and the script counts its side effects outside the actor:
+
+7. An actor sends an invoice, is reverted to a snapshot taken before, and runs
+   its job again.
+8. An actor sends `record_turn`, `begin_action` and `end_action` twice each,
+   as it would after losing the first answer.
+9. An actor created from another actor's tag calls the State API with the id
+   it woke up holding.
+10. An actor holds an agent in process through the Go client, against a
+    polign_db it reaches directly (`polign.yaml`), and is reverted inside the
+    lease TTL and after it.
+
+Where Recall does not yet behave as it should, these print `GAP` and the
+script exits 1; see `docs/plans/snapshot-compatibility.md`.
+`SKIP_BASE=1 ./run-kind.sh` runs only checks 7 to 10.
+
 `./run-kind.sh clean` removes what the script created.
 
 ## What to know

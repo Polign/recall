@@ -1,6 +1,7 @@
 # One actor's egress policy, for `kubectl ate create egress-policy <actor> -f`.
-# The actor may reach Recall and nothing else. On a request to Recall the
-# gateway replaces the Authorization header with a JWT minted for the actor.
+# The actor may reach Recall and, for check 10 only, the polign_db it holds
+# an agent against in process. On a request to Recall the gateway replaces
+# the Authorization header with a JWT minted for the actor.
 rules:
 - http:
     hostnames: ["recall.recall-system.svc.cluster.local"]
@@ -11,3 +12,5 @@ rules:
         actorJwt:
           audiences: ["recall"]
           expirationSeconds: 900
+- http:
+    hostnames: ["polign.recall-system.svc.cluster.local"]
