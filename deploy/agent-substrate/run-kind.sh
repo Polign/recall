@@ -227,7 +227,10 @@ job() {
   local out
   out="$(call "$1" /h/job)"
   echo "$out" | jq -c '{from_step, step, action_seq, effects, error}' >&2
-  for _ in $(seq 1 "$(echo "$out" | jq -r '.effects // 0')"); do echo invoice >>"$EFFECTS"; done
+  # Not seq: on macOS, seq 1 0 counts down and prints two lines.
+  local n
+  n="$(echo "$out" | jq -r '.effects // 0')"
+  while (( n > 0 )); do echo invoice >>"$EFFECTS"; n=$((n - 1)); done
   [[ "$(echo "$out" | jq -r '.error // empty')" == "" ]] || fail "the job failed: $out"
 }
 # hcall <port> <verb> [args] [repeat]: a State API call for the agent in the

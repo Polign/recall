@@ -2,8 +2,9 @@
 
 Status: plan, written 2026-11-09 against recall 0.25.0 and Agent Substrate
 v1.0.0. Phase 0 ran on kind on 2026-11-16 (results below). polign_db 0.16.0
-shipped the create-only put on 2026-11-17. Phases 1 (engine) and 2 (server
-and wire) done 2026-11-17; Phases 3 and 4 not started. The table and the in-process design were
+shipped the create-only put on 2026-11-17. Phases 1 to 4 done 2026-11-17:
+all ten kind checks pass. What is left is the integrations in Polign/polign
+after the recall release, and the site page. The table and the in-process design were
 corrected from the run.
 
 ## Goal
@@ -268,6 +269,24 @@ Done 2026-11-17 (`cmd/recall/agent_position.go`, `mcp_agent.go`,
 ### 4. Prove it and document it (about 1 day)
 
 - Checks 7 to 10 pass; check 9 shows the clear error.
+
+Done 2026-11-17, `./run-kind.sh` on kind, Substrate v1.0.0, gVisor, against
+polign_db 0.16.0 for check 10. All checks passed:
+
+- **7.** The reverted harness ran its job again: 2 turns for 2 message ids,
+  1 invoice. Its `begin_action` with `call_id` came back `done`, so it
+  skipped the send.
+- **8.** A retried `record_turn` added one turn; a retried `begin_action`
+  with a `call_id` answered the same seq and key; a repeated `end_action`
+  answered 200.
+- **9.** The clone is refused with `namespace_mismatch`.
+- **10.** In both cases the restored process's turn E answered
+  `position_behind` (at 2.0.0, records at 4.0.0), C and D were kept, and F
+  landed as turn 5: `1:A 2:B 3:C 4:D 5:F`.
+
+The first run reported one gap that was the script's: macOS `seq 1 0`
+counts down, so a job with no side effects tallied two. The tally is a
+plain loop now.
 - `deploy/agent-substrate/README.md`: revert and clone under "What to know".
 - CHANGELOG, then the site's Agent Substrate page once released.
 
