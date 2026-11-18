@@ -2,8 +2,8 @@
 
 Status: plan, written 2026-11-09 against recall 0.25.0 and Agent Substrate
 v1.0.0. Phase 0 ran on kind on 2026-11-16 (results below). polign_db 0.16.0
-shipped the create-only put on 2026-11-17. Phase 1 (engine) done 2026-11-17;
-Phases 2 to 4 not started. The table and the in-process design were
+shipped the create-only put on 2026-11-17. Phases 1 (engine) and 2 (server
+and wire) done 2026-11-17; Phases 3 and 4 not started. The table and the in-process design were
 corrected from the run.
 
 ## Goal
@@ -237,6 +237,22 @@ Done 2026-11-17 (`internal/engine/agent_position.go`). As built:
 - `docs/state-api-v1.md`: tool table, a Position section, the two error
   codes, the Substrate paragraph. The spec test in `cmd/recall` fails until
   the table matches.
+
+Done 2026-11-17 (`cmd/recall/agent_position.go`, `mcp_agent.go`,
+`serve.go`). As built:
+
+- `position` goes into every object answer, and `Recall-Position` onto every
+  HTTP answer, lists included. A `position_behind` answer carries the
+  records' `position` and the `at` it refused.
+- `at` is accepted only on the five position writes and on `agent_since`;
+  elsewhere it is `invalid_argument`. Over MCP it is optional everywhere.
+- "Bound" is a credential that fixes the agent (`principal.Agent`), which
+  covers Kubernetes keys and Substrate actors alike. `at` is required only
+  for Substrate (`principal.Substrate`), on `/v1/agent/*`.
+- The idle sweep starts with the first bound agent and runs every quarter
+  of `-agent-idle`.
+- Until Phase 3 updates the demo actor, `run-kind.sh` checks 1 to 6 fail on
+  this branch: the actor's writes carry no `at`.
 
 ### 3. Clients (about 2 days)
 

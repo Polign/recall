@@ -219,7 +219,7 @@ func (s *substrateAuth) Authenticate(ctx context.Context, credential string) (pr
 	if err := validateNamespace(ns); err != nil {
 		return principal{}, errUnauthenticated
 	}
-	return principal{Namespace: ns, Agent: name}, nil
+	return principal{Namespace: ns, Agent: name, Substrate: true}, nil
 }
 
 func decodeSegment(seg string, out any) error {

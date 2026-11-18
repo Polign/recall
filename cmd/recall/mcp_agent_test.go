@@ -16,7 +16,7 @@ func newAgentMCP(t *testing.T, url string) *mcpServer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &mcpServer{collection: "memory", write: true, memory: mem, agents: newAgentRuntime()}
+	return &mcpServer{collection: "memory", write: true, memory: mem, agents: newAgentRuntime(0)}
 }
 
 func callTool(t *testing.T, s *mcpServer, name string, args map[string]any) (string, error) {

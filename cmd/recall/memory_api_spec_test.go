@@ -165,7 +165,7 @@ func TestStateAPIDocumentMatchesServedTools(t *testing.T) {
 		t.Fatalf("no tool table found under %q", tools)
 	}
 	s := newMemoryMCP(t)
-	s.agents = newAgentRuntime()
+	s.agents = newAgentRuntime(0)
 	compareTools(t, doc, "state", s.agentTools(), table)
 
 	for name, spec := range table {
