@@ -45,6 +45,15 @@
   `POST /v1/agent/since`) reports what was recorded after a position.
   `begin_action` takes `call_id`. See section 3.1 of
   [the State API](docs/state-api-v1.md).
+- Python: `ResumedAgent.position` is the position of the last answer, and
+  every write sends it. A write refused because the records moved on raises
+  `RolledBack`; `agent.catch_up()` returns a `SinceReport` with what
+  happened after, and carries on from the records' position.
+  `begin_action(call_id=...)` returns the action already begun for that
+  call.
+- The Agent Substrate demo actor (`deploy/agent-substrate`) is a harness
+  that passes message and call ids, sends `If-Position`, and catches up
+  after `position_behind`.
 - `recall serve -agent-idle` (default 5m) releases an agent held for a
   credential bound to it (a Kubernetes key, an Agent Substrate actor) after
   that long without a call.

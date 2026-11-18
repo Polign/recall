@@ -95,7 +95,14 @@ type harness struct {
 	agentID string
 	step    int
 	action  int64
+	// position is the Recall-Position of the last answer. Every write carries
+	// it as If-Position; a revert puts the old one back, and the server then
+	// says the records moved on.
+	position string
 }
+
+// positionWrites are the verbs that carry If-Position.
+var positionWrites = map[string]bool{"record_turn": true, "begin_action": true, "end_action": true, "update_working_state": true, "milestone": true}
 
 type stateAnswer struct {
 	Status int             `json:"status"`
@@ -115,6 +122,9 @@ func (h *harness) state(ctx context.Context, verb string, args map[string]any) (
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer placeholder")
+	if positionWrites[verb] && h.position != "" {
+		req.Header.Set("If-Position", h.position)
+	}
 	resp, err := h.client.Do(req)
 	if err != nil {
 		return stateAnswer{}, err
@@ -127,7 +137,26 @@ func (h *harness) state(ctx context.Context, verb string, args map[string]any) (
 	if !json.Valid(raw) {
 		raw, _ = json.Marshal(string(raw))
 	}
+	// A refusal carries the records' position too; the harness adopts it
+	// only after it has asked what it missed.
+	if p := resp.Header.Get("Recall-Position"); p != "" && resp.StatusCode == http.StatusOK {
+		h.position = p
+	}
 	return stateAnswer{Status: resp.StatusCode, Body: raw}, nil
+}
+
+// behind reports a position_behind answer.
+func behind(a stateAnswer) bool {
+	var e struct {
+		Error struct{ Code string } `json:"error"`
+	}
+	return a.Status == http.StatusConflict && json.Unmarshal(a.Body, &e) == nil && e.Error.Code == "position_behind"
+}
+
+// catchUp asks what happened after the harness's position and adopts the
+// records' position. A real harness hands the briefing to its model.
+func (h *harness) catchUp(ctx context.Context) (stateAnswer, error) {
+	return h.state(ctx, "since", map[string]any{"at": h.position})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -148,7 +177,7 @@ func (h *harness) resume(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.agentID, h.step, h.action = in.AgentID, 0, 0
+	h.agentID, h.step, h.action, h.position = in.AgentID, 0, 0, ""
 	// A run before this one may have left the agent held for this actor.
 	_, _ = h.state(r.Context(), "release", nil)
 	a, err := h.state(r.Context(), "resume", nil)
@@ -163,6 +192,12 @@ func (h *harness) resume(w http.ResponseWriter, r *http.Request) {
 // action (sending an invoice), an assistant turn. Each step is done once as
 // far as this process remembers. "effects" counts the invoices this call
 // sent; the caller keeps the tally outside the actor.
+//
+// The harness passes its own ids: a message id per turn and a call id for
+// the invoice. After a revert it runs the job again from its old memory, and
+// the ids give back what was recorded: the begin answers "done", so the
+// invoice is not sent twice. A write the ids do not cover answers
+// position_behind; the harness catches up and tries the step again.
 func (h *harness) job(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -185,11 +220,19 @@ func (h *harness) job(w http.ResponseWriter, r *http.Request) {
 		case 0:
 			a, err = h.state(ctx, "record_turn", map[string]any{"role": "user", "content": "Send the March invoice to Acme.", "message_id": "job-user-1"})
 		case 1:
-			a, err = h.state(ctx, "begin_action", map[string]any{"tool": "send_invoice", "class": "external", "args": `{"customer":"acme","month":"2026-03"}`})
+			a, err = h.state(ctx, "begin_action", map[string]any{"tool": "send_invoice", "class": "external", "args": `{"customer":"acme","month":"2026-03"}`, "call_id": "job-send-invoice"})
 			if err == nil && a.Status == http.StatusOK {
-				var act struct{ Seq int64 }
+				var act struct {
+					Seq    int64
+					Status string
+				}
 				_ = json.Unmarshal(a.Body, &act)
 				h.action = act.Seq
+				if act.Status == "done" {
+					// Already sent before the revert: skip the effect.
+					out["skipped"] = "send_invoice was already done"
+					h.step++
+				}
 			}
 		case 2:
 			// The side effect. Nothing in Recall is involved; the caller
@@ -200,6 +243,16 @@ func (h *harness) job(w http.ResponseWriter, r *http.Request) {
 			a, err = h.state(ctx, "record_turn", map[string]any{"role": "assistant", "content": "Sent the March invoice to Acme.", "message_id": "job-assistant-1"})
 		}
 		calls = append(calls, a)
+		if err == nil && behind(a) {
+			c, cerr := h.catchUp(ctx)
+			calls = append(calls, c)
+			if cerr != nil || c.Status != http.StatusOK {
+				fail(c, cerr)
+				return
+			}
+			out["caught_up"] = true
+			continue
+		}
 		if err != nil || a.Status != http.StatusOK {
 			fail(a, err)
 			return
@@ -227,7 +280,10 @@ func (h *harness) call(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	var answers []stateAnswer
+	// A retry after a lost answer carries the position from before it.
+	from := h.position
 	for range in.Repeat {
+		h.position = from
 		args := map[string]any{}
 		for k, v := range in.Args {
 			args[k] = v

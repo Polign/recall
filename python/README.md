@@ -279,6 +279,36 @@ an external one it asks the outside system whether it happened. It returns
 Each settled outcome is written to the agent's history, so the model sees
 it, and `context` is rebuilt. Recall never runs a tool itself.
 
+### Restored from a snapshot
+
+A runtime that snapshots processes (Agent Substrate, a checkpointing
+sandbox) can bring the agent back from an earlier point than its last
+write. Pass your harness's own ids, and a replay is the recorded result:
+
+```python
+agent.record_turn("user", text, message_id=msg.id)
+action = agent.begin_action("send_email", "external", args, call_id=tool_call.id)
+if action.status == "done":
+    result = action.result          # it already ran before the restore
+else:
+    result = mailer.send(**args)
+    agent.end_action(action.seq, "done", result=result)
+```
+
+`agent.position` is where the records stood at the last answer, and every
+write carries it. A write the ids do not cover, from a process that is
+behind, raises `RolledBack` with nothing written. `agent.catch_up()` returns
+what happened after the agent's position, with a briefing to hand the model,
+and the agent carries on from there:
+
+```python
+try:
+    agent.record_turn("assistant", reply)
+except RolledBack:
+    report = agent.catch_up()
+    messages.append({"role": "user", "content": report.briefing})
+```
+
 ### State over HTTP
 
 `resume` and everything on `ResumedAgent` work the same against a

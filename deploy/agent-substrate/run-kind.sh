@@ -195,7 +195,9 @@ proxy agent-2 8102
 call 8101 /v1/agent/release '{"agent_id":"agent-1"}' >/dev/null
 out="$(call 8101 /v1/agent/resume '{"agent_id":"agent-1"}')"
 [[ "$out" == *'"lease_held":true'* ]] || fail "agent-1 did not resume itself: $out"
-out="$(call 8101 /v1/agent/update_working_state '{"agent_id":"agent-1","goal":"move billing to the v2 API"}')"
+# An actor's writes carry the position its last answer returned.
+pos="$(echo "$out" | jq -r '.position | "\(.turns).\(.actions).\(.state)"')"
+out="$(call 8101 /v1/agent/update_working_state "{\"agent_id\":\"agent-1\",\"goal\":\"move billing to the v2 API\",\"at\":\"$pos\"}")"
 [[ "$out" != *'"error"'* ]] || fail "agent-1 could not write its working state: $out"
 out="$(call 8102 /v1/agent/resume '{"agent_id":"agent-1"}')"
 echo "agent-2 resuming agent-1: $out"
@@ -209,12 +211,10 @@ for _ in $(seq 1 15); do
   [[ "$out" == *"already_resumed"* || "$out" == *"briefing"* ]] && break
   sleep 2
 done
-# The server still holds the agent for the actor that was deleted. The new
-# actor releases it and resumes.
-if [[ "$out" == *"already_resumed"* ]]; then
-  call 8101 /v1/agent/release '{"agent_id":"agent-1"}' >/dev/null
-  out="$(call 8101 /v1/agent/resume '{"agent_id":"agent-1"}')"
-fi
+# The server still holds the agent for the actor that was deleted; the new
+# actor's token is bound to the same agent, so its resume is answered in
+# place. A server older than 0.26 answered already_resumed instead.
+[[ "$out" != *"already_resumed"* ]] || gap "the recreated actor got already_resumed instead of its context"
 echo "new agent-1 resumes: $out"
 [[ "$out" == *"move billing to the v2 API"* ]] || fail "the recreated actor did not get the working state back"
 
@@ -291,7 +291,7 @@ hcall 8103 record_turn '{"role":"user","content":"Also send April.","message_id"
 after="$(turns 8103 | jq length)"
 echo "record_turn twice with message_id retry-1: $before -> $after turns"
 [[ "$after" == "$((before + 1))" ]] || gap "a retried record_turn with the same message_id was recorded $((after - before)) times"
-out="$(hcall 8103 begin_action '{"tool":"create_ticket","class":"idempotent","args":"{\"id\":\"T-1\"}"}' 2)"
+out="$(hcall 8103 begin_action '{"tool":"create_ticket","class":"idempotent","args":"{\"id\":\"T-1\"}","call_id":"retry-ticket-1"}' 2)"
 echo "begin_action twice: $(echo "$out" | jq -c '[.answers[] | {status, seq: .body.seq, key: .body.key}]')"
 s1="$(echo "$out" | jq '.answers[0].body.seq')"
 s2="$(echo "$out" | jq '.answers[1].body.seq')"
@@ -299,7 +299,7 @@ s2="$(echo "$out" | jq '.answers[1].body.seq')"
 out="$(hcall 8103 end_action "{\"seq\":$s1,\"status\":\"done\",\"result\":\"T-1 created\"}" 2)"
 echo "end_action twice: $(echo "$out" | jq -c '[.answers[] | {status, body: (.body.status // .body.error.code // .body)}]')"
 [[ "$(echo "$out" | jq '.answers[1].status')" == "200" ]] || gap "a retried end_action with the same outcome was refused"
-hcall 8103 end_action "{\"seq\":$s2,\"status\":\"abandoned\"}" >/dev/null
+[[ "$s1" == "$s2" ]] || hcall 8103 end_action "{\"seq\":$s2,\"status\":\"abandoned\"}" >/dev/null
 
 say "9. Clone: agent-4 starts from a tag of agent-3 and wakes holding agent-3's id"
 ate suspend actor agent-3 -a "$ATESPACE" --mode=sync >/dev/null
