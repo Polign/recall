@@ -118,6 +118,9 @@ func TestPayloadCarriesOnlyLabelsAndCounts(t *testing.T) {
 	r.Tool("diff", false)
 	r.Tool("list_predicates", false)
 	r.Tool("agent_resume", false)
+	r.Rollback()
+	r.Repeat()
+	r.Repeat()
 	r.Close()
 	r.Close() // idempotent
 
@@ -132,14 +135,15 @@ func TestPayloadCarriesOnlyLabelsAndCounts(t *testing.T) {
 		"version": "v1.2.3", "mode": "mcp", "backend": "local", "embedder": "ollama", "extractor": "anthropic",
 		"surface": "text", "client": "claude-code-2.0-private-build",
 		"remembers": 2.0, "replacements": 1.0, "recalls": 1.0, "forgets": 1.0, "inspections": 2.0, "state_calls": 1.0,
+		"rollbacks": 1.0, "repeats": 2.0,
 	}
 	for k, v := range want {
 		if got[k] != v {
 			t.Errorf("%s = %v, want %v", k, got[k], v)
 		}
 	}
-	if len(got) != 18 {
-		t.Errorf("payload has %d fields, want 18; a new field needs TELEMETRY.md and the collector: %v", len(got), got)
+	if len(got) != 20 {
+		t.Errorf("payload has %d fields, want 20; a new field needs TELEMETRY.md and the collector: %v", len(got), got)
 	}
 	if s := string(bodies[0]); strings.Contains(s, "private-model") || strings.Contains(s, "secret") || strings.Contains(s, home) {
 		t.Errorf("payload leaks a model name or a path: %s", s)

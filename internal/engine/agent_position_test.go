@@ -402,3 +402,34 @@ func TestPositionParse(t *testing.T) {
 		}
 	}
 }
+
+func TestOnRepeatCountsEachWriteAnsweredFromTheRecords(t *testing.T) {
+	ctx := t.Context()
+	repeats := 0
+	a, err := newAgentClient(t, newCreatingBackend()).Resume(ctx, ResumeRequest{AgentID: "counted", NoKeepAlive: true, OnRepeat: func() { repeats++ }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := a.RecordTurn(ctx, Turn{Role: "user", Content: "hello", MessageID: "m-1"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var act Action
+	for range 2 {
+		if act, err = a.BeginAction(ctx, "charge", ActionIdempotent, `{}`, CallID("call_1")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		if _, err := a.EndAction(ctx, act.Seq, ActionEnd{Status: ActionDone, Result: "ok"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := a.RecordTurn(ctx, Turn{Role: "assistant", Content: "no id"}); err != nil {
+		t.Fatal(err)
+	}
+	if repeats != 3 {
+		t.Fatalf("OnRepeat ran %d times, want 3: one each for the turn, the begin and the end", repeats)
+	}
+}

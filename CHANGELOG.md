@@ -9,7 +9,10 @@
   hour, and as they exit; `recall setup` sends one when it finishes. A
   heartbeat holds the version, the platform, a random install ID, the
   backend's name, the embedding and extraction providers, the MCP client's
-  name, and counts of successful tool calls. It never holds memory text,
+  name, counts of successful tool calls, and counts of State API writes
+  refused as rolled back (`position_behind`) or answered from what was
+  already recorded (a repeated message id, call id or outcome). It never
+  holds memory text,
   subjects, predicates, collection names, addresses, keys or model names.
   `recall telemetry` prints exactly what is sent. Turn it off with
   `recall telemetry off`, `RECALL_TELEMETRY=0` or `DO_NOT_TRACK=1`; it is

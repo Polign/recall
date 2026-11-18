@@ -383,6 +383,8 @@ func (s *mcpServer) runTool(ctx context.Context, name string, args json.RawMessa
 	if out, handled, err := s.runMemoryTool(ctx, name, args); handled {
 		if err == nil {
 			countTool(name, out)
+		} else if errors.Is(err, recall.ErrPositionBehind) {
+			usage.Rollback()
 		}
 		return out, err
 	}

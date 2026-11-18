@@ -146,6 +146,9 @@ func (a *Agent) BeginAction(ctx context.Context, tool string, class ActionClass,
 		return Action{}, err
 	}
 	if rec, ok, err := a.recordedActionLocked(ctx, o.callID); err != nil || ok {
+		if ok && err == nil {
+			a.repeatedLocked()
+		}
 		return rec, err
 	}
 	if err := a.checkAtLocked(o.at); err != nil {
@@ -165,6 +168,7 @@ func (a *Agent) BeginAction(ctx context.Context, tool string, class ActionClass,
 		err = a.behindLocked(ctx, err)
 		// The action there may be this one, from a begin whose answer was lost.
 		if rec, ok, rerr := a.recordedActionLocked(ctx, o.callID); rerr == nil && ok {
+			a.repeatedLocked()
 			return rec, nil
 		}
 	}
@@ -195,6 +199,7 @@ func (a *Agent) EndAction(ctx context.Context, seq int64, end ActionEnd, opts ..
 	}
 	if !act.Status.open() {
 		if sameEnd(act, end) {
+			a.repeatedLocked()
 			return act, nil
 		}
 		return Action{}, fmt.Errorf("recall: action %d (%s) already ended %s", seq, act.Tool, act.Status)

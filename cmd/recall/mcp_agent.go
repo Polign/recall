@@ -689,6 +689,7 @@ func (s *mcpServer) toolAgentResume(ctx context.Context, args json.RawMessage) (
 		Holder:          in.Holder,
 		OutputThreshold: in.OutputThreshold,
 		Deferred:        in.DeferLease,
+		OnRepeat:        usage.Repeat,
 	})
 	if err != nil {
 		return "", nil, err

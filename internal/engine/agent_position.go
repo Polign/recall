@@ -223,6 +223,13 @@ func (a *Agent) behindLocked(ctx context.Context, cause error) error {
 	return &PositionError{At: at, Position: a.positionLocked()}
 }
 
+// repeatedLocked reports a write answered with what was already recorded.
+func (a *Agent) repeatedLocked() {
+	if a.req.OnRepeat != nil {
+		a.req.OnRepeat()
+	}
+}
+
 // noteMessageLocked remembers a turn's message id, so a repeat of it is found
 // without a read. Old ids are dropped once the set grows; a repeat that old
 // is caught by the position instead.

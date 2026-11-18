@@ -65,6 +65,12 @@ type Payload struct {
 	Replacements  uint64 `json:"replacements"`
 	Inspections   uint64 `json:"inspections"`
 	StateCalls    uint64 `json:"state_calls"`
+	// Rollbacks counts State API writes refused with position_behind: the
+	// caller was restored from an earlier point than its records.
+	Rollbacks uint64 `json:"rollbacks"`
+	// Repeats counts State API writes answered with what was already
+	// recorded under the same message id, call id or outcome.
+	Repeats uint64 `json:"repeats"`
 }
 
 // Config describes the process a Reporter speaks for. Embedder and Extractor
@@ -214,7 +220,7 @@ type Reporter struct {
 	client   *http.Client
 
 	clientName atomic.Pointer[string]
-	counts     [6]atomic.Uint64
+	counts     [8]atomic.Uint64
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -228,6 +234,8 @@ const (
 	cReplace
 	cInspect
 	cState
+	cRollback
+	cRepeat
 )
 
 // Start begins reporting for cfg and returns nil when telemetry is off or the
@@ -317,6 +325,21 @@ func (r *Reporter) Tool(name string, replaced bool) {
 	}
 }
 
+// Rollback counts one State API write refused because the caller was
+// restored from an earlier point than its records.
+func (r *Reporter) Rollback() {
+	if r != nil {
+		r.counts[cRollback].Add(1)
+	}
+}
+
+// Repeat counts one State API write answered with what was already recorded.
+func (r *Reporter) Repeat() {
+	if r != nil {
+		r.counts[cRepeat].Add(1)
+	}
+}
+
 // Snapshot is what would be sent now.
 func (r *Reporter) Snapshot() Payload {
 	p := r.base
@@ -330,6 +353,8 @@ func (r *Reporter) Snapshot() Payload {
 	p.Replacements = r.counts[cReplace].Load()
 	p.Inspections = r.counts[cInspect].Load()
 	p.StateCalls = r.counts[cState].Load()
+	p.Rollbacks = r.counts[cRollback].Load()
+	p.Repeats = r.counts[cRepeat].Load()
 	return p
 }
 

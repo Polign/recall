@@ -48,6 +48,8 @@ One JSON object with exactly these fields, to
 | `replacements` | `1` | `remember` calls that replaced something already believed. |
 | `inspections` | `2` | Successful `history`, `diff`, `explain` and `timeline` calls. |
 | `state_calls` | `0` | Successful State API calls (the agent resume tools). |
+| `rollbacks` | `0` | State API writes refused with `position_behind`, because the process was restored from an earlier point than its records. |
+| `repeats` | `0` | State API writes answered with what was already recorded under the same message id, call id or outcome, as after a retry or a restore. |
 
 The counts are numbers of calls. The arguments and results of a call are never
 read for telemetry, except that a `remember` result is checked for whether it

@@ -220,6 +220,11 @@ type ResumeRequest struct {
 	// content is stored as an output and the turn keeps a reference. Zero
 	// means 2000; negative disables it.
 	OutputThreshold int
+	// OnRepeat, when set, is called each time a write is answered with what
+	// was already recorded under its message id, call id or outcome, as
+	// after a retry or a restore. It runs with the agent locked and must not
+	// call back into the Agent or block.
+	OnRepeat func()
 }
 
 const (
@@ -581,6 +586,9 @@ func (a *Agent) RecordTurn(ctx context.Context, t Turn, opts ...WriteOption) (Tu
 		return Turn{}, err
 	}
 	if rec, ok, err := a.recordedTurnLocked(ctx, messageID); err != nil || ok {
+		if ok && err == nil {
+			a.repeatedLocked()
+		}
 		return rec, err
 	}
 	if err := a.checkAtLocked(o.at); err != nil {
@@ -609,6 +617,7 @@ func (a *Agent) RecordTurn(ctx context.Context, t Turn, opts ...WriteOption) (Tu
 		err = a.behindLocked(ctx, err)
 		// The turn there may be this one, from a write whose answer was lost.
 		if rec, ok, rerr := a.recordedTurnLocked(ctx, messageID); rerr == nil && ok {
+			a.repeatedLocked()
 			return rec, nil
 		}
 	}
