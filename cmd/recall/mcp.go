@@ -190,7 +190,7 @@ func cmdMCP(global *dbFlags, args []string) error {
 		if _, ok := mem.backend.(recall.LeaseBackend); !ok {
 			return fmt.Errorf("mcp: -agent needs agent leases, which the %s backend does not provide", c.backend)
 		}
-		s.agents = newAgentRuntime()
+		s.agents = newAgentRuntime(0)
 	}
 	startUsage("mcp", d.Backend, emb.spec, extract, serveText)
 	err = s.serve(context.Background(), os.Stdin)
@@ -383,6 +383,8 @@ func (s *mcpServer) runTool(ctx context.Context, name string, args json.RawMessa
 	if out, handled, err := s.runMemoryTool(ctx, name, args); handled {
 		if err == nil {
 			countTool(name, out)
+		} else if errors.Is(err, recall.ErrPositionBehind) {
+			usage.Rollback()
 		}
 		return out, err
 	}

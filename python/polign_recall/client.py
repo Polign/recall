@@ -4,6 +4,7 @@ import json
 import math
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -27,6 +28,46 @@ class RecallError(Exception):
         super().__init__(message)
         self.code = code
         self.partial = partial
+
+
+class RolledBack(RecallError):
+    """The agent's records are ahead of this process ("position_behind"):
+    it was restored from an earlier snapshot, or something else wrote for
+    the agent meanwhile. Nothing was written. Call `catch_up` to learn what
+    happened after `at`, then carry on; those things are done and must not
+    be done again."""
+
+    def __init__(self, message: str, *, at: Position | None, position: Position | None):
+        super().__init__(message, code="position_behind")
+        self.at = at
+        self.position = position
+
+
+@dataclass(frozen=True, order=True)
+class Position:
+    """How far an agent's records go: the newest turn and action seqs and the
+    working state version. Written turns.actions.state."""
+    turns: int = 0
+    actions: int = 0
+    state: int = 0
+
+    def __str__(self) -> str:
+        return f"{self.turns}.{self.actions}.{self.state}"
+
+    @classmethod
+    def parse(cls, text: str) -> Position:
+        parts = text.strip().split(".")
+        if len(parts) != 3 or not all(p.isdigit() for p in parts):
+            raise ValueError(f"a position is turns.actions.state, got {text!r}")
+        return cls(*(int(p) for p in parts))
+
+    @classmethod
+    def decode(cls, data: Any) -> Position | None:
+        if isinstance(data, str):
+            return cls.parse(data)
+        if not isinstance(data, Mapping):
+            return None
+        return cls(int(data.get("turns") or 0), int(data.get("actions") or 0), int(data.get("state") or 0))
 
 
 @dataclass(frozen=True)
@@ -340,6 +381,8 @@ class Action:
     args_ref: str = ""
     result_ref: str = ""
     resolution: str = ""
+    # The harness's id for the tool call, when begin_action was given one.
+    call_id: str = ""
     epoch: int = 0
     started_at: str = ""
     ended_at: str = ""
@@ -395,10 +438,13 @@ class ResumeContext:
     turn_seq: int = 0
     token_budget: int = 0
     tokens: int = 0
+    # Where the records stood when the context was built.
+    position: Position | None = None
 
     @classmethod
     def decode(cls, data: Any) -> ResumeContext:
         known = {"agent_id": "", "fresh": False, "briefing": "", **_known(cls, data)}
+        known["position"] = Position.decode(known.get("position"))
         ws = known.get("working_state")
         known["working_state"] = WorkingState.decode(ws) if ws else None
         known["pending_actions"] = tuple(Action.decode(a) for a in known.get("pending_actions") or ())
@@ -409,6 +455,38 @@ class ResumeContext:
         omitted = known.get("omitted") or {}
         known["omitted"] = {k: int(omitted.get(k, 0)) for k in ("turns", "memories", "outputs")}
         return cls(**known)
+
+
+@dataclass(frozen=True)
+class SinceReport:
+    """What `ResumedAgent.catch_up` returns: what the records hold after
+    `from_`, and `briefing`, the same as one text to hand the model."""
+    from_: Position
+    position: Position
+    briefing: str
+    turns: tuple[Turn, ...] = ()
+    # Actions begun after from_, in every status, oldest first.
+    actions: tuple[Action, ...] = ()
+    # The current working state, when it changed after from_.
+    working_state: WorkingState | None = None
+    tokens: int = 0
+
+    @classmethod
+    def decode(cls, data: Any) -> SinceReport:
+        data = dict(data or {})
+        ws = data.get("working_state")
+        return cls(from_=Position.decode(data.get("from")) or Position(),
+                   position=Position.decode(data.get("position")) or Position(),
+                   briefing=str(data.get("briefing") or ""),
+                   turns=tuple(Turn.decode(t) for t in data.get("turns") or ()),
+                   actions=tuple(Action.decode(a) for a in data.get("actions") or ()),
+                   working_state=WorkingState.decode(ws) if ws else None,
+                   tokens=int(data.get("tokens") or 0))
+
+
+# The writes a position applies to.
+_POSITION_WRITES = frozenset({"record_turn", "begin_action", "end_action", "update_working_state", "agent_milestone"})
+_RECORDS_AT = re.compile(r"at (\d+\.\d+\.\d+), records at (\d+\.\d+\.\d+)")
 
 
 def _instant(value: str | datetime, name: str) -> str:
@@ -425,6 +503,12 @@ def _lease_error(exc: RecallError) -> RecallError:
     """Give lease failures their own code, so a caller can tell "someone else
     is running this agent" from a broken call."""
     text = str(exc)
+    if "records are ahead of this process" in text:
+        found = _RECORDS_AT.search(text)
+        at, position = (Position.parse(found.group(1)), Position.parse(found.group(2))) if found else (None, None)
+        return RolledBack(text, at=at, position=position)
+    if "position is ahead of the agent's records" in text:
+        return RecallError(text, code="position_ahead", partial=exc.partial)
     for marker, code in (("lease is held", "lease_held"), ("lease was lost", "lease_lost"),
                          ("lease not acquired", "lease_not_held")):
         if marker in text:
@@ -1345,6 +1429,7 @@ class ResumedAgent:
         self.context = context
         self._lease_held = context.lease_held
         self._epoch = context.epoch if context.lease_held else 0
+        self._position = context.position
 
     @property
     def lease_held(self) -> bool:
@@ -1358,6 +1443,24 @@ class ResumedAgent:
         while no lease is held. A later resume of the same agent issues a
         new one, and writes under this one then fail with "lease_lost"."""
         return self._epoch
+
+    @property
+    def position(self) -> Position | None:
+        """The position of the last answer. Every write this agent makes
+        carries it, and is refused with `RolledBack` when the records have
+        moved past it. None against a server older than 0.26."""
+        return self._position
+
+    def catch_up(self, token_budget: int | None = None) -> SinceReport:
+        """After `RolledBack`: what the records hold after this agent's
+        position, as a report and a briefing for the model. Hand the model the
+        briefing: those turns and actions happened, and are not to be done
+        again. The agent then carries on from the records' position."""
+        if self._position is None:
+            raise RecallError("catch_up needs a server that reports positions (recall 0.26 or later)", code="unsupported")
+        report = SinceReport.decode(self._call("agent_since", at=str(self._position), token_budget=token_budget))
+        self._position = report.position
+        return report
 
     def acquire(self) -> bool:
         """Take the lease after resume(defer_lease=True). Tries once: returns
@@ -1373,6 +1476,9 @@ class ResumedAgent:
             raise
         self._lease_held = True
         self._epoch = int(data.get("epoch") or 0) if isinstance(data, dict) else 0
+        # The previous holder may have written after the deferred read.
+        if isinstance(data, dict) and data.get("position") is not None:
+            self._position = Position.decode(data.get("position"))
         # Acquiring settled what it could; the context it read before did not
         # see that, nor what the previous holder wrote after it.
         self.refresh()
@@ -1384,16 +1490,21 @@ class ResumedAgent:
         self.context = ResumeContext.decode(self._call("agent_context"))
         return self.context
 
-    def begin_action(self, tool: str, class_: str, args: Any = None) -> Action:
+    def begin_action(self, tool: str, class_: str, args: Any = None, call_id: str | None = None) -> Action:
         """Record a tool call before it runs; run the tool only if this
         returns. `args` may be a string or anything JSON can encode. Pass the
         returned `key` to an idempotent tool, so that running it again after
-        a crash does nothing more."""
+        a crash does nothing more.
+
+        `call_id` is your harness's id for the call, usually the model's tool
+        call id. A call already begun under it is returned as it stands: if
+        its status is "done", the tool already ran, so use its result and do
+        not run it again."""
         if class_ not in ACTION_CLASSES:
             raise ValueError(f"class_ must be one of {', '.join(ACTION_CLASSES)}, got {class_!r}")
         if args is not None and not isinstance(args, str):
             args = json.dumps(args, sort_keys=True, default=str)
-        return Action.decode(self._call("begin_action", tool=tool, **{"class": class_}, args=args))
+        return Action.decode(self._call("begin_action", tool=tool, **{"class": class_}, args=args, call_id=call_id))
 
     def end_action(self, seq: int, status: str, result: Any = None, error: str | None = None,
                    resolution: str | None = None) -> Action:
@@ -1456,11 +1567,18 @@ class ResumedAgent:
         # Over HTTP the server holds the lease between requests, and the
         # epoch says this client is still the holder it issued it to.
         headers = {"If-Lease": f"{self.agent_id}:{self._epoch}"} if self._epoch else None
+        if tool in _POSITION_WRITES and self._position is not None:
+            args["at"] = str(self._position)
         try:
-            return self.client._tool(tool, {"agent_id": self.agent_id,
-                                            **{k: v for k, v in args.items() if v is not None}}, headers)
+            out = self.client._tool(tool, {"agent_id": self.agent_id,
+                                           **{k: v for k, v in args.items() if v is not None}}, headers)
         except RecallError as exc:
             raise _lease_error(exc) from None
+        if isinstance(out, dict) and tool != "agent_since":
+            position = Position.decode(out.get("position"))
+            if position is not None:
+                self._position = position
+        return out
 
     def update_working_state(self, **fields: Any) -> WorkingState:
         """Supersede the working state. Fields you pass replace the current

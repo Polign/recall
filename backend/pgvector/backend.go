@@ -86,6 +86,8 @@ var (
 	_ recall.TextSearchBackend = (*Backend)(nil)
 	_ recall.WatermarkBackend  = (*Backend)(nil)
 	_ recall.LeaseBackend      = (*Backend)(nil)
+	_ recall.FencedBackend     = (*Backend)(nil)
+	_ recall.CreateBackend     = (*Backend)(nil)
 )
 
 // Importing this package registers it as the "pgvector" backend. The binary
@@ -371,7 +373,7 @@ func (b *Backend) ensureCollection(ctx context.Context, collection string, dim i
 // Put upserts one immutable event ID, creating the collection on first use,
 // and moves the collection's revision in the same transaction.
 func (b *Backend) Put(ctx context.Context, collection, id string, values []float32, metadata map[string]any) error {
-	return b.put(ctx, collection, id, values, metadata, nil)
+	return b.put(ctx, collection, id, values, metadata, nil, false)
 }
 
 // PutFenced is Put applied only while the agent's lease is still the
@@ -383,10 +385,20 @@ func (b *Backend) PutFenced(ctx context.Context, collection, id string, values [
 	if strings.TrimSpace(fence.Lease) == "" || strings.TrimSpace(fence.Holder) == "" || fence.Epoch == 0 {
 		return fmt.Errorf("pgvector: a lease fence needs a lease name, a holder and an epoch")
 	}
-	return b.put(ctx, collection, id, values, metadata, &fence)
+	return b.put(ctx, collection, id, values, metadata, &fence, false)
 }
 
-func (b *Backend) put(ctx context.Context, collection, id string, values []float32, metadata map[string]any, fence *recall.Fence) error {
+// Create inserts only when the id holds no record, in the same transaction
+// as the lease check when a fence is given. A taken id is reported as
+// recall.ErrRecordExists with nothing written.
+func (b *Backend) Create(ctx context.Context, collection, id string, values []float32, metadata map[string]any, fence *recall.Fence) error {
+	if fence != nil && (strings.TrimSpace(fence.Lease) == "" || strings.TrimSpace(fence.Holder) == "" || fence.Epoch == 0) {
+		return fmt.Errorf("pgvector: a lease fence needs a lease name, a holder and an epoch")
+	}
+	return b.put(ctx, collection, id, values, metadata, fence, true)
+}
+
+func (b *Backend) put(ctx context.Context, collection, id string, values []float32, metadata map[string]any, fence *recall.Fence, createOnly bool) error {
 	if ctx == nil {
 		return fmt.Errorf("pgvector: context must not be nil")
 	}
@@ -433,10 +445,17 @@ func (b *Backend) put(ctx context.Context, collection, id string, values []float
 	if _, err := tx.Exec(ctx, "UPDATE "+b.qualified("recall_collections")+" SET revision = revision + 1 WHERE name = $1", collection); err != nil {
 		return fmt.Errorf("pgvector: put: %w", err)
 	}
-	_, err = tx.Exec(ctx, "INSERT INTO "+b.qualified(info.table)+` (id, embedding, metadata) VALUES ($1, $2::vector, $3::jsonb)
-		ON CONFLICT (id) DO UPDATE SET embedding = EXCLUDED.embedding, metadata = EXCLUDED.metadata`, id, formatVector(values), string(md))
+	onConflict := `ON CONFLICT (id) DO UPDATE SET embedding = EXCLUDED.embedding, metadata = EXCLUDED.metadata`
+	if createOnly {
+		onConflict = `ON CONFLICT (id) DO NOTHING`
+	}
+	tag, err := tx.Exec(ctx, "INSERT INTO "+b.qualified(info.table)+` (id, embedding, metadata) VALUES ($1, $2::vector, $3::jsonb) `+onConflict,
+		id, formatVector(values), string(md))
 	if err != nil {
 		return fmt.Errorf("pgvector: put: %w", err)
+	}
+	if createOnly && tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: %s", recall.ErrRecordExists, id)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("pgvector: put: %w", err)

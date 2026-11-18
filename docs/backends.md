@@ -31,7 +31,7 @@ replication of its own.
 | `RECALL_BACKEND_URL` | a directory (default `~/.local/share/recall`) | `http://host:23000` | `postgres://user:pw@host:5432/db` | `mongodb://user:pw@host:27017/db` | `http://host:6333` |
 | `RECALL_BACKEND_KEY` | not used; a key is generated in the directory | the polign_db API key | the password, when the URL has none | the password, when the URL has none | the Qdrant API key |
 | Options on the URL | `?server=/path/to/polign-server` | none | `?schema=recall&text_search=english` | `?database=recall` | `?distance=Cosine` |
-| Server version | the `polign-server` beside `recall` or on `PATH`, else polign_db v0.15.0 downloaded once into `~/.local/share/recall/bin`; started on a loopback port and left running | 0.8.0 or later | PostgreSQL 13 or later with pgvector 0.6.0 or later; 0.8.0 or later recommended | 6.0 or later, Atlas or self-hosted | 1.10 or later |
+| Server version | the `polign-server` beside `recall` or on `PATH`, else polign_db v0.16.0 downloaded once into `~/.local/share/recall/bin`; started on a loopback port and left running | 0.8.0 or later | PostgreSQL 13 or later with pgvector 0.6.0 or later; 0.8.0 or later recommended | 6.0 or later, Atlas or self-hosted | 1.10 or later |
 | Remember, recall, forget, history, as-of | yes | yes | yes | yes | yes |
 | Evidence links, audit export | yes | yes | yes | yes | yes |
 | Keyword search | as polign_db | yes, BM25 | yes, PostgreSQL full-text search | yes, MongoDB text search | no, vector search only |

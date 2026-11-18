@@ -9,11 +9,75 @@
   hour, and as they exit; `recall setup` sends one when it finishes. A
   heartbeat holds the version, the platform, a random install ID, the
   backend's name, the embedding and extraction providers, the MCP client's
-  name, and counts of successful tool calls. It never holds memory text,
+  name, counts of successful tool calls, and counts of State API writes
+  refused as rolled back (`position_behind`) or answered from what was
+  already recorded (a repeated message id, call id or outcome). It never
+  holds memory text,
   subjects, predicates, collection names, addresses, keys or model names.
   `recall telemetry` prints exactly what is sent. Turn it off with
   `recall telemetry off`, `RECALL_TELEMETRY=0` or `DO_NOT_TRACK=1`; it is
   also off in CI and in builds from source. See [TELEMETRY.md](TELEMETRY.md).
+- Agents restored from an earlier process snapshot (a Substrate revert, a
+  lost node, a retried write) no longer overwrite or repeat later records.
+  In Go:
+  - `Agent.Position()` returns the turn count, the action count and the
+    working state version.
+  - `recall.At(p)` on `RecordTurn`, `BeginAction`, `EndAction` or
+    `UpdateWorkingState` refuses a write made from an earlier position with
+    `ErrPositionBehind`, or a later one with `ErrPositionAhead`.
+  - `Agent.Since(ctx, p, budget)` reports the turns, actions and working
+    state written after `p`, with a briefing that tells the model not to
+    repeat them.
+  - A turn whose `MessageID` is already recorded returns the recorded turn.
+    `recall.CallID(id)` on `BeginAction` returns the action already begun for
+    that tool call, in whatever status it is.
+  - Turns, action begins, working state versions and the outputs they store
+    are written create-only on a backend that implements the new
+    `recall.CreateBackend` (polign_db 0.16.0 and later, pgvector, MongoDB). A
+    process holding the agent in memory that comes back behind its records
+    gets `ErrPositionBehind` and continues after the newest record, instead
+    of replacing the later ones.
+  - The lease guard also reads the wall clock, so a process whose monotonic
+    clock missed a suspend renews before it writes.
+- The same over MCP and HTTP. Every State API answer carries `position`, and
+  over HTTP the `Recall-Position` header. `record_turn`, `begin_action`,
+  `end_action`, `update_working_state` and `agent_milestone` take `at` (or
+  the `If-Position: turns.actions.state` header) and answer
+  `409 position_behind` with the records' position when they have moved
+  past it, or `409 position_ahead`. The new `agent_since` tool (HTTP
+  `POST /v1/agent/since`) reports what was recorded after a position.
+  `begin_action` takes `call_id`. See section 3.1 of
+  [the State API](docs/state-api-v1.md).
+- Python: `ResumedAgent.position` is the position of the last answer, and
+  every write sends it. A write refused because the records moved on raises
+  `RolledBack`; `agent.catch_up()` returns a `SinceReport` with what
+  happened after, and carries on from the records' position.
+  `begin_action(call_id=...)` returns the action already begun for that
+  call.
+- The Agent Substrate demo actor (`deploy/agent-substrate`) is a harness
+  that passes message and call ids, sends `If-Position`, and catches up
+  after `position_behind`.
+- `recall serve -agent-idle` (default 5m) releases an agent held for a
+  credential bound to it (a Kubernetes key, an Agent Substrate actor) after
+  that long without a call.
+
+### Changed
+
+- **Breaking, Agent Substrate:** an actor's State API writes over HTTP must
+  carry `at` or `If-Position`; without it they answer `400 invalid_argument`.
+  An actor can be reverted to an earlier snapshot at any time, and the
+  position is how its writes say where it believes the records stand. Take
+  the position from the last answer.
+- A credential bound to the agent (Kubernetes key, Substrate actor) no
+  longer manages the lease: a call for an agent the server does not hold
+  resumes it in place, so `not_resumed` after a server restart is gone, and
+  `agent_resume` for an agent already held rebuilds its context and answers
+  instead of `409 already_resumed`.
+
+- `end_action` (and `Agent.EndAction`) repeated with the outcome already
+  recorded returns the action instead of an error. A different outcome is
+  still refused.
+- The local backend downloads polign_db v0.16.0.
 
 ## [0.25.0] - 2026-11-09
 

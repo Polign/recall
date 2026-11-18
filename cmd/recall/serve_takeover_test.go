@@ -37,8 +37,9 @@ func TestServeNewSessionTakesOverAnAbandonedAgent(t *testing.T) {
 	}
 	// pool-aaaaa dies here: no end_action, no release.
 
-	// The same session resuming again is still refused, as before.
-	if out, isErr := rpc(t, srv, "rcl_pod1", "agent_resume", `{"agent_id":"run-1"}`); !isErr || !strings.Contains(out, "already resumed") {
+	// The same session resuming again gets its context rebuilt in place: the
+	// key is bound to the agent, so there is no one else it could be.
+	if out, isErr := rpc(t, srv, "rcl_pod1", "agent_resume", `{"agent_id":"run-1"}`); isErr || !strings.Contains(out, "send the renewal notice") || !strings.Contains(out, `"position"`) {
 		t.Fatalf("same session resumed twice: %v %s", isErr, out)
 	}
 

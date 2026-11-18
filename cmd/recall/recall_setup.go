@@ -421,7 +421,7 @@ func serveSetup(dir string, agent bool) error {
 		if _, ok := mem.backend.(recall.LeaseBackend); !ok {
 			return fmt.Errorf("mcp: -agent needs agent leases, which the %s backend does not provide", cfg.BackendName())
 		}
-		s.agents = newAgentRuntime()
+		s.agents = newAgentRuntime(0)
 	}
 	startUsage("mcp", cfg.BackendName(), emb.spec, spec, text)
 	err = s.serve(context.Background(), os.Stdin)

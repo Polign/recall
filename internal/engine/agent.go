@@ -220,6 +220,11 @@ type ResumeRequest struct {
 	// content is stored as an output and the turn keeps a reference. Zero
 	// means 2000; negative disables it.
 	OutputThreshold int
+	// OnRepeat, when set, is called each time a write is answered with what
+	// was already recorded under its message id, call id or outcome, as
+	// after a retry or a restore. It runs with the agent locked and must not
+	// call back into the Agent or block.
+	OnRepeat func()
 }
 
 const (
@@ -269,6 +274,10 @@ type Agent struct {
 	actSeq  int64
 	outSeq  int64
 	closed  bool
+	// messages and calls map recent message and call ids to their seqs, so
+	// a repeated turn or action is found without a read.
+	messages map[string]int64
+	calls    map[string]int64
 
 	lease *agentLease
 }
@@ -458,10 +467,18 @@ func (a *Agent) Release(ctx context.Context) error {
 
 // UpdateWorkingState supersedes the working state. The previous version stays
 // readable through WorkingStateHistory. Library-owned fields are overwritten.
-func (a *Agent) UpdateWorkingState(ctx context.Context, ws WorkingState) (WorkingState, error) {
+//
+// The versioned copy is a create-only write: a process restored from an
+// earlier snapshot, writing a version that already exists, gets
+// ErrPositionBehind and the newer state is left alone.
+func (a *Agent) UpdateWorkingState(ctx context.Context, ws WorkingState, opts ...WriteOption) (WorkingState, error) {
+	o := applyWriteOptions(opts)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if err := a.writable(ctx); err != nil {
+		return WorkingState{}, err
+	}
+	if err := a.checkAtLocked(o.at); err != nil {
 		return WorkingState{}, err
 	}
 	next := cloneWorkingState(ws)
@@ -476,7 +493,23 @@ func (a *Agent) UpdateWorkingState(ctx context.Context, ws WorkingState) (Workin
 	text := workingStateText(next)
 	// The versioned copy first: if the head write then fails, the head still
 	// names the previous version, and the orphan copy is only history.
-	if err := a.put(ctx, a.recordID("ws", strconv.FormatInt(next.Version, 10)), recWorking, text, body, map[string]any{"version": next.Version}); err != nil {
+	versionID := a.recordID("ws", strconv.FormatInt(next.Version, 10))
+	versionMeta := map[string]any{"version": next.Version}
+	err = a.create(ctx, versionID, recWorking, text, body, versionMeta)
+	if errors.Is(err, ErrRecordExists) {
+		at := a.positionLocked()
+		moved, cerr := a.catchUpLocked(ctx)
+		switch {
+		case cerr != nil:
+			return WorkingState{}, fmt.Errorf("%w; rereading the records failed: %v", err, cerr)
+		case moved:
+			return WorkingState{}, &PositionError{At: at, Position: a.positionLocked()}
+		}
+		// The head never moved past the copy: an orphan of a write whose
+		// head failed. Replace it.
+		err = a.put(ctx, versionID, recWorking, text, body, versionMeta)
+	}
+	if err != nil {
 		return WorkingState{}, err
 	}
 	if err := a.put(ctx, a.recordID("ws", "head"), recWorkingHead, text, body, nil); err != nil {
@@ -489,7 +522,7 @@ func (a *Agent) UpdateWorkingState(ctx context.Context, ws WorkingState) (Workin
 // Milestone records that the agent reached a durable point: the working
 // state's LastMilestone and Progress are updated together. Everything after
 // the last milestone is what a crash can cost.
-func (a *Agent) Milestone(ctx context.Context, name, progress string) (WorkingState, error) {
+func (a *Agent) Milestone(ctx context.Context, name, progress string, opts ...WriteOption) (WorkingState, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return WorkingState{}, fmt.Errorf("recall: milestone needs a name")
@@ -499,7 +532,7 @@ func (a *Agent) Milestone(ctx context.Context, name, progress string) (WorkingSt
 	if progress = strings.TrimSpace(progress); progress != "" {
 		ws.Progress = progress
 	}
-	return a.UpdateWorkingState(ctx, ws)
+	return a.UpdateWorkingState(ctx, ws, opts...)
 }
 
 // WorkingStateHistory returns earlier working states, newest first.
@@ -528,7 +561,14 @@ func (a *Agent) WorkingStateHistory(ctx context.Context, limit int) ([]WorkingSt
 
 // RecordTurn appends one turn. Content larger than the output threshold is
 // stored as an output, and the turn keeps its opening and a reference.
-func (a *Agent) RecordTurn(ctx context.Context, t Turn) (Turn, error) {
+//
+// A turn whose MessageID is already recorded is returned as recorded, and
+// nothing is written: the first one stands. With At, a write from a position
+// the records have moved past fails with ErrPositionBehind. On a CreateBackend
+// a turn seq already used fails the same way, so a process restored from an
+// earlier snapshot cannot replace its later turns.
+func (a *Agent) RecordTurn(ctx context.Context, t Turn, opts ...WriteOption) (Turn, error) {
+	o := applyWriteOptions(opts)
 	role := strings.TrimSpace(t.Role)
 	if !validRoles[role] {
 		return Turn{}, fmt.Errorf(`recall: turn role must be "system", "user", "assistant" or "tool", got %q`, t.Role)
@@ -545,9 +585,18 @@ func (a *Agent) RecordTurn(ctx context.Context, t Turn) (Turn, error) {
 	if err := a.writable(ctx); err != nil {
 		return Turn{}, err
 	}
+	if rec, ok, err := a.recordedTurnLocked(ctx, messageID); err != nil || ok {
+		if ok && err == nil {
+			a.repeatedLocked()
+		}
+		return rec, err
+	}
+	if err := a.checkAtLocked(o.at); err != nil {
+		return Turn{}, err
+	}
 	turn := Turn{Seq: a.turnSeq + 1, Role: role, Name: strings.TrimSpace(t.Name), Content: t.Content, MessageID: messageID, Brief: t.Brief, At: time.Now().UTC()}
 	if a.threshold > 0 && estimateTokens(t.Content) > a.threshold {
-		out, err := a.storeOutputLocked(ctx, Output{Tool: turn.Name, Content: t.Content})
+		out, err := a.storeOutputLocked(ctx, Output{Tool: turn.Name, Content: t.Content}, true)
 		if err != nil {
 			return Turn{}, err
 		}
@@ -559,11 +608,24 @@ func (a *Agent) RecordTurn(ctx context.Context, t Turn) (Turn, error) {
 		return Turn{}, err
 	}
 	page := strconv.FormatInt((turn.Seq-1)/turnPage, 10)
-	if err := a.put(ctx, a.recordID("turn", strconv.FormatInt(turn.Seq, 10)), recTurn, turn.Content, body,
-		map[string]any{"seq": turn.Seq, "page": page}); err != nil {
+	md := map[string]any{"seq": turn.Seq, "page": page}
+	if messageID != "" {
+		md["message_id"] = messageID
+	}
+	err = a.create(ctx, a.recordID("turn", strconv.FormatInt(turn.Seq, 10)), recTurn, turn.Content, body, md)
+	if errors.Is(err, ErrRecordExists) {
+		err = a.behindLocked(ctx, err)
+		// The turn there may be this one, from a write whose answer was lost.
+		if rec, ok, rerr := a.recordedTurnLocked(ctx, messageID); rerr == nil && ok {
+			a.repeatedLocked()
+			return rec, nil
+		}
+	}
+	if err != nil {
 		return Turn{}, err
 	}
 	a.turnSeq = turn.Seq
+	a.noteMessageLocked(turn)
 	return turn, nil
 }
 
@@ -575,39 +637,55 @@ func (a *Agent) StoreOutput(ctx context.Context, o Output) (OutputRef, error) {
 	if err := a.writable(ctx); err != nil {
 		return OutputRef{}, err
 	}
-	out, err := a.storeOutputLocked(ctx, o)
+	out, err := a.storeOutputLocked(ctx, o, strings.TrimSpace(o.Ref) == "")
 	if err != nil {
 		return OutputRef{}, err
 	}
 	return out.ref(), nil
 }
 
-func (a *Agent) storeOutputLocked(ctx context.Context, o Output) (Output, error) {
+// storeOutputLocked writes an output. A fresh output is one the library names
+// (an empty Ref, or a Ref used as a base): it is written create-only, and a
+// name already taken moves on to the next, so a process restored from an
+// earlier snapshot never replaces an output a later turn refers to.
+func (a *Agent) storeOutputLocked(ctx context.Context, o Output, fresh bool) (Output, error) {
 	if len(o.Content) > maxOutputBytes {
 		return Output{}, fmt.Errorf("recall: output is %d bytes; the limit is %d, store larger artifacts as objects and set a pointer", len(o.Content), maxOutputBytes)
 	}
-	o.Ref = strings.TrimSpace(o.Ref)
-	if o.Ref == "" {
-		a.outSeq++
-		o.Ref = fmt.Sprintf("out-%d-%d", a.turnSeq+1, a.outSeq)
-	}
-	if !recordNamePattern.MatchString(o.Ref) {
-		return Output{}, fmt.Errorf("recall: output ref must be 1-128 letters, digits, '.', '_' or '-', got %q", o.Ref)
-	}
+	base := strings.TrimSpace(o.Ref)
 	o.At = time.Now().UTC()
 	o.Summary = strings.TrimSpace(o.Summary)
 	if o.Summary == "" {
 		o.Summary = opening(o.Content, 200)
 	}
-	body, err := json.Marshal(o)
-	if err != nil {
-		return Output{}, err
+	const maxNames = 8
+	for i := 1; ; i++ {
+		switch {
+		case base == "":
+			a.outSeq++
+			o.Ref = fmt.Sprintf("out-%d-%d", a.turnSeq+1, a.outSeq)
+		case i == 1:
+			o.Ref = base
+		default:
+			o.Ref = fmt.Sprintf("%s-%d", base, i)
+		}
+		if !recordNamePattern.MatchString(o.Ref) {
+			return Output{}, fmt.Errorf("recall: output ref must be 1-128 letters, digits, '.', '_' or '-', got %q", o.Ref)
+		}
+		body, err := json.Marshal(o)
+		if err != nil {
+			return Output{}, err
+		}
+		id, text := a.recordID("out", o.Ref), o.Summary+"\n"+opening(o.Content, 2000)
+		md := map[string]any{"ref": o.Ref, "tokens": estimateTokens(o.Content)}
+		if !fresh {
+			return o, a.put(ctx, id, recOutput, text, body, md)
+		}
+		err = a.create(ctx, id, recOutput, text, body, md)
+		if !errors.Is(err, ErrRecordExists) || i == maxNames {
+			return o, err
+		}
 	}
-	if err := a.put(ctx, a.recordID("out", o.Ref), recOutput, o.Summary+"\n"+opening(o.Content, 2000), body,
-		map[string]any{"ref": o.Ref, "tokens": estimateTokens(o.Content)}); err != nil {
-		return Output{}, err
-	}
-	return o, nil
 }
 
 func (o Output) ref() OutputRef {
@@ -816,6 +894,17 @@ func (a *Agent) writable(ctx context.Context) error {
 }
 
 func (a *Agent) put(ctx context.Context, id, kind, text string, body []byte, extra map[string]any) error {
+	return a.write(ctx, id, kind, text, body, extra, false)
+}
+
+// create is put that writes only when the id holds no record, on a backend
+// that can tell; elsewhere it is put. A taken id is an error wrapping
+// ErrRecordExists.
+func (a *Agent) create(ctx context.Context, id, kind, text string, body []byte, extra map[string]any) error {
+	return a.write(ctx, id, kind, text, body, extra, true)
+}
+
+func (a *Agent) write(ctx context.Context, id, kind, text string, body []byte, extra map[string]any, createOnly bool) error {
 	values, err := a.embed(ctx, text)
 	if err != nil {
 		return err
@@ -826,6 +915,18 @@ func (a *Agent) put(ctx context.Context, id, kind, text string, body []byte, ext
 	}
 	for k, v := range extra {
 		md[k] = v
+	}
+	if cb, ok := a.c.backend.(CreateBackend); ok && createOnly {
+		var fence *Fence
+		if _, fenced := a.c.backend.(FencedBackend); fenced && a.lease != nil {
+			f := a.lease.fence()
+			fence = &f
+		}
+		err := cb.Create(ctx, a.collection, id, values, md, fence)
+		if errors.Is(err, ErrLeaseLost) && a.lease != nil {
+			a.lease.markLost()
+		}
+		return err
 	}
 	fb, fenced := a.c.backend.(FencedBackend)
 	if a.lease == nil || !fenced {
@@ -921,9 +1022,13 @@ type agentLease struct {
 	mu      sync.Mutex
 	ep      uint64
 	granted time.Time
-	lost    bool
-	stop    chan struct{}
-	done    chan struct{}
+	// grantedWall is granted without the monotonic reading. A restored
+	// process's monotonic clock skips the time it was suspended; the wall
+	// clock does not.
+	grantedWall time.Time
+	lost        bool
+	stop        chan struct{}
+	done        chan struct{}
 }
 
 func defaultHolder() string {
@@ -950,7 +1055,7 @@ func acquireAgentLease(ctx context.Context, lb LeaseBackend, collection string, 
 	if g.TTL > 0 {
 		ttl = g.TTL
 	}
-	return &agentLease{lb: lb, collection: collection, name: req.AgentID, holder: holder, ttl: ttl, ep: g.Epoch, granted: start}, nil
+	return &agentLease{lb: lb, collection: collection, name: req.AgentID, holder: holder, ttl: ttl, ep: g.Epoch, granted: start, grantedWall: start.Round(0)}, nil
 }
 
 func (l *agentLease) fence() Fence {
@@ -982,7 +1087,10 @@ func (l *agentLease) guard(ctx context.Context) error {
 	if l.lost {
 		return ErrLeaseLost
 	}
-	age := time.Since(l.granted)
+	// Either clock can show the lease is due: the monotonic one when the wall
+	// clock is stepped back, the wall one after a suspend the process did
+	// not see.
+	age := max(time.Since(l.granted), wallNow().Sub(l.grantedWall))
 	if age < l.ttl/3 {
 		return nil
 	}
@@ -1002,6 +1110,7 @@ func (l *agentLease) guard(ctx context.Context) error {
 	}
 	l.ep = g.Epoch
 	l.granted = start
+	l.grantedWall = start.Round(0)
 	return nil
 }
 

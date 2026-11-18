@@ -35,14 +35,15 @@ Gated: the tools are served when the backend has leases (section 6) and the serv
 | end_action | end_action | agent_id, seq, status | no |
 | pending_actions | pending_actions | agent_id | yes |
 | agent_context | context | agent_id | yes |
+| agent_since | since | agent_id, at | yes |
 
 The HTTP verb is the path under `/v1/agent/` (section 4). The tool names are the MCP names and do not change; the verbs drop the `agent_` prefix where there is one.
 
 Semantics: `agent_resume` takes the agent's lease and rebuilds its context (working state, pointers, relevant memories, recent turns, unfinished actions) within a token budget. It is also how an agent starts for the first time; `fresh` is then true. Its answer carries `epoch`, the lease epoch (section 3). Writes fail while the lease is not held. With `defer_lease`, `agent_resume` returns the context at once without the lease, even while a crashed process's lease is live; writes then fail with `lease_not_held` until `agent_acquire` succeeds, which returns the epoch. `agent_release` hands the lease over at once, so the next process need not wait out the TTL. `agent_id` is 1 to 128 characters from letters, digits, `.`, `_`, `-`.
 
-Actions: a harness calls `begin_action` before each tool call that touches the world and `end_action` after it. `class` is `pure` (reads only), `idempotent` (repeating with the returned `key` does nothing more) or `external` (could happen twice). A crash between the two leaves the action open. On resume, open pure actions are closed as `abandoned`, open external actions are marked `unknown`, and open idempotent actions wait to be run again with the same key; every action still open is listed in `pending_actions` and at the top of the briefing until `end_action` closes it. `agent_context` rebuilds the briefing after a harness has settled them. Recall never runs a tool itself.
+Actions: a harness calls `begin_action` before each tool call that touches the world and `end_action` after it. `class` is `pure` (reads only), `idempotent` (repeating with the returned `key` does nothing more) or `external` (could happen twice). A crash between the two leaves the action open. On resume, open pure actions are closed as `abandoned`, open external actions are marked `unknown`, and open idempotent actions wait to be run again with the same key; every action still open is listed in `pending_actions` and at the top of the briefing until `end_action` closes it. Repeating `end_action` with the outcome already recorded returns the action; a different outcome is an error, since the first one stands. `agent_context` rebuilds the briefing after a harness has settled them. Recall never runs a tool itself. `begin_action` with `call_id`, the harness's id for the tool call, returns the action already begun under that id, in whatever status it is, instead of beginning another: a harness restored from an earlier snapshot sees `done` and skips the call. `record_turn` with a `message_id` already recorded returns the recorded turn and writes nothing.
 
-Argument conventions are the Memory API's: instants are RFC 3339 strings, and unknown arguments are rejected (over HTTP, `epoch` is the one field this document adds, section 4).
+Argument conventions are the Memory API's: instants are RFC 3339 strings, and unknown arguments are rejected (over HTTP, `epoch` is the one field this document adds, section 4). `at` is a position (section 3.1).
 
 ## 3. The lease
 
@@ -52,7 +53,19 @@ Who holds the lease depends on the transport:
 
 - **In process** (Go, Python over stdio, MCP over stdio): the `Agent` holds it, renews it in the background, and releases it on `Release`, on `agent_release`, or when the session ends. Nothing is carried per call.
 - **HTTP** (`recall serve`, both `/mcp` and `/v1/agent/*`): requests have no session of their own, so the server holds the resumed agent, and its lease, in the caller's namespace for the life of the process. `agent_resume` returns the epoch; a caller presents it on every write, and the server refuses an epoch it did not issue for the agent it holds with `409 lease_lost`. A second `agent_resume` for an agent the server already holds answers `409 already_resumed`; `agent_release` with the epoch hands it over, and the next `agent_resume` issues a new epoch. If the server restarts, the agents it held are gone and their leases lapse at their TTL: a write then answers `409 not_resumed`, and the caller resumes again.
-- **Kubernetes mode** (section 5): the key is bound to one `agent_id` and one session, the pod. The server holds the lease for the key, so a write need not carry the epoch, and a new pod carrying a key for the same agent takes the agent over from the pod it replaced; the old pod's writes are refused.
+- **Bound credentials** (Kubernetes mode, section 5, and Agent Substrate actors): the credential is bound to one `agent_id`, so the server holds the lease for it and a write need not carry the epoch. A call for an agent the server does not hold resumes it in place, so a server restart is invisible to the caller, and `agent_resume` for an agent already held rebuilds its context and answers instead of `already_resumed`. An agent with no call for `-agent-idle` (default 5 minutes) is released, and its next call takes the lease again. In Kubernetes mode the key also names the pod as its session: a new pod carrying a key for the same agent takes the agent over from the pod it replaced, and the old pod's writes are refused.
+
+### 3.1 Position
+
+A process can come back behind its own records: its runtime restored it from an earlier snapshot, or it retried a write without knowing whether the first one landed. Recall never rolls the records back. It tells the caller it is behind instead.
+
+The agent's **position** is three numbers: the newest turn seq, the newest action seq and the working state version, written `turns.actions.state` (`41.7.12`) or as an object `{"turns": 41, "actions": 7, "state": 12}`. Every State API answer carries the position after the call: a `position` field in an object answer, and over HTTP the `Recall-Position` header on every answer.
+
+`record_turn`, `begin_action`, `end_action`, `update_working_state` and `agent_milestone` take an optional `at`, the position the caller last saw, as the body field or the `If-Position` header. When the records are ahead of it the write is refused with `409 position_behind`, and the answer carries the records' `position` and the `at` it refused. The caller calls `agent_since` with its own position: the turns, the actions in every status, and the working state if it changed, with a briefing that tells the model those things happened and are not to be done again. It then continues from the position `agent_since` returns. A position ahead of the records is `409 position_ahead`: the backend lost writes the caller saw acknowledged.
+
+A write the ids show was already made (a `message_id`, a `call_id`, an `end_action` with the outcome already recorded) returns what was recorded before `at` is checked, so a retry carrying the position from before its first attempt is not refused.
+
+Over HTTP an Agent Substrate actor's writes must carry `at`; elsewhere it is optional. A process that holds the agent itself (Go, MCP over stdio) needs no `at`: on a backend with Create (section 6) its turns, action begins and working state versions are create-only, so a restored process that writes a seq it already used is refused with `position_behind` and continues after the newest record.
 
 ## 4. HTTP transport
 
@@ -90,7 +103,7 @@ Clients: `RECALL_TOKEN_FILE` names the projected token (audience `recall`); `rec
 
 ### Agent Substrate actor identity
 
-On Agent Substrate an actor holds no credential at all. With `recall serve -substrate-issuer <issuer>`, the server accepts an actor JWT as the bearer on every request; the actor's egress policy has Substrate's gateway put the token in the `Authorization` header (`actorJwt` with the audience `recall`, or the one `-substrate-audience` names). There is no exchange and no Recall key. The server checks the token against the issuer's discovery document and key set, and refuses `worker-for-actor` tokens. The subject `actor/<atespace>/<name>` gives the namespace `<atespace>:<name>`, or the atespace alone with `-substrate-scope atespace`, and the `agent` is the actor's name: a request that names another `agent_id` is refused with `403 namespace_mismatch`, and a write need not carry the epoch. The token carries no session. An actor created again under a deleted actor's name gets `409 already_resumed` from `agent_resume`, because the server still holds the agent for the old actor; it calls `agent_release` and resumes. Added in 0.25.
+On Agent Substrate an actor holds no credential at all. With `recall serve -substrate-issuer <issuer>`, the server accepts an actor JWT as the bearer on every request; the actor's egress policy has Substrate's gateway put the token in the `Authorization` header (`actorJwt` with the audience `recall`, or the one `-substrate-audience` names). There is no exchange and no Recall key. The server checks the token against the issuer's discovery document and key set, and refuses `worker-for-actor` tokens. The subject `actor/<atespace>/<name>` gives the namespace `<atespace>:<name>`, or the atespace alone with `-substrate-scope atespace`, and the `agent` is the actor's name: a request that names another `agent_id` is refused with `403 namespace_mismatch`, and a write need not carry the epoch. The token carries no session, so an actor created again under a deleted actor's name reaches the agent the old actor left, resumed in place. An actor can be reverted to an earlier snapshot at any time, so its writes must carry `at` (section 3.1). Added in 0.25; resume in place and the required `at` in 0.26.
 
 ## 6. Backend requirements
 
@@ -100,6 +113,7 @@ The State API needs two capabilities beyond the Memory API's core, from the [bac
 | --- | --- | --- | --- | --- | --- |
 | Leases | the State API | yes | no | yes | yes |
 | Fence | the backend refuses an agent write whose epoch the lease no longer backs | yes (lease fence headers) | no | yes (in the write's transaction) | yes (in the write's transaction on a replica set; checked just before the write on a standalone server) |
+| Create | the backend writes an agent record only when its id holds none, so a restored in-process holder cannot replace later records | 0.16.0 and later (`If-None-Match: *`) | no | yes (`ON CONFLICT DO NOTHING`) | yes (insert) |
 
 Without leases the tools are not served: `recall serve` logs it at start, `recall mcp -agent` refuses to start, and `POST /v1/agent/*` answers `501 unsupported`. Agent records live in their own collection, the memory collection's name with `_agents` appended.
 
@@ -125,7 +139,9 @@ Over HTTP these are the status and `error.code`; over MCP the same codes appear 
 | lease_lost | 409 | The epoch presented is not the one the server issued for the agent it holds, or the backend fenced the write: a later resume took the agent over. Resume again. |
 | lease_not_held | 409 | A write after a deferred resume, before `agent_acquire` succeeded. |
 | not_resumed | 409 | The server holds no such agent; call `agent_resume` first. After a server restart, every held agent is in this state. |
-| already_resumed | 409 | `agent_resume` for an agent the server already holds for this caller. Release it, or carry on with the epoch already issued. |
+| already_resumed | 409 | `agent_resume` for an agent the server already holds for this caller, with a key not bound to the agent. Release it, or carry on with the epoch already issued. |
+| position_behind | 409 | The records are ahead of the `at` the write carried: the process was restored from an earlier point, or another writer moved them. Nothing was written. The answer carries `position`; call `agent_since` with your own position. |
+| position_ahead | 409 | The `at` the write carried is ahead of the records: the backend lost writes. Nothing was written. |
 | namespace_mismatch | 403 | The request names a namespace, agent or session the credential does not carry. |
-| invalid_argument | 400 | Unknown field, wrong type, bad instant, or a write without the epoch. |
+| invalid_argument | 400 | Unknown field, wrong type, bad instant, a write without the epoch, or an Agent Substrate actor's write without `at`. |
 | tool_error | 400 | The operation refused the request for a reason in its message. |

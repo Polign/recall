@@ -10,8 +10,8 @@ import unittest.mock
 
 from datetime import datetime, timezone
 
-from polign_recall import (ActionEnd, Change, Client, Earlier, Memory, PriorValue, RecallError, Remembered, ResumeContext,
-                           Step, TextResult, Timeline, WorkingState)
+from polign_recall import (ActionEnd, Change, Client, Earlier, Memory, Position, PriorValue, RecallError, Remembered, ResumeContext,
+                           RolledBack, Step, TextResult, Timeline, WorkingState)
 
 
 FAKE = r'''
@@ -233,6 +233,36 @@ class AgentIntegrationTests(unittest.TestCase):
                 self.assertIn("port billing to v2", context.briefing)
                 self.assertIn("please continue", context.briefing)
                 self.assertEqual(agent.record_turn("assistant", "resumed").seq, 4)
+
+    def test_a_rolled_back_agent_is_told_and_catches_up(self):
+        import copy
+        agent_id = "py-rollback-" + os.urandom(4).hex()
+        with self.connect() as client:
+            with client.resume(agent_id, lease_ttl=30) as agent:
+                self.assertEqual(str(agent.position), "0.0.0")
+                agent.record_turn("user", "send the March invoice", message_id="u-1")
+                # The process is snapshotted here.
+                snapshot = copy.copy(agent)
+                action = agent.begin_action("send_invoice", "external", {"month": "2026-03"}, call_id="call-1")
+                agent.end_action(action.seq, "done", "invoice 42 sent")
+                self.assertEqual(str(agent.position), "1.1.0")
+
+                # Restored, it replays: the ids give back what was recorded.
+                self.assertEqual(snapshot.record_turn("user", "send the March invoice", message_id="u-1").seq, 1)
+                replayed = snapshot.begin_action("send_invoice", "external", {"month": "2026-03"}, call_id="call-1")
+                self.assertEqual((replayed.seq, replayed.status, replayed.result), (1, "done", "invoice 42 sent"))
+
+                # Anything new from where it was is refused until it catches up.
+                stale = copy.copy(agent)
+                stale._position = Position(1, 0, 0)
+                with self.assertRaises(RolledBack) as caught:
+                    stale.record_turn("assistant", "sending the invoice now")
+                self.assertEqual((caught.exception.at, caught.exception.position), (Position(1, 0, 0), Position(1, 1, 0)))
+                report = stale.catch_up()
+                self.assertEqual(report.position, Position(1, 1, 0))
+                self.assertEqual([a.tool for a in report.actions], ["send_invoice"])
+                self.assertIn("do not do them again", report.briefing)
+                self.assertEqual(stale.record_turn("assistant", "the invoice was already sent").seq, 2)
 
     def test_deferred_resume_reads_at_once_and_writes_after_the_lease(self):
         agent_id = "py-agent-" + os.urandom(4).hex()

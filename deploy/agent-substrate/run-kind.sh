@@ -6,7 +6,13 @@
 # PATH or named by ATE.
 #
 #   ./run-kind.sh          build, deploy, run the checks
+#   SKIP_BASE=1 ./run-kind.sh
+#                          only the snapshot checks, 7 to 10
 #   ./run-kind.sh clean    remove what the script created
+#
+# Checks 7 to 10 test Recall state across snapshot restores, clones and
+# retries (docs/plans/snapshot-compatibility.md). Where Recall does not yet
+# behave as it should they print GAP and carry on, and the script exits 1.
 set -o errexit -o nounset -o pipefail
 
 cd "$(dirname "$0")"
@@ -40,7 +46,8 @@ stop_proxies() {
 trap 'stop_proxies; rm -f "$ERR"' EXIT
 
 clean() {
-  for a in agent-1 agent-2; do ate delete actor "$a" -a "$ATESPACE" >/dev/null 2>&1 || true; done
+  for a in agent-1 agent-2 agent-3 agent-4 agent-5 agent-6; do ate delete actor "$a" -a "$ATESPACE" >/dev/null 2>&1 || true; done
+  ate delete tag agent-3-tag -a "$ATESPACE" >/dev/null 2>&1 || true
   ate delete actor-template agent -a "$ATESPACE" >/dev/null 2>&1 || true
   k delete namespace recall-demo recall-system --ignore-not-found --wait=true
 }
@@ -90,6 +97,10 @@ for _ in $(seq 1 60); do
   sleep 2
 done
 
+say "Deploy a polign_db for the in-process holder (check 10)"
+k apply -f polign.yaml >/dev/null
+k -n recall-system rollout status deploy/polign --timeout=180s >/dev/null
+
 say "Worker pool, atespace, actor template"
 # Any pool's worker image will do; the install built it.
 WORKER_IMAGE="$(k get workerpools -A -o jsonpath='{.items[0].spec.workerImage}')"
@@ -97,7 +108,8 @@ WORKER_IMAGE="$(k get workerpools -A -o jsonpath='{.items[0].spec.workerImage}')
 sed "s|WORKER_IMAGE|$WORKER_IMAGE|" workerpool.yaml | k apply -f - >/dev/null
 k -n recall-demo rollout status deploy/recall-demo --timeout=180s >/dev/null 2>&1 || true
 ate get atespace "$ATESPACE" >/dev/null 2>&1 || ate create atespace "$ATESPACE" >/dev/null
-for a in agent-1 agent-2; do ate delete actor "$a" -a "$ATESPACE" >/dev/null 2>&1 || true; done
+for a in agent-1 agent-2 agent-3 agent-4 agent-5 agent-6; do ate delete actor "$a" -a "$ATESPACE" >/dev/null 2>&1 || true; done
+ate delete tag agent-3-tag -a "$ATESPACE" >/dev/null 2>&1 || true
 ate delete actor-template agent -a "$ATESPACE" >/dev/null 2>&1 || true
 sed "s|ACTOR_IMAGE|$ACTOR_IMAGE|" actor-template.yaml | ate create actor-template -f - >/dev/null
 for _ in $(seq 1 60); do
@@ -105,6 +117,10 @@ for _ in $(seq 1 60); do
   sleep 2
 done
 
+GAPS=0
+gap() { printf 'GAP: %s\n' "$*"; GAPS=$((GAPS + 1)); }
+
+if [[ -z "${SKIP_BASE:-}" ]]; then
 say "Two actors. Each may reach Recall and nothing else, and holds no key"
 new_actor agent-1
 new_actor agent-2
@@ -179,7 +195,9 @@ proxy agent-2 8102
 call 8101 /v1/agent/release '{"agent_id":"agent-1"}' >/dev/null
 out="$(call 8101 /v1/agent/resume '{"agent_id":"agent-1"}')"
 [[ "$out" == *'"lease_held":true'* ]] || fail "agent-1 did not resume itself: $out"
-out="$(call 8101 /v1/agent/update_working_state '{"agent_id":"agent-1","goal":"move billing to the v2 API"}')"
+# An actor's writes carry the position its last answer returned.
+pos="$(echo "$out" | jq -r '.position | "\(.turns).\(.actions).\(.state)"')"
+out="$(call 8101 /v1/agent/update_working_state "{\"agent_id\":\"agent-1\",\"goal\":\"move billing to the v2 API\",\"at\":\"$pos\"}")"
 [[ "$out" != *'"error"'* ]] || fail "agent-1 could not write its working state: $out"
 out="$(call 8102 /v1/agent/resume '{"agent_id":"agent-1"}')"
 echo "agent-2 resuming agent-1: $out"
@@ -193,13 +211,157 @@ for _ in $(seq 1 15); do
   [[ "$out" == *"already_resumed"* || "$out" == *"briefing"* ]] && break
   sleep 2
 done
-# The server still holds the agent for the actor that was deleted. The new
-# actor releases it and resumes.
-if [[ "$out" == *"already_resumed"* ]]; then
-  call 8101 /v1/agent/release '{"agent_id":"agent-1"}' >/dev/null
-  out="$(call 8101 /v1/agent/resume '{"agent_id":"agent-1"}')"
-fi
+# The server still holds the agent for the actor that was deleted; the new
+# actor's token is bound to the same agent, so its resume is answered in
+# place. A server older than 0.26 answered already_resumed instead.
+[[ "$out" != *"already_resumed"* ]] || gap "the recreated actor got already_resumed instead of its context"
 echo "new agent-1 resumes: $out"
 [[ "$out" == *"move billing to the v2 API"* ]] || fail "the recreated actor did not get the working state back"
 
+fi
+
+# The side effects the harness reports, tallied outside the actor.
+EFFECTS="$(mktemp)"
+# job <port>: run what is left of the harness's job, tally its side effects.
+job() {
+  local out
+  out="$(call "$1" /h/job)"
+  echo "$out" | jq -c '{from_step, step, action_seq, effects, error}' >&2
+  # Not seq: on macOS, seq 1 0 counts down and prints two lines.
+  local n
+  n="$(echo "$out" | jq -r '.effects // 0')"
+  while (( n > 0 )); do echo invoice >>"$EFFECTS"; n=$((n - 1)); done
+  [[ "$(echo "$out" | jq -r '.error // empty')" == "" ]] || fail "the job failed: $out"
+}
+# hcall <port> <verb> [args] [repeat]: a State API call for the agent in the
+# harness's memory, sent repeat times.
+# The first connection after a revert or a clone can fail, so an empty answer
+# is retried. A retry here is safe: nothing reached the actor.
+hcall() {
+  local out args="${3:-}"
+  [[ -n "$args" ]] || args='{}'
+  for _ in $(seq 1 15); do
+    out="$(call "$1" /h/call "{\"verb\":\"$2\",\"args\":$args,\"repeat\":${4:-1}}")"
+    [[ "$out" == *'"answers"'* ]] && break
+    sleep 2
+  done
+  echo "$out"
+}
+# clock <port>: the actor's wall clock and monotonic time since start.
+clock() { call "$1" /clock; }
+turns() { hcall "$1" recent_turns '{"limit":200}' | jq '.answers[0].body'; }
+wait_state() {
+  local s
+  for _ in $(seq 1 60); do
+    s="$(ate get actor "$1" -a "$ATESPACE" | awk 'NR==2 {print $4}')"
+    [[ "$s" == "$2" ]] && return 0
+    sleep 1
+  done
+  fail "$1 is $s, want $2"
+}
+
+say "7. Rollback: agent-3 sends an invoice, is reverted to a snapshot from before, and runs again"
+new_actor agent-3
+proxy agent-3 8103
+for _ in $(seq 1 15); do
+  out="$(call 8103 /h/resume '{"agent_id":"agent-3"}')"
+  [[ "$out" == *'"lease_held":true'* ]] && break
+  sleep 2
+done
+[[ "$out" == *'"lease_held":true'* ]] || fail "agent-3 did not resume: $out"
+ate suspend actor agent-3 -a "$ATESPACE" --mode=sync >/dev/null
+wait_state agent-3 ACTOR_STATE_SUSPENDED
+echo "snapshot taken: the harness has resumed and done nothing"
+base="$(turns 8103 | jq length)"
+job 8103
+ate revert actor agent-3 -a "$ATESPACE" >/dev/null
+wait_state agent-3 ACTOR_STATE_SUSPENDED
+echo "reverted; what a careful harness would check first, pending_actions:"
+hcall 8103 pending_actions | jq -c '.answers[0]'
+job 8103
+t="$(turns 8103)"
+echo "turns: $(echo "$t" | jq -c --argjson b "$base" '.[$b:] | [.[] | {seq, role, message_id}]')"
+n_turns="$(( $(echo "$t" | jq length) - base ))"
+n_ids="$(echo "$t" | jq --argjson b "$base" '.[$b:] | [.[].message_id] | unique | length')"
+n_fx="$(wc -l <"$EFFECTS" | tr -d ' ')"
+echo "turns recorded: $n_turns ($n_ids distinct message ids); invoices sent: $n_fx"
+[[ "$n_turns" == "2" ]] || gap "the reverted actor recorded its turns again ($n_turns turns, $n_ids distinct ids)"
+[[ "$n_fx" == "1" ]] || gap "the reverted actor sent the invoice again ($n_fx invoices)"
+
+say "8. Retries: agent-3 sends each write twice, as it would after losing the first answer"
+before="$(turns 8103 | jq length)"
+hcall 8103 record_turn '{"role":"user","content":"Also send April.","message_id":"retry-1"}' 2 >/dev/null
+after="$(turns 8103 | jq length)"
+echo "record_turn twice with message_id retry-1: $before -> $after turns"
+[[ "$after" == "$((before + 1))" ]] || gap "a retried record_turn with the same message_id was recorded $((after - before)) times"
+out="$(hcall 8103 begin_action '{"tool":"create_ticket","class":"idempotent","args":"{\"id\":\"T-1\"}","call_id":"retry-ticket-1"}' 2)"
+echo "begin_action twice: $(echo "$out" | jq -c '[.answers[] | {status, seq: .body.seq, key: .body.key}]')"
+s1="$(echo "$out" | jq '.answers[0].body.seq')"
+s2="$(echo "$out" | jq '.answers[1].body.seq')"
+[[ "$s1" == "$s2" ]] || gap "a retried begin_action began a second action (seq $s1 then $s2), with a new key"
+out="$(hcall 8103 end_action "{\"seq\":$s1,\"status\":\"done\",\"result\":\"T-1 created\"}" 2)"
+echo "end_action twice: $(echo "$out" | jq -c '[.answers[] | {status, body: (.body.status // .body.error.code // .body)}]')"
+[[ "$(echo "$out" | jq '.answers[1].status')" == "200" ]] || gap "a retried end_action with the same outcome was refused"
+[[ "$s1" == "$s2" ]] || hcall 8103 end_action "{\"seq\":$s2,\"status\":\"abandoned\"}" >/dev/null
+
+say "9. Clone: agent-4 starts from a tag of agent-3 and wakes holding agent-3's id"
+ate suspend actor agent-3 -a "$ATESPACE" --mode=sync >/dev/null
+wait_state agent-3 ACTOR_STATE_SUSPENDED
+ate create tag agent-3-tag -a "$ATESPACE" --actor agent-3 >/dev/null
+ate create actor agent-4 -a "$ATESPACE" --template agent --tag agent-3-tag >/dev/null
+ate create egress-policy agent-4 -a "$ATESPACE" -f egress-policy.yaml >/dev/null
+proxy agent-4 8104
+# The gateway caches a missing policy as deny for 10 s.
+for _ in $(seq 1 15); do
+  out="$(hcall 8104 recent_turns)"
+  [[ "$(echo "$out" | jq '.answers[0].status')" =~ ^(200|4..)$ ]] && break
+  sleep 2
+done
+echo "agent-4's in-process counter: $(call 8104 /count) (agent-3's was 0 before the tag)"
+echo "agent-4's harness holds: $(echo "$out" | jq -r .agent_id)"
+echo "agent-4 reading that agent: $(echo "$out" | jq -c '.answers[0]')"
+[[ "$out" == *"namespace_mismatch"* ]] || gap "the clone was not refused the source actor's state"
+out="$(call 8104 /h/resume '{"agent_id":"agent-4"}')"
+echo "agent-4 resuming itself: fresh=$(echo "$out" | jq '.body.fresh')"
+
+say "10. In process: agent-5 holds an agent through the Go client, against polign_db"
+new_actor agent-5
+proxy agent-5 8105
+for _ in $(seq 1 15); do
+  [[ "$(call 8105 /inproc/turns)" == *"not resumed"* ]] && break
+  sleep 2
+done
+RUN="$(date +%s)"
+inproc_case() { # <agent id> <ttl seconds> <seconds to wait after the revert>
+  local id="$1" out
+  out="$(call 8105 /inproc/resume "{\"agent_id\":\"$id\",\"ttl_s\":$2}")"
+  echo "resume $id (ttl $2 s): $out"
+  [[ "$out" == *'"epoch"'* ]] || fail "agent-5 could not resume $id in process"
+  for c in A B; do echo "turn $c: $(call 8105 /inproc/turn "{\"content\":\"$c\"}")"; done
+  echo "before the snapshot; clock $(clock 8105)"
+  ate suspend actor agent-5 -a "$ATESPACE" --mode=sync >/dev/null
+  wait_state agent-5 ACTOR_STATE_SUSPENDED
+  echo "snapshot taken after A, B; clock $(clock 8105)"
+  for c in C D; do echo "turn $c: $(call 8105 /inproc/turn "{\"content\":\"$c\"}")"; done
+  ate revert actor agent-5 -a "$ATESPACE" >/dev/null
+  wait_state agent-5 ACTOR_STATE_SUSPENDED
+  echo "reverted to the snapshot; waiting $3 s"
+  sleep "$3"
+  echo "restored; clock $(clock 8105)"
+  echo "turn E: $(call 8105 /inproc/turn '{"content":"E"}')"
+  echo "turn F: $(call 8105 /inproc/turn '{"content":"F"}')"
+  out="$(call 8105 /inproc/turns)"
+  echo "turns in polign_db: $(echo "$out" | jq -c '[.[]? | "\(.seq):\(.content)"]')"
+  INPROC="$out"
+  echo "read by a new client: $(call 8105 /inproc/peek "{\"agent_id\":\"$id\"}")"
+}
+inproc_case "inproc-a-$RUN" 600 0
+[[ "$INPROC" == *'"C"'* ]] || gap "inside the lease TTL, the reverted process overwrote turn C"
+inproc_case "inproc-b-$RUN" 15 20
+[[ "$INPROC" == *'"C"'* ]] || gap "after the lease TTL, the reverted process overwrote turn C"
+
+if (( GAPS > 0 )); then
+  say "$GAPS gaps in checks 7 to 10"
+  exit 1
+fi
 say "All checks passed"

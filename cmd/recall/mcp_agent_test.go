@@ -16,7 +16,7 @@ func newAgentMCP(t *testing.T, url string) *mcpServer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &mcpServer{collection: "memory", write: true, memory: mem, agents: newAgentRuntime()}
+	return &mcpServer{collection: "memory", write: true, memory: mem, agents: newAgentRuntime(0)}
 }
 
 func callTool(t *testing.T, s *mcpServer, name string, args map[string]any) (string, error) {
@@ -190,8 +190,11 @@ func TestAgentToolsActionsSurviveACrash(t *testing.T) {
 	// The model settles both and the agent is clean.
 	mustTool(t, next, "end_action", map[string]any{"agent_id": "shop-1", "seq": save["seq"], "status": "done", "result": "saved", "resolution": "re-run with the same key"})
 	mustTool(t, next, "end_action", map[string]any{"agent_id": "shop-1", "seq": mail["seq"], "status": "done", "resolution": "found in the sent folder"})
-	if _, err := callTool(t, next, "end_action", map[string]any{"agent_id": "shop-1", "seq": mail["seq"], "status": "done"}); err == nil {
-		t.Fatal("ending an action twice succeeded")
+	// A retried end with the same outcome is the action as it stands; a
+	// different outcome is refused, since the first one stands.
+	mustTool(t, next, "end_action", map[string]any{"agent_id": "shop-1", "seq": mail["seq"], "status": "done"})
+	if _, err := callTool(t, next, "end_action", map[string]any{"agent_id": "shop-1", "seq": mail["seq"], "status": "failed", "error": "bounced"}); err == nil {
+		t.Fatal("ending an action again with a different outcome succeeded")
 	}
 	out, err := callTool(t, next, "pending_actions", map[string]any{"agent_id": "shop-1"})
 	if err != nil || out != "[]" {

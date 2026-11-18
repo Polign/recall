@@ -12,6 +12,10 @@ containers:
   env:
   - name: RECALL_URL
     value: http://recall.recall-system.svc.cluster.local
+  # Only for check 10: a polign_db the actor reaches directly, to hold an
+  # agent in process.
+  - name: POLIGN_URL
+    value: http://polign.recall-system.svc.cluster.local
   wakeupProbe:
     httpGet:
       path: /readyz

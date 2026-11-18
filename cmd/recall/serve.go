@@ -55,6 +55,9 @@ type principal struct {
 	Admin bool
 	// KeyID is the id of the key presented, when a key store issued it.
 	KeyID string
+	// Substrate means the bearer is an Agent Substrate actor token. Rollback
+	// is a feature of that runtime, so its State API writes must carry at.
+	Substrate bool
 }
 
 // authenticator turns a bearer credential into a principal.
@@ -202,6 +205,9 @@ type serveConfig struct {
 	open      bool
 	text      bool
 	agents    bool // expose the resume tools when the backend has leases
+	// agentIdle releases an agent held for a bound credential after this
+	// long without a call; zero never does.
+	agentIdle time.Duration
 }
 
 // newTenantServers builds the per-namespace server factory. Every namespace
@@ -218,7 +224,7 @@ func newTenantServers(cfg serveConfig) *tenantServers {
 		mem := &memoryRuntime{client: client, backend: cfg.backend, ctx: context.Background(), extractor: cfg.extractor, open: cfg.open, text: cfg.text}
 		s := &mcpServer{collection: collection, write: true, memory: mem}
 		if cfg.agents && leases {
-			s.agents = newAgentRuntime()
+			s.agents = newAgentRuntime(cfg.agentIdle)
 		}
 		return s, nil
 	}}
@@ -401,6 +407,9 @@ func (f *frontDoor) handleMCP(w http.ResponseWriter, r *http.Request, p principa
 			if args, epoch, present, herr = leaseEpoch(r, args); herr == nil && present {
 				herr = checkLease(s, p, call.Name, args, epoch, present, false)
 			}
+			if herr == nil {
+				args, _, herr = ifPosition(r, args)
+			}
 		}
 		if herr != nil {
 			// A refused identity is a tool result, as every tool failure is,
@@ -411,7 +420,7 @@ func (f *frontDoor) handleMCP(w http.ResponseWriter, r *http.Request, p principa
 		params, _ := json.Marshal(map[string]any{"name": call.Name, "arguments": args})
 		req.Params = params
 	}
-	result, rerr := s.dispatch(withSession(r.Context(), p.Session), req.Method, req.Params)
+	result, rerr := s.dispatch(withCaller(withSession(r.Context(), p.Session), p), req.Method, req.Params)
 	writeJSON(w, http.StatusOK, rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: result, Error: rerr})
 }
 
@@ -448,13 +457,14 @@ var restAgentVerbs = map[string]string{
 	"begin_action":          "begin_action",
 	"end_action":            "end_action",
 	"pending_actions":       "pending_actions",
+	"since":                 "agent_since",
 }
 
 // stateWrite says whether a State API tool needs the lease: everything but
 // the reads and the two calls that take it.
 func stateWrite(tool string) bool {
 	switch tool {
-	case "agent_resume", "agent_acquire", "recent_turns", "fetch_output", "list_pointers", "working_state_history", "pending_actions", "agent_context":
+	case "agent_resume", "agent_acquire", "recent_turns", "fetch_output", "list_pointers", "working_state_history", "pending_actions", "agent_context", "agent_since":
 		return false
 	}
 	return agentTools[tool]
@@ -544,6 +554,10 @@ func stateError(err error) (int, string) {
 		return http.StatusConflict, "not_resumed"
 	case errors.As(err, &already):
 		return http.StatusConflict, "already_resumed"
+	case errors.Is(err, recall.ErrPositionBehind):
+		return http.StatusConflict, "position_behind"
+	case errors.Is(err, recall.ErrPositionAhead):
+		return http.StatusConflict, "position_ahead"
 	case errors.Is(err, recall.ErrLeaseUnsupported):
 		return http.StatusNotImplemented, "unsupported"
 	case strings.HasPrefix(err.Error(), "arguments:"):
@@ -600,16 +614,27 @@ func (f *frontDoor) handleAgentREST(w http.ResponseWriter, r *http.Request, p pr
 	if herr == nil {
 		herr = checkLease(s, p, tool, args, epoch, present, true)
 	}
+	var hasAt bool
+	if herr == nil {
+		args, hasAt, herr = ifPosition(r, args)
+	}
+	if herr == nil && p.Substrate && positionWrites[tool] && !hasAt {
+		// A Substrate actor can be reverted to an earlier snapshot at any
+		// time, so each of its writes says where it believes the records
+		// stand.
+		herr = &httpError{http.StatusBadRequest, "invalid_argument", "an Agent Substrate actor's write carries the position the last answer returned: If-Position: <turns.actions.state>, or \"at\" in the body"}
+	}
 	if herr != nil {
 		writeError(w, herr.status, herr.code, herr.message)
 		return
 	}
-	out, err := s.runTool(withSession(r.Context(), p.Session), tool, args)
+	ctx, pos := withPositionSink(withCaller(withSession(r.Context(), p.Session), p))
+	out, err := s.runTool(ctx, tool, args)
 	if err != nil {
-		status, code := stateError(err)
-		writeError(w, status, code, err.Error())
+		writeStateError(w, err)
 		return
 	}
+	w.Header().Set(headerPosition, pos.String())
 	w.Header().Set("Content-Type", "application/json")
 	if json.Valid([]byte(out)) {
 		_, _ = io.WriteString(w, out)
@@ -828,6 +853,7 @@ func cmdServe(global *dbFlags, args []string) error {
 	typed := fs.Bool("typed", os.Getenv("RECALL_TYPED") == "1", "serve the typed tools instead (default on when $RECALL_TYPED is 1)")
 	open := fs.Bool("open", os.Getenv("RECALL_OPEN") == "1", "let writes define predicates; the text tools do unless -predicates is given, the typed tools only with this flag (default on when $RECALL_OPEN is 1)")
 	agent := fs.Bool("agent", true, "expose the resume tools when the backend provides leases")
+	agentIdle := fs.Duration("agent-idle", 5*time.Minute, "release an agent held for a credential bound to it (a Kubernetes key, a Substrate actor) after this long without a call; its next call resumes it. 0 keeps it held")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -888,7 +914,7 @@ func cmdServe(global *dbFlags, args []string) error {
 	if err != nil {
 		return fmt.Errorf("serve: %s: %w", d, err)
 	}
-	tenants := newTenantServers(serveConfig{backend: backend, registry: registry, embedder: embedder, extractor: extractor, base: *collection, open: openAll, text: serveText, agents: *agent})
+	tenants := newTenantServers(serveConfig{backend: backend, registry: registry, embedder: embedder, extractor: extractor, base: *collection, open: openAll, text: serveText, agents: *agent, agentIdle: *agentIdle})
 	_, leases := backend.(recall.LeaseBackend)
 	if *agent && !leases {
 		log.Printf("serve: the %s backend has no leases; the resume tools are not served", name)

@@ -48,6 +48,27 @@ repository, deploys them, and checks six things:
 6. Through the State API, an actor is refused another actor's state, and an
    actor created again resumes with the working state the deleted one left.
 
+Checks 7 to 10 test Recall state when the runtime puts a process back to an
+earlier point. The demo actor runs a small harness whose progress lives in
+process memory, and the script counts its side effects outside the actor:
+
+7. An actor sends an invoice, is reverted to a snapshot taken before, and runs
+   its job again.
+8. An actor sends `record_turn`, `begin_action` and `end_action` twice each,
+   as it would after losing the first answer.
+9. An actor created from another actor's tag calls the State API with the id
+   it woke up holding.
+10. An actor holds an agent in process through the Go client, against a
+    polign_db it reaches directly (`polign.yaml`), and is reverted inside the
+    lease TTL and after it.
+
+The harness passes its own message and call ids, sends the position of its
+last answer as `If-Position`, and calls `since` after `position_behind`; the
+checks pass when a reverted or retrying actor records no duplicate turn and
+sends no second invoice. Where Recall does not behave as it should, they
+print `GAP` and the script exits 1; see `docs/plans/snapshot-compatibility.md`.
+`SKIP_BASE=1 ./run-kind.sh` runs only checks 7 to 10.
+
 `./run-kind.sh clean` removes what the script created.
 
 ## What to know
@@ -71,10 +92,29 @@ repository, deploys them, and checks six things:
   lost when that pod is replaced. A real install names a backend with
   `RECALL_BACKEND` and `RECALL_BACKEND_URL`.
 - **For the State API, the agent is the actor.** An actor may resume only the
-  agent with its own name, and its writes need no lease epoch. An actor
-  created again under a deleted actor's name gets `409 already_resumed` on
-  `agent_resume`, because the server still holds the agent for the old actor.
-  It calls `agent_release` and resumes, and gets the old actor's working
-  state back.
+  agent with its own name, and its writes need no lease epoch. It never has
+  to manage the lease: a call for an agent the server does not hold resumes
+  it, and an actor created again under a deleted actor's name gets the old
+  actor's working state back from `agent_resume`. An agent with no call for
+  five minutes (`-agent-idle`) is released and taken back on its next call.
+- **An actor's writes carry its position.** Substrate can revert an actor to
+  an earlier snapshot at any time, including on its own after a lost node,
+  so the actor's memory can be behind Recall's records. Every answer carries
+  `Recall-Position`; send it back as `If-Position` (or `"at"`) on
+  `record_turn`, `begin_action`, `end_action`, `update_working_state` and
+  `milestone`, which answer `400` without it. A `409 position_behind` means
+  the actor was put back: call `since` with its position, hand the briefing
+  to the model (those turns and actions happened), and carry on from the
+  position it returns. Pass `message_id` on turns and `call_id` (the model's
+  tool call id) on `begin_action`, and a replay of what the actor already did
+  answers with what was recorded, so a finished invoice comes back `done`
+  instead of being sent again.
+- **A clone wakes holding its source's identity.** An actor created from
+  another actor's tag, or from the template's golden snapshot, still has the
+  source's agent id in memory; its token names the new actor, so it is
+  refused with `403 namespace_mismatch`. Read the actor's own name from
+  `/run/ate/actor-name` when you need it, rather than keeping it from before
+  the snapshot, and do not resume an agent before the golden snapshot is
+  taken.
 
 Tested on kind with Substrate v1.0.0 and gVisor workers.

@@ -97,6 +97,9 @@ func (a *Agent) load(ctx context.Context, budget int) (ResumeContext, error) {
 	a.state = ws
 	a.turnSeq = latest
 	a.actSeq = latestAct
+	for _, t := range turns {
+		a.noteMessageLocked(t)
+	}
 	a.mu.Unlock()
 
 	rc.Fresh = len(heads) == 0 && latest == 0 && latestAct == 0 && len(pointers) == 0 && len(outputs) == 0
