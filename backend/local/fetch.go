@@ -33,17 +33,17 @@ import (
 // ServerVersion is the polign_db release the local backend downloads when no
 // polign-server is installed. Bump it, and serverArchives with it, from the
 // release's checksums.txt (dl.polign.com/<version>/checksums.txt).
-const ServerVersion = "v0.15.0"
+const ServerVersion = "v0.16.0"
 
 // serverArchives pins each release archive to its SHA-256, so a download is
 // exactly the build Recall was tested with, whatever answers the URL.
 var serverArchives = map[string]string{
-	"darwin_amd64":  "978c09af711dedb61349e7114ed05659a702dddb80ddbf7a22d0a426b61286ef",
-	"darwin_arm64":  "1d5a1e6cd538bb942c993b50d8a0f9f20d7d06a56606236f38c37bda1555977a",
-	"linux_amd64":   "4e836ad3bac16e1903d2d2a37126e5ad51989784be87f71b36aa5b2c27b1f955",
-	"linux_arm64":   "3fdacba8628752cc86b8689ff3bf41e05e216e3fb7e970cc0ee2323704707714",
-	"windows_amd64": "4884da1eedb8f29e58fd288f1aab3cdff0446964d2cd2463d4da453879fa2da6",
-	"windows_arm64": "61ae5ee3e228f981e92c438b5f7ce3bb74a19c01a6de2737fc1c42b93cfb66bd",
+	"darwin_amd64":  "87adc7d0e2fa5ff25910cf240c2603b5e21a1d7d3d53bf6cccd48dec2e7ac01f",
+	"darwin_arm64":  "8d801f020bf734684b274b5070f1e2b03a9640d26fca4caa17efa8a75953f7e8",
+	"linux_amd64":   "17a8d9583a8c4f9fe5d41022f217c8f4c0076d37b7c65544904b21d64d02f677",
+	"linux_arm64":   "0b323e28069076631eb200391d7decc2299e4e042c4b1a4051f0bbebf76c61f0",
+	"windows_amd64": "f71a099cf571acc3ad8501764c258684812a22f33c7700dc5f64480658ce1107",
+	"windows_arm64": "3281b99f2354bda4b80cc589f8faada7350a370151ac77d6d417624a4abd1b35",
 }
 
 // downloadBase serves the release archives; tests point it elsewhere.

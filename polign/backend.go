@@ -39,8 +39,10 @@ type Backend struct {
 }
 
 var (
-	_ recall.Backend      = (*Backend)(nil)
-	_ recall.LeaseBackend = (*Backend)(nil)
+	_ recall.Backend       = (*Backend)(nil)
+	_ recall.LeaseBackend  = (*Backend)(nil)
+	_ recall.FencedBackend = (*Backend)(nil)
+	_ recall.CreateBackend = (*Backend)(nil)
 )
 
 // Importing this package registers it as the "polign" backend.
@@ -114,6 +116,19 @@ func (b *Backend) Put(ctx context.Context, collection, id string, values []float
 // recall.ErrLeaseLost with nothing written. A server older than the fence
 // ignores the headers, and the write is then guarded only by the client.
 func (b *Backend) PutFenced(ctx context.Context, collection, id string, values []float32, metadata map[string]any, fence recall.Fence) error {
+	return b.conditionalPut(ctx, collection, id, values, metadata, &fence, false)
+}
+
+// Create writes only when the id holds no record: polign_db 0.16.0 and later
+// answer If-None-Match: * with 412 and the ids that exist, reported as
+// recall.ErrRecordExists with nothing written. A 412 without them is the
+// lease fence. An older server ignores the header and replaces the record;
+// Recall's positions and ids still catch a replay over HTTP.
+func (b *Backend) Create(ctx context.Context, collection, id string, values []float32, metadata map[string]any, fence *recall.Fence) error {
+	return b.conditionalPut(ctx, collection, id, values, metadata, fence, true)
+}
+
+func (b *Backend) conditionalPut(ctx context.Context, collection, id string, values []float32, metadata map[string]any, fence *recall.Fence, createOnly bool) error {
 	path, err := collectionPath(collection)
 	if err != nil {
 		return err
@@ -122,12 +137,27 @@ func (b *Backend) PutFenced(ctx context.Context, collection, id string, values [
 		return fmt.Errorf("polign: event ID is required and cannot be a dot path")
 	}
 	h := http.Header{}
-	h.Set("Polign-Lease-Name", fence.Lease)
-	h.Set("Polign-Lease-Holder", fence.Holder)
-	h.Set("Polign-Lease-Epoch", strconv.FormatUint(fence.Epoch, 10))
-	_, err = b.doRawWith(ctx, http.MethodPut, path+"/vectors/"+url.PathEscape(id), map[string]any{"values": values, "metadata": metadata}, nil, h)
+	if fence != nil {
+		h.Set("Polign-Lease-Name", fence.Lease)
+		h.Set("Polign-Lease-Holder", fence.Holder)
+		h.Set("Polign-Lease-Epoch", strconv.FormatUint(fence.Epoch, 10))
+	}
+	if createOnly {
+		h.Set("If-None-Match", "*")
+	}
+	raw, err := b.doRawWith(ctx, http.MethodPut, path+"/vectors/"+url.PathEscape(id), map[string]any{"values": values, "metadata": metadata}, nil, h)
 	var se *StatusError
-	if errors.As(err, &se) && se.StatusCode == http.StatusPreconditionFailed {
+	if !errors.As(err, &se) || se.StatusCode != http.StatusPreconditionFailed {
+		return err
+	}
+	var detail struct {
+		Exists []string `json:"exists"`
+	}
+	_ = json.Unmarshal(raw, &detail)
+	if createOnly && len(detail.Exists) > 0 {
+		return fmt.Errorf("%w: %s", recall.ErrRecordExists, strings.Join(detail.Exists, ", "))
+	}
+	if fence != nil {
 		return fmt.Errorf("%w: %s", recall.ErrLeaseLost, se.Message)
 	}
 	return err

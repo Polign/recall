@@ -39,6 +39,7 @@ func Run(t *testing.T, newBackend func(t *testing.T) recall.Backend) {
 	t.Run("Watermark", func(t *testing.T) { watermark(t, newBackend(t), collection(t)) })
 	t.Run("Leases", func(t *testing.T) { leases(t, newBackend(t), collection(t)) })
 	t.Run("Fence", func(t *testing.T) { fence(t, newBackend(t), collection(t)) })
+	t.Run("Create", func(t *testing.T) { create(t, newBackend(t), collection(t)) })
 	t.Run("Agent", func(t *testing.T) { agent(t, newBackend(t), collection(t)) })
 	t.Run("Corrections", func(t *testing.T) { corrections(t, newBackend(t), collection(t)) })
 }
@@ -630,5 +631,69 @@ func fence(t *testing.T, b recall.Backend, c string) {
 	}
 	if err := fb.PutFenced(ctx, c, "f3", v, md("f3"), recall.Fence{Lease: "agent-f", Holder: "pod-b", Epoch: g3.Epoch}); err != nil {
 		t.Fatalf("new holder write: %v", err)
+	}
+}
+
+// create checks a CreateBackend writes an id only once, tells a taken id
+// from a lost lease, and writes nothing when it refuses.
+func create(t *testing.T, b recall.Backend, c string) {
+	t.Helper()
+	ctx := t.Context()
+	cb, ok := b.(recall.CreateBackend)
+	if !ok {
+		t.Skip("backend does not implement recall.CreateBackend")
+	}
+	v := []float32{1, 0, 0, 0}
+	md := func(id, body string) map[string]any {
+		return map[string]any{"recall_agent": "agent-c", "record": "turn", "n": id, "body": body}
+	}
+	body := func(id string) string {
+		t.Helper()
+		rows, _, err := b.List(ctx, c, map[string]any{"n": id}, 10)
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("list %s = %+v, %v; want one record", id, rows, err)
+		}
+		s, _ := rows[0].Metadata["body"].(string)
+		return s
+	}
+	if err := cb.Create(ctx, c, "c1", v, md("c1", "C"), nil); err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	if err := cb.Create(ctx, c, "c1", v, md("c1", "E"), nil); !errors.Is(err, recall.ErrRecordExists) {
+		t.Fatalf("second create err = %v, want ErrRecordExists", err)
+	}
+	if got := body("c1"); got != "C" {
+		t.Fatalf("c1 after a refused create = %q, want C", got)
+	}
+
+	lb, leased := b.(recall.LeaseBackend)
+	if _, fenced := b.(recall.FencedBackend); !leased || !fenced {
+		return
+	}
+	g, err := lb.AcquireLease(ctx, c, "agent-c", "pod-a", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &recall.Fence{Lease: "agent-c", Holder: "pod-a", Epoch: g.Epoch}
+	if err := cb.Create(ctx, c, "c2", v, md("c2", "C"), f); err != nil {
+		t.Fatalf("fenced create: %v", err)
+	}
+	if err := cb.Create(ctx, c, "c2", v, md("c2", "E"), f); !errors.Is(err, recall.ErrRecordExists) || errors.Is(err, recall.ErrLeaseLost) {
+		t.Fatalf("fenced create of a taken id err = %v, want ErrRecordExists only", err)
+	}
+	if err := lb.ReleaseLease(ctx, c, "agent-c", "pod-a", g.Epoch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lb.AcquireLease(ctx, c, "agent-c", "pod-b", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := cb.Create(ctx, c, "c3", v, md("c3", "Z"), f); !errors.Is(err, recall.ErrLeaseLost) {
+		t.Fatalf("superseded create err = %v, want ErrLeaseLost", err)
+	}
+	if rows, _, err := b.List(ctx, c, map[string]any{"n": "c3"}, 10); err != nil || len(rows) != 0 {
+		t.Fatalf("superseded create landed: %+v, %v", rows, err)
+	}
+	if got := body("c2"); got != "C" {
+		t.Fatalf("c2 after refused creates = %q, want C", got)
 	}
 }

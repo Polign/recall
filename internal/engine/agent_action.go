@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -64,7 +65,10 @@ type Action struct {
 	Args string `json:"args,omitempty"`
 	// Key is fixed when the action begins and is the same on every retry:
 	// the idempotency key an idempotent tool passes to the outside system.
-	Key    string       `json:"key"`
+	Key string `json:"key"`
+	// CallID is the harness's id for the tool call, when it gave one. A
+	// begin repeated with it returns this action instead of a new one.
+	CallID string       `json:"call_id,omitempty"`
 	Status ActionStatus `json:"status"`
 	Result string       `json:"result,omitempty"`
 	Error  string       `json:"error,omitempty"`
@@ -118,7 +122,17 @@ var validEnds = map[ActionStatus]bool{ActionDone: true, ActionFailed: true, Acti
 // BeginAction records that a tool call is about to run. Call it before the
 // call and run the tool only if it succeeds; pass the returned Key to an
 // idempotent tool.
-func (a *Agent) BeginAction(ctx context.Context, tool string, class ActionClass, args string) (Action, error) {
+//
+// With CallID, a call already begun is returned as it stands, whatever its
+// status, and nothing is written: a harness restored from an earlier snapshot
+// sees "done" and skips the call, or sees "started" and settles it as after a
+// crash. With At, a begin from a position the records have moved past fails
+// with ErrPositionBehind, as does, on a CreateBackend, a seq already used.
+func (a *Agent) BeginAction(ctx context.Context, tool string, class ActionClass, args string, opts ...WriteOption) (Action, error) {
+	o := applyWriteOptions(opts)
+	if len(o.callID) > 256 {
+		return Action{}, fmt.Errorf("recall: action call id must be at most 256 bytes")
+	}
 	tool = strings.TrimSpace(tool)
 	if tool == "" || len(tool) > maxToolName {
 		return Action{}, fmt.Errorf("recall: action needs a tool name of at most %d bytes", maxToolName)
@@ -131,7 +145,13 @@ func (a *Agent) BeginAction(ctx context.Context, tool string, class ActionClass,
 	if err := a.writable(ctx); err != nil {
 		return Action{}, err
 	}
-	act := Action{Seq: a.actSeq + 1, Tool: tool, Class: class, Status: ActionStarted, StartedAt: time.Now().UTC()}
+	if rec, ok, err := a.recordedActionLocked(ctx, o.callID); err != nil || ok {
+		return rec, err
+	}
+	if err := a.checkAtLocked(o.at); err != nil {
+		return Action{}, err
+	}
+	act := Action{Seq: a.actSeq + 1, Tool: tool, Class: class, CallID: o.callID, Status: ActionStarted, StartedAt: time.Now().UTC()}
 	act.Key = actionKey(a.id, act.Seq)
 	if a.lease != nil {
 		act.Epoch = a.lease.epoch()
@@ -140,16 +160,27 @@ func (a *Agent) BeginAction(ctx context.Context, tool string, class ActionClass,
 	if act.Args, act.ArgsRef, err = a.spill(ctx, act, "args", args); err != nil {
 		return Action{}, err
 	}
-	if err := a.putAction(ctx, act); err != nil {
+	err = a.putAction(ctx, act, true)
+	if errors.Is(err, ErrRecordExists) {
+		err = a.behindLocked(ctx, err)
+		// The action there may be this one, from a begin whose answer was lost.
+		if rec, ok, rerr := a.recordedActionLocked(ctx, o.callID); rerr == nil && ok {
+			return rec, nil
+		}
+	}
+	if err != nil {
 		return Action{}, err
 	}
 	a.actSeq = act.Seq
+	a.noteCallLocked(act)
 	return act, nil
 }
 
 // EndAction closes an open action with how it finished. Ending an action
-// that is already closed is an error: the first outcome stands.
-func (a *Agent) EndAction(ctx context.Context, seq int64, end ActionEnd) (Action, error) {
+// already closed with the same outcome returns it, so a retried end is a
+// no-op; a different outcome is an error: the first outcome stands.
+func (a *Agent) EndAction(ctx context.Context, seq int64, end ActionEnd, opts ...WriteOption) (Action, error) {
+	o := applyWriteOptions(opts)
 	if !validEnds[end.Status] {
 		return Action{}, fmt.Errorf(`recall: an action ends "done", "failed", "abandoned" or "unknown", got %q`, end.Status)
 	}
@@ -163,7 +194,13 @@ func (a *Agent) EndAction(ctx context.Context, seq int64, end ActionEnd) (Action
 		return Action{}, err
 	}
 	if !act.Status.open() {
+		if sameEnd(act, end) {
+			return act, nil
+		}
 		return Action{}, fmt.Errorf("recall: action %d (%s) already ended %s", seq, act.Tool, act.Status)
+	}
+	if err := a.checkAtLocked(o.at); err != nil {
+		return Action{}, err
 	}
 	act.Status = end.Status
 	act.Error = end.Error
@@ -176,10 +213,16 @@ func (a *Agent) EndAction(ctx context.Context, seq int64, end ActionEnd) (Action
 	if end.Status != ActionUnknown {
 		act.EndedAt = time.Now().UTC()
 	}
-	if err := a.putAction(ctx, act); err != nil {
+	if err := a.putAction(ctx, act, false); err != nil {
 		return Action{}, err
 	}
 	return act, nil
+}
+
+// sameEnd reports whether end is the outcome act already has. A result kept
+// as an output is compared by status and error only.
+func sameEnd(act Action, end ActionEnd) bool {
+	return act.Status == end.Status && act.Error == end.Error && (act.ResultRef != "" || act.Result == end.Result)
 }
 
 // PendingActions returns the open actions, oldest first.
@@ -326,21 +369,32 @@ func (a *Agent) spill(ctx context.Context, act Action, part, text string) (strin
 	if a.threshold <= 0 || estimateTokens(text) <= a.threshold {
 		return text, "", nil
 	}
-	out, err := a.storeOutputLocked(ctx, Output{Ref: fmt.Sprintf("act-%d-%s", act.Seq, part), Tool: act.Tool, Content: text})
+	// The args are written at the begin, create-only like the begin itself;
+	// the result replaces whatever a crashed end left.
+	out, err := a.storeOutputLocked(ctx, Output{Ref: fmt.Sprintf("act-%d-%s", act.Seq, part), Tool: act.Tool, Content: text}, part == "args")
 	if err != nil {
 		return "", "", err
 	}
 	return opening(text, 400) + fmt.Sprintf("\n[... %d more tokens stored as output %s]", estimateTokens(text), out.Ref), out.Ref, nil
 }
 
-func (a *Agent) putAction(ctx context.Context, act Action) error {
+// putAction writes an action record; the begin is create-only, the end
+// replaces the begin.
+func (a *Agent) putAction(ctx context.Context, act Action, begin bool) error {
 	body, err := json.Marshal(act)
 	if err != nil {
 		return err
 	}
 	page := strconv.FormatInt((act.Seq-1)/actionPage, 10)
-	return a.put(ctx, a.recordID("act", strconv.FormatInt(act.Seq, 10)), recAction, act.Tool+" "+opening(act.Args, 400), body,
-		map[string]any{"seq": act.Seq, "act": strconv.FormatInt(act.Seq, 10), "page": page, "status": string(act.Status), "class": string(act.Class)})
+	md := map[string]any{"seq": act.Seq, "act": strconv.FormatInt(act.Seq, 10), "page": page, "status": string(act.Status), "class": string(act.Class)}
+	if act.CallID != "" {
+		md["call_id"] = act.CallID
+	}
+	id, text := a.recordID("act", strconv.FormatInt(act.Seq, 10)), act.Tool+" "+opening(act.Args, 400)
+	if begin {
+		return a.create(ctx, id, recAction, text, body, md)
+	}
+	return a.put(ctx, id, recAction, text, body, md)
 }
 
 func (a *Agent) action(ctx context.Context, seq int64) (Action, error) {

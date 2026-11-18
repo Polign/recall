@@ -14,6 +14,35 @@
   `recall telemetry` prints exactly what is sent. Turn it off with
   `recall telemetry off`, `RECALL_TELEMETRY=0` or `DO_NOT_TRACK=1`; it is
   also off in CI and in builds from source. See [TELEMETRY.md](TELEMETRY.md).
+- Agents restored from an earlier process snapshot (a Substrate revert, a
+  lost node, a retried write) no longer overwrite or repeat later records.
+  In Go:
+  - `Agent.Position()` returns the turn count, the action count and the
+    working state version.
+  - `recall.At(p)` on `RecordTurn`, `BeginAction`, `EndAction` or
+    `UpdateWorkingState` refuses a write made from an earlier position with
+    `ErrPositionBehind`, or a later one with `ErrPositionAhead`.
+  - `Agent.Since(ctx, p, budget)` reports the turns, actions and working
+    state written after `p`, with a briefing that tells the model not to
+    repeat them.
+  - A turn whose `MessageID` is already recorded returns the recorded turn.
+    `recall.CallID(id)` on `BeginAction` returns the action already begun for
+    that tool call, in whatever status it is.
+  - Turns, action begins, working state versions and the outputs they store
+    are written create-only on a backend that implements the new
+    `recall.CreateBackend` (polign_db 0.16.0 and later, pgvector, MongoDB). A
+    process holding the agent in memory that comes back behind its records
+    gets `ErrPositionBehind` and continues after the newest record, instead
+    of replacing the later ones.
+  - The lease guard also reads the wall clock, so a process whose monotonic
+    clock missed a suspend renews before it writes.
+
+### Changed
+
+- `end_action` (and `Agent.EndAction`) repeated with the outcome already
+  recorded returns the action instead of an error. A different outcome is
+  still refused.
+- The local backend downloads polign_db v0.16.0.
 
 ## [0.25.0] - 2026-11-09
 

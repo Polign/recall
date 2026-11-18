@@ -1,8 +1,10 @@
 # State that survives process snapshots
 
 Status: plan, written 2026-11-09 against recall 0.25.0 and Agent Substrate
-v1.0.0. Phase 0 ran on kind on 2026-11-16 (results below); Phases 1 to 4 not
-started. The table and the in-process design were corrected from the run.
+v1.0.0. Phase 0 ran on kind on 2026-11-16 (results below). polign_db 0.16.0
+shipped the create-only put on 2026-11-17. Phase 1 (engine) done 2026-11-17;
+Phases 2 to 4 not started. The table and the in-process design were
+corrected from the run.
 
 ## Goal
 
@@ -201,6 +203,29 @@ from where they stood when the check started.
 - Unit tests for each, plus a rollback test that restores an `Agent` value
   copied earlier and writes through it.
 
+Done 2026-11-17 (`internal/engine/agent_position.go`). As built:
+
+- `At` and `CallID` are `WriteOption`s, a variadic last argument on
+  `RecordTurn`, `BeginAction`, `EndAction` and `UpdateWorkingState`, so no
+  Go caller breaks.
+- Ids are checked before the position, so a retry carrying the position from
+  before its first attempt gets the recorded turn or action, not
+  `position_behind`.
+- A message id is looked up only in the Agent's recent set (loaded at
+  resume). A miss costs nothing on the common path; a replay the set does not
+  know collides on the create, the Agent catches up and finds it then. A call
+  id miss also asks the records, since a repeated external action costs more
+  than a read.
+- Create-only covers turns, action begins (and their spilled args), working
+  state versions, and auto-named outputs, which move to the next name on a
+  collision. A versioned working state copy the head never reached is an
+  orphan and is replaced.
+- `recall.CreateBackend` is implemented by polign (`If-None-Match: *`),
+  pgvector (`ON CONFLICT DO NOTHING`) and MongoDB (`InsertOne`), with a
+  `Create` case in `backendtest`. It passed against polign_db 0.16.0,
+  pgvector 0.8.1 and MongoDB 7.0.
+- `guard` takes the lease age from both clocks.
+
 ### 2. Server and wire (about 2 days)
 
 `cmd/recall/mcp_agent.go`, `serve.go`:
@@ -237,16 +262,15 @@ is done and tagged on a Friday. The integrations follow in Polign/polign.
 Phase 0 showed polign_db needs a create-only vector put. That ships first,
 and recall's polign backend uses it when the server has it.
 
-## Decisions for Anup
+## Decisions (settled 2026-11-17)
 
-1. **Is `at` required?** Recommended: required for Substrate callers, where
-   rollback is a runtime feature and the mode shipped today with no users to
-   break; optional everywhere else, with the Python client always sending it.
-2. **Resume in place for bound callers.** It changes the `already_resumed`
-   behaviour documented in 0.25.0. Recommended: yes.
-3. **Fork.** Recommended: leave out until someone uses tag clones with
-   Recall.
-4. **Names.** `position`, `at`, `If-Position`, `position_behind`,
+1. **`at` is required for Substrate callers**, where rollback is a runtime
+   feature and the mode shipped with no users to break; optional everywhere
+   else, with the Python client always sending it.
+2. **Bound callers resume in place.** This changes the `already_resumed`
+   behaviour documented in 0.25.0.
+3. **Fork is left out** until someone uses tag clones with Recall.
+4. **Names stand:** `position`, `at`, `If-Position`, `position_behind`,
    `agent_since`, `call_id`.
 
 ## Out of scope

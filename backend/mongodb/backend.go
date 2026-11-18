@@ -95,6 +95,7 @@ var (
 	_ recall.WatermarkBackend  = (*Backend)(nil)
 	_ recall.LeaseBackend      = (*Backend)(nil)
 	_ recall.FencedBackend     = (*Backend)(nil)
+	_ recall.CreateBackend     = (*Backend)(nil)
 )
 
 // Importing this package registers it as the "mongodb" backend. The binary
@@ -392,7 +393,7 @@ func metadataOrEmpty(md map[string]any) map[string]any {
 // old revision, which the next write's revision replaces, and never old data
 // under the new one.
 func (b *Backend) Put(ctx context.Context, collection, id string, values []float32, metadata map[string]any) error {
-	return b.put(ctx, collection, id, values, metadata, nil)
+	return b.put(ctx, collection, id, values, metadata, nil, false)
 }
 
 // PutFenced is Put applied only while the agent's lease is still the
@@ -405,7 +406,17 @@ func (b *Backend) PutFenced(ctx context.Context, collection, id string, values [
 	if strings.TrimSpace(fence.Lease) == "" || strings.TrimSpace(fence.Holder) == "" || fence.Epoch == 0 {
 		return fmt.Errorf("mongodb: a lease fence needs a lease name, a holder and an epoch")
 	}
-	return b.put(ctx, collection, id, values, metadata, &fence)
+	return b.put(ctx, collection, id, values, metadata, &fence, false)
+}
+
+// Create inserts only when the id holds no record, under the same lease
+// check as PutFenced when a fence is given. A taken id is reported as
+// recall.ErrRecordExists with nothing written.
+func (b *Backend) Create(ctx context.Context, collection, id string, values []float32, metadata map[string]any, fence *recall.Fence) error {
+	if fence != nil && (strings.TrimSpace(fence.Lease) == "" || strings.TrimSpace(fence.Holder) == "" || fence.Epoch == 0) {
+		return fmt.Errorf("mongodb: a lease fence needs a lease name, a holder and an epoch")
+	}
+	return b.put(ctx, collection, id, values, metadata, fence, true)
 }
 
 var errFenced = fmt.Errorf("%w: write fenced", recall.ErrLeaseLost)
@@ -414,7 +425,7 @@ var errFenced = fmt.Errorf("%w: write fenced", recall.ErrLeaseLost)
 // and the write itself: the window a takeover must not get through.
 var testHookFencedWrite func()
 
-func (b *Backend) put(ctx context.Context, collection, id string, values []float32, metadata map[string]any, fence *recall.Fence) error {
+func (b *Backend) put(ctx context.Context, collection, id string, values []float32, metadata map[string]any, fence *recall.Fence, createOnly bool) error {
 	if ctx == nil {
 		return fmt.Errorf("mongodb: context must not be nil")
 	}
@@ -439,7 +450,13 @@ func (b *Backend) put(ctx context.Context, collection, id string, values []float
 		return err
 	}
 	write := func(ctx context.Context) error {
-		if _, err := info.coll.ReplaceOne(ctx, bson.D{{Key: "_id", Value: id}}, e, options.Replace().SetUpsert(true)); err != nil {
+		if createOnly {
+			if _, err := info.coll.InsertOne(ctx, e); mongo.IsDuplicateKeyError(err) {
+				return fmt.Errorf("%w: %s", recall.ErrRecordExists, id)
+			} else if err != nil {
+				return fmt.Errorf("mongodb: put: %w", err)
+			}
+		} else if _, err := info.coll.ReplaceOne(ctx, bson.D{{Key: "_id", Value: id}}, e, options.Replace().SetUpsert(true)); err != nil {
 			return fmt.Errorf("mongodb: put: %w", err)
 		}
 		if _, err := b.db.Collection(registryName).UpdateOne(ctx, bson.D{{Key: "_id", Value: collection}},

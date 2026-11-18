@@ -538,6 +538,35 @@ type FencedBackend = engine.FencedBackend
 // Fence names the lease epoch an agent write is made under.
 type Fence = engine.Fence
 
+// CreateBackend optionally writes a record only when its id holds none, so a
+// process restored from an earlier snapshot cannot replace later agent
+// records. polign_db 0.16.0 and later, pgvector and MongoDB implement it.
+type CreateBackend = engine.CreateBackend
+
+// Position is how far an agent's records go: the newest turn and action seqs
+// and the working state version. Agent.Position returns it; At makes a write
+// conditional on it; Agent.Since reports what came after one.
+type Position = engine.Position
+
+// PositionError is ErrPositionBehind or ErrPositionAhead with the positions.
+type PositionError = engine.PositionError
+
+// SinceReport is what an agent's records hold after a position.
+type SinceReport = engine.SinceReport
+
+// WriteOption adjusts one agent write: At, CallID.
+type WriteOption = engine.WriteOption
+
+// At makes an agent write conditional on the records standing at p.
+func At(p Position) WriteOption { return engine.At(p) }
+
+// CallID gives BeginAction the harness's id for the tool call; a call already
+// begun under it is returned instead of a new action.
+func CallID(id string) WriteOption { return engine.CallID(id) }
+
+// ParsePosition reads the turns.actions.state form of a position.
+func ParsePosition(s string) (Position, error) { return engine.ParsePosition(s) }
+
 // Action is one tool call recorded around its run, so a resume knows which
 // calls a crash left unfinished. See Agent.BeginAction and Agent.Reconcile.
 type Action = engine.Action
@@ -583,4 +612,7 @@ var (
 	ErrLeaseUnsupported = engine.ErrLeaseUnsupported
 	ErrAgentClosed      = engine.ErrAgentClosed
 	ErrLeaseNotHeld     = engine.ErrLeaseNotHeld
+	ErrPositionBehind   = engine.ErrPositionBehind
+	ErrPositionAhead    = engine.ErrPositionAhead
+	ErrRecordExists     = engine.ErrRecordExists
 )

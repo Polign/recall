@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: polign
-        image: ghcr.io/polign/polign-server:0.15.0
+        image: ghcr.io/polign/polign-server:0.16.0
         args: ["-store", "fs:/data", "-http", ":23000", "-telemetry=false"]
         ports:
         - containerPort: 23000

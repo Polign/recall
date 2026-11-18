@@ -353,3 +353,48 @@ func TestSearchOnACollectionNothingWroteToFindsNothing(t *testing.T) {
 		t.Fatal("a 404 from something that is not a polign_db read as an empty memory")
 	}
 }
+
+// TestCreateWireContract: Create sends If-None-Match: * beside any fence
+// headers, and reads a 412 with exists as a taken id, one without as the
+// fence.
+func TestCreateWireContract(t *testing.T) {
+	var lastINM, lastHolder atomic.Value
+	b := newBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		lastINM.Store(r.Header.Get("If-None-Match"))
+		lastHolder.Store(r.Header.Get("Polign-Lease-Holder"))
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/vectors/taken"):
+			w.WriteHeader(http.StatusPreconditionFailed)
+			_, _ = w.Write([]byte(`{"error":"vector already exists: taken","exists":["taken"]}`))
+		case strings.HasSuffix(r.URL.Path, "/vectors/fenced"):
+			w.WriteHeader(http.StatusPreconditionFailed)
+			_, _ = w.Write([]byte(`{"error":"lease fence: holder mismatch"}`))
+		default:
+			_, _ = w.Write([]byte(`{}`))
+		}
+	})
+	ctx := t.Context()
+	v := []float32{1, 0}
+	f := &recall.Fence{Lease: "agent-1", Holder: "pod-a", Epoch: 3}
+
+	if err := b.Create(ctx, "c", "new", v, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if lastINM.Load() != "*" || lastHolder.Load() != "" {
+		t.Fatalf("unfenced create sent If-None-Match %q, holder %q", lastINM.Load(), lastHolder.Load())
+	}
+	if err := b.Create(ctx, "c", "taken", v, nil, f); !errors.Is(err, recall.ErrRecordExists) || errors.Is(err, recall.ErrLeaseLost) {
+		t.Fatalf("create of a taken id = %v, want ErrRecordExists only", err)
+	}
+	if lastINM.Load() != "*" || lastHolder.Load() != "pod-a" {
+		t.Fatalf("fenced create sent If-None-Match %q, holder %q", lastINM.Load(), lastHolder.Load())
+	}
+	if err := b.Create(ctx, "c", "fenced", v, nil, f); !errors.Is(err, recall.ErrLeaseLost) || errors.Is(err, recall.ErrRecordExists) {
+		t.Fatalf("fenced create refused by the fence = %v, want ErrLeaseLost only", err)
+	}
+	// A plain fenced put never asks for create-only.
+	if err := b.PutFenced(ctx, "c", "new", v, nil, *f); err != nil || lastINM.Load() != "" {
+		t.Fatalf("PutFenced = %v, sent If-None-Match %q", err, lastINM.Load())
+	}
+}
