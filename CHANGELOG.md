@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-11-20
+
 ### Added
 
 - Anonymous usage statistics, on by default in release builds. `recall mcp`
@@ -12,8 +14,8 @@
   name, counts of successful tool calls, and counts of State API writes
   refused as rolled back (`position_behind`) or answered from what was
   already recorded (a repeated message id, call id or outcome). It never
-  holds memory text,
-  subjects, predicates, collection names, addresses, keys or model names.
+  holds memory text, subjects, predicates, collection names, addresses,
+  keys or model names.
   `recall telemetry` prints exactly what is sent. Turn it off with
   `recall telemetry off`, `RECALL_TELEMETRY=0` or `DO_NOT_TRACK=1`; it is
   also off in CI and in builds from source. See [TELEMETRY.md](TELEMETRY.md).
@@ -73,7 +75,6 @@
   resumes it in place, so `not_resumed` after a server restart is gone, and
   `agent_resume` for an agent already held rebuilds its context and answers
   instead of `409 already_resumed`.
-
 - `end_action` (and `Agent.EndAction`) repeated with the outcome already
   recorded returns the action instead of an error. A different outcome is
   still refused.

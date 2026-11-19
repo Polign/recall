@@ -6,4 +6,4 @@ from .client import (Action, ActionEnd, Belief, Change, Client, Database, Earlie
 __all__ = ["Action", "ActionEnd", "Belief", "Change", "Client", "Database", "Earlier", "Event", "Memory", "RecallError", "Remembered", "RememberResult",
            "ExtractionResult", "TextResult", "Timeline", "Step",
            "Output", "OutputRef", "Pointer", "Position", "PriorValue", "RolledBack", "SinceReport", "ReconcileReport", "ResumeContext", "ResumedAgent", "Turn", "WorkingState"]
-__version__ = "0.25.0"
+__version__ = "0.26.0"
